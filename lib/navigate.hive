@@ -89,39 +89,125 @@ func beginsWithWord(text: Str, word: Str): Bool {
 	return !highlight.isIdent(complete.take(rest, 1))
 }
 
+func isPascal(word: Str): Bool {
+	if word bounds 0 {
+		return highlight.isUpper(word[0])
+	}
+	return false
+}
+
+// Uma variante de tipo: linha indentada que começa com o nome, em PascalCase.
 func isVariant(word: Str, line: Str): Bool {
 	trimmed := analysis.trimLeft(line)
-	return trimmed != line && beginsWithWord(trimmed, word)
+	return isPascal(word) && trimmed != line && beginsWithWord(trimmed, word)
+}
+
+// Um campo de tipo: `nome: Tipo`, indentado.
+func isField(word: Str, line: Str): Bool {
+	trimmed := analysis.trimLeft(line)
+	return trimmed != line && complete.startsWith(trimmed, word + ":") && !has(trimmed, ":=")
 }
 
 func has(text: Str, piece: Str): Bool {
 	return indexOf(text, piece) is Result.Ok(_)
 }
 
-// `nome := …`, `mut nome …` ou `Tipo nome = …`.
+// Onde um nome local nasce: `nome := …`, `mut nome …`, `Tipo nome = …`, um
+// laço (`for i :=`, `for each x in`) ou um `is` que o amarra (`is Result.Ok(x)`).
 func isBinding(word: Str, line: Str): Bool {
 	trimmed := analysis.trimLeft(line)
 	return complete.startsWith(trimmed, word + " :=") ||
 		complete.startsWith(trimmed, "mut " + word + " ") ||
-		has(trimmed, " " + word + " = ")
+		has(trimmed, " " + word + " = ") ||
+		has(trimmed, "for " + word + " :=") ||
+		has(trimmed, "for each " + word + " ") ||
+		has(trimmed, "for each " + word + ":") ||
+		(has(trimmed, " is ") && (has(trimmed, "(" + word + ")") || has(trimmed, "(" + word + ",") ||
+			has(trimmed, ", " + word + ")") || has(trimmed, ", " + word + ",") ||
+			has(trimmed, "\{" + word + "}") || has(trimmed, "\{" + word + " is ") || has(trimmed, "..." + word + "]")))
+}
+
+// Um parâmetro do cabeçalho de `func`/`proc`.
+func isParam(word: Str, line: Str): Bool {
+	return isHeader(line) && (has(line, "(" + word + ":") || has(line, ", " + word + ":"))
+}
+
+func isHeader(line: Str): Bool {
+	return complete.startsWith(line, "func ") || complete.startsWith(line, "proc ") ||
+		complete.startsWith(line, "test ") || complete.startsWith(line, "query ")
 }
 
 func isGoFunc(word: Str, line: Str): Bool {
 	return complete.startsWith(line, "func " + upperFirst(word) + "(")
 }
 
-// A linha da declaração de `word` num texto Hive: uma declaração de topo, uma
-// variante de tipo ou, por fim, uma variável local.
+// Palavras da linguagem não têm para onde ir.
+func reserved(word: Str): Bool {
+	return complete.contains(highlight.keywords(), word) || complete.contains(highlight.builtinTypes(), word) ||
+		complete.contains(complete.builtins(), word) || word == "true" || word == "false" || word == "hive"
+}
+
+// A linha (a partir de 1) onde está o caractere `caret`.
+func lineAt(text: Str, caret: Int): Int {
+	chars := split(text, "")
+	mut line := 1
+	for i := 0; i < caret; i++ {
+		if chars bounds i {
+			if chars[i] == "\n" {
+				line++
+			}
+		}
+	}
+	return line
+}
+
+// Um nome local: procura para trás a partir de `line`, sem sair da função.
+func findLocal(text: Str, word: Str, line: Int): Result<Int, Bool> {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	for i := line - 1; i >= 0; i-- {
+		if lines bounds i {
+			current := lines[i]
+			if isBinding(word, current) || isParam(word, current) {
+				return Result.Ok(i + 1)
+			}
+			if isHeader(current) {
+				return Result.Error(false)
+			}
+		}
+	}
+	return Result.Error(false)
+}
+
+// A declaração de topo ou a variante `word` num texto Hive.
 func findIn(text: Str, word: Str): Result<Int, Bool> {
 	for each symbol in analysis.outline(text) {
 		if symbol.name == word && symbol.kind != "import" && symbol.kind != "test" {
 			return Result.Ok(symbol.line)
 		}
 	}
-	if lineOf(text, isVariant(word, _)) is Result.Ok(line) {
-		return Result.Ok(line)
+	return lineOf(text, isVariant(word, _))
+}
+
+func isGoFile(path: Str): Bool {
+	return path is "{stem}.go"
+}
+
+// Os módulos Hive que o texto importa, já como caminhos.
+func hiveImports(text: Str, from: Str): Str[dyn] {
+	folder := workspace.parentOf(from)
+	mut Str[dyn] found = []
+	for each line in split(replaceAll(text, "\r", ""), "\n") {
+		mut path := ""
+		if line is "import {p} as {n}" {
+			path = p
+		} else if line is "import {p}" {
+			path = p
+		}
+		if path != "" && !complete.startsWith(path, "hive.") && !isGoFile(path) {
+			append(found, workspace.joinPath(folder, path + ".hive"))
+		}
 	}
-	return lineOf(text, isBinding(word, _))
+	return found
 }
 
 // O arquivo que um nome de módulo (`model`, `native`, …) importa neste texto.
@@ -175,10 +261,16 @@ func offsetOf(text: Str, line: Int, column: Int): Int {
 
 proc locate(path: Str, text: Str, caret: Int): Result<Target, Str> {
 	word := wordAt(text, caret)
-	if word.name == "" {
+	if word.name == "" || highlight.isDigit(complete.take(word.name, 1)) {
 		return Result.Error("nenhum nome sob o cursor")
 	}
 	if word.qualifier == "" {
+		if reserved(word.name) {
+			return Result.Error("{word.name} é da linguagem")
+		}
+		if findLocal(text, word.name, lineAt(text, caret)) is Result.Ok(line) {
+			return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
+		}
 		if findIn(text, word.name) is Result.Ok(line) {
 			return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
 		}
@@ -210,9 +302,17 @@ proc locate(path: Str, text: Str, caret: Int): Result<Target, Str> {
 		}
 		return Result.Error("não foi possível ler {file}")
 	}
-	// Um qualificador que não é módulo é um valor: `state.docs` → procura aqui.
-	if findIn(text, word.name) is Result.Ok(line) {
+	// Um qualificador que não é módulo é um valor, e `valor.nome` é um campo:
+	// procura a declaração aqui e depois nos módulos importados.
+	if lineOf(text, isField(word.name, _)) is Result.Ok(line) {
 		return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
+	}
+	for each file in hiveImports(text, path) {
+		if hive.file.read(file) is Result.Ok(content) {
+			if lineOf(content, isField(word.name, _)) is Result.Ok(line) {
+				return Result.Ok(Target(file, line, columnOf(content, line, word.name)))
+			}
+		}
 	}
 	return Result.Error("não achei a definição de {word.qualifier}.{word.name}")
 }
@@ -235,10 +335,50 @@ test "acha declarações, variantes e variáveis locais no próprio arquivo" {
 	if findIn(source, "Save") is Result.Ok(line) {
 		assert line == 3
 	}
-	if findIn(source, "sum") is Result.Ok(line) {
+	if findLocal(source, "sum", 8) is Result.Ok(line) {
 		assert line == 7
 	}
 	assert offsetOf(source, 3, 1) == len("type Msg \{\n\tOpen \{ path: Str }\n") + 1
+}
+
+test "só é clicável o que tem para onde ir" {
+	source := "proc run(state: Int, name: Str): void \{\n\tif hive.file.read(name) is Result.Ok(text) \{\n\t\techo text\n\t}\n\tfor each item in [1, 2] \{\n\t\techo item + state\n\t}\n\tif name == \"\" \{\n\t\treturn\n\t}\n}\n"
+	ifAt := offsetOf(source, 2, 2)
+	assert locate("x.hive", source, ifAt) is Result.Error(_)
+	strAt := offsetOf(source, 1, 36)
+	assert locate("x.hive", source, strAt) is Result.Error(_)
+	if locate("x.hive", source, offsetOf(source, 3, 8)) is Result.Ok(target) {
+		assert target.line == 2
+	} else {
+		assert false
+	}
+	if locate("x.hive", source, offsetOf(source, 6, 8)) is Result.Ok(target) {
+		assert target.line == 5
+	} else {
+		assert false
+	}
+	if locate("x.hive", source, offsetOf(source, 6, 17)) is Result.Ok(target) {
+		assert target.line == 1
+	} else {
+		assert false
+	}
+	assert locate("x.hive", source, offsetOf(source, 9, 4)) is Result.Error(_)
+}
+
+test "valor.campo acha o campo no módulo importado" {
+	if hive.file.makeDir("./nav-field/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./nav-field/lib/model.hive", "type State \{\n\troot: Str\n\tdocs: Str[dyn]\n}\n") is Result.Error(why) {
+		panic why
+	}
+	main := "import ./lib/model\n\nfunc f(state: model.State): Str \{\n\treturn state.root\n}\n"
+	if locate("./nav-field/main.hive", main, offsetOf(main, 4, 15)) is Result.Ok(target) {
+		assert target.file == "./nav-field/lib/model.hive"
+		assert target.line == 2
+	} else {
+		assert false
+	}
 }
 
 test "resolve módulos importados, inclusive Go" {

@@ -1097,7 +1097,18 @@ func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope): model.State {
 	if command is model.Cmd.Ui(text) {
 		mut next := state
-		if model.Event.decode(text, hive.json.codec()) is Result.Ok(event) {
+		decoded := model.Event.decode(text, hive.json.codec())
+		if decoded is Result.Ok(hovered) {
+			if hovered.kind == "hover" {
+				mut ok := false
+				if render.activeDoc(state) is Result.Ok(doc) {
+					ok = navigate.locate(doc.path, doc.text, hovered.caret) is Result.Ok(_)
+				}
+				hive.syslink.answer(from, model.Cmd.Reply(encode(model.HoverReply(true, hovered.caret, ok), hive.json.codec())))
+				return state
+			}
+		}
+		if decoded is Result.Ok(event) {
 			if toMsg(state, event) is Result.Ok(message) {
 				next = step(state, message, from)
 			}

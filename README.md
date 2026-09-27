@@ -40,9 +40,13 @@ hivec test studio.hive             # testes, com cobertura
   de verdade, com histórico nas setas; ■ ou `Ctrl+C` encerram o processo e
   reabrem o shell. O painel **muda de altura arrastando a borda** (a altura é
   lembrada), duplo clique ou `Ctrl+Shift+M` maximiza.
-- **Ir para a definição**: `Ctrl+clique` ou `F12` num nome — declarações do
-  arquivo, variantes (`model.Msg.Toggle`), variáveis locais, `modulo.nome` de
-  imports Hive e funções de arquivos `.go` importados.
+- **Ir para a definição**: segurando `Ctrl`, o nome sob o mouse fica sublinhado
+  **só quando há para onde ir**; `Ctrl+clique` ou `F12` vão até lá.
+  Declarações do arquivo, variantes (`model.Msg.Toggle`), variáveis locais e
+  parâmetros (procurados para trás, dentro da função), `modulo.nome` de imports
+  Hive, campos (`state.docs` → o tipo no módulo importado) e funções de arquivos
+  `.go` importados. Palavras da linguagem não são clicáveis.
+- **Botão do meio** numa aba fecha a aba.
 - **Check · Run · Test · Build** chamando `hivec` numa thread separada; os
   diagnósticos `arquivo:linha: mensagem` viram itens clicáveis.
 - **7 temas** (Hive Dark, Dark Modern, Light Modern, Monokai, Dracula,

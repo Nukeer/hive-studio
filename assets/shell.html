@@ -112,7 +112,8 @@ button,input,select{font:inherit}
 #app.panelmax #work,#app.panelmax #tabs,#app.panelmax #crumbs{display:none}
 #app.panelmax #panel{flex:1;height:auto!important}
 body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
-#code.ctrl #ta{cursor:pointer}
+#code.linkable #ta{cursor:pointer}
+#link{position:absolute;display:none;pointer-events:none;border-bottom:1px solid var(--syn-call);background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:2px;z-index:2}
 .g-new{color:var(--git-new)!important}
 .g-mod{color:var(--git-mod)!important}
 .g-del{color:var(--danger)!important;text-decoration:line-through}
@@ -249,6 +250,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 					<div id="code">
 						<pre id="hl"></pre>
 						<textarea id="ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+						<div id="link"></div>
 					</div>
 					<div id="popup"></div>
 				</div>
@@ -384,13 +386,114 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 
 	ta.addEventListener("scroll", function () { sync(); if (popupOpen) { place(); } });
 	ta.addEventListener("input", function () { send({ kind: "edit", text: ta.value, caret: ta.selectionStart }); });
+	// ── Ctrl + mouse: sublinha o nome sob o mouse quando dá para ir à definição ──
+	var link = document.getElementById("link");
+	var mouse = null, hovered = null, linked = null, hoverKey = "";
+
+	function visualColumn(line, index, tab) {
+		var column = 0;
+		for (var i = 0; i < index && i < line.length; i++) { column = line[i] === "\t" ? column + tab - (column % tab) : column + 1; }
+		return column;
+	}
+
+	// O caractere do texto sob o ponto (x, y) da tela, ou -1 fora do texto.
+	function offsetAt(x, y) {
+		var style = getComputedStyle(ta), rect = ta.getBoundingClientRect();
+		var height = parseFloat(style.lineHeight), width = measure(), tab = parseInt(style.tabSize, 10) || 4;
+		var px = x - rect.left - parseFloat(style.paddingLeft) + ta.scrollLeft;
+		var py = y - rect.top - parseFloat(style.paddingTop) + ta.scrollTop;
+		var lines = ta.value.split("\n"), row = Math.floor(py / height);
+		if (row < 0 || row >= lines.length || px < 0) { return -1; }
+		var line = lines[row], target = px / width, column = 0, index = -1;
+		for (var i = 0; i < line.length; i++) {
+			var next = line[i] === "\t" ? column + tab - (column % tab) : column + 1;
+			if (target < next) { index = i; break; }
+			column = next;
+		}
+		if (index < 0) { return -1; }
+		var offset = 0;
+		for (var k = 0; k < row; k++) { offset += lines[k].length + 1; }
+		return offset + index;
+	}
+
+	function spanAt(offset) {
+		var text = ta.value, isName = /[A-Za-z0-9_]/;
+		if (offset < 0 || !isName.test(text[offset] || "")) { return null; }
+		var start = offset, end = offset;
+		while (start > 0 && isName.test(text[start - 1])) { start--; }
+		while (end < text.length && isName.test(text[end])) { end++; }
+		return [start, end];
+	}
+
+	function hideLink() {
+		link.style.display = "none"; code.classList.remove("linkable");
+		linked = null; hovered = null; hoverKey = "";
+	}
+
+	function showLink(span) {
+		var style = getComputedStyle(ta), tab = parseInt(style.tabSize, 10) || 4;
+		var before = ta.value.slice(0, span[0]).split("\n"), row = before.length - 1, line = ta.value.split("\n")[row];
+		var startColumn = visualColumn(line, before[row].length, tab);
+		var endColumn = visualColumn(line, before[row].length + (span[1] - span[0]), tab);
+		var height = parseFloat(style.lineHeight), width = measure();
+		link.style.left = (parseFloat(style.paddingLeft) + startColumn * width - ta.scrollLeft) + "px";
+		link.style.top = (parseFloat(style.paddingTop) + row * height - ta.scrollTop) + "px";
+		link.style.width = ((endColumn - startColumn) * width) + "px";
+		link.style.height = height + "px";
+		link.style.display = "block"; code.classList.add("linkable");
+		linked = span;
+	}
+
+	function probe() {
+		if (!mouse) { hideLink(); return; }
+		var offset = offsetAt(mouse.x, mouse.y), span = spanAt(offset);
+		if (!span) { hideLink(); return; }
+		var key = span[0] + ":" + span[1] + ":" + ta.value.length;
+		if (key === hoverKey) { return; }
+		hoverKey = key; hovered = { span: span, caret: offset };
+		link.style.display = "none"; code.classList.remove("linkable"); linked = null;
+		send({ kind: "hover", caret: offset });
+	}
+
+	function answerHover(reply) {
+		if (hovered && reply.caret === hovered.caret && reply.ok) { showLink(hovered.span); }
+	}
+
+	ta.addEventListener("mousemove", function (e) {
+		mouse = { x: e.clientX, y: e.clientY };
+		if (e.ctrlKey || e.metaKey) { probe(); } else if (linked || hovered) { hideLink(); }
+	});
+	ta.addEventListener("mouseleave", function () { mouse = null; hideLink(); });
+	ta.addEventListener("scroll", function () { if (linked || hovered) { hideLink(); } });
+	ta.addEventListener("input", function () { if (linked || hovered) { hideLink(); } });
+
+	ta.addEventListener("mousedown", function (e) {
+		if ((e.ctrlKey || e.metaKey) && linked) { e.preventDefault(); }
+	});
 	ta.addEventListener("mouseup", function (e) {
-		if (e.ctrlKey || e.metaKey) { send({ kind: "act", act: "definition", caret: ta.selectionStart }); return; }
+		if ((e.ctrlKey || e.metaKey) && linked && hovered) {
+			send({ kind: "act", act: "definition", caret: hovered.caret });
+			hideLink();
+			return;
+		}
 		if (popupOpen) { send({ kind: "act", act: "closeSuggest" }); }
 	});
 
-	document.addEventListener("keyup", function (e) { if (e.key === "Control" || e.key === "Meta") { code.classList.remove("ctrl"); } });
-	window.addEventListener("blur", function () { code.classList.remove("ctrl"); });
+	document.addEventListener("keyup", function (e) { if (e.key === "Control" || e.key === "Meta") { hideLink(); } });
+	window.addEventListener("blur", hideLink);
+
+	// Botão do meio numa aba fecha a aba, como nos navegadores e no VS Code.
+	document.addEventListener("mousedown", function (e) {
+		if (e.button === 1 && e.target.closest(".tab")) { e.preventDefault(); }
+	});
+	document.addEventListener("auxclick", function (e) {
+		if (e.button !== 1) { return; }
+		var tab = e.target.closest(".tab");
+		if (!tab) { return; }
+		e.preventDefault();
+		var closer = tab.querySelector(".x[data-act]");
+		if (closer) { send({ kind: "act", act: closer.dataset.act, arg: closer.dataset.arg || "" }); }
+	});
 
 	// O painel de baixo muda de altura arrastando a borda de cima.
 	grip.addEventListener("mousedown", function (e) {
@@ -412,7 +515,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	});
 
 	document.addEventListener("keydown", function (e) {
-		if (e.key === "Control" || e.key === "Meta") { code.classList.add("ctrl"); }
+		if ((e.key === "Control" || e.key === "Meta") && !e.repeat && mouse) { probe(); }
 		if (["Control", "Shift", "Alt", "Meta"].indexOf(e.key) >= 0) { return; }
 		var combo = comboOf(e);
 		if (recording) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart }); return; }
@@ -488,7 +591,10 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	document.addEventListener("contextmenu", function (e) { if (e.target !== ta) { e.preventDefault(); } });
 
 	ws = new WebSocket("ws://127.0.0.1:__WSPORT__/?token=" + encodeURIComponent(token));
-	ws.onmessage = function (e) { apply(JSON.parse(e.data)); };
+	ws.onmessage = function (e) {
+		var data = JSON.parse(e.data);
+		if (data.hover) { answerHover(data); } else { apply(data); }
+	};
 	ws.onopen = function () { send({ kind: "hello" }); };
 	ws.onclose = function () { document.body.classList.add("gone"); };
 })();
