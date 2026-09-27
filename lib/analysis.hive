@@ -1,0 +1,130 @@
+// Lê o que o compilador diz e o que o arquivo declara.
+
+import ./model
+
+func trimLeft(text: Str): Str {
+	mut rest := text
+	for ;; {
+		if rest is " {tail}" {
+			rest = tail
+		} else if rest is "\t{tail}" {
+			rest = tail
+		} else {
+			return rest
+		}
+	}
+	return rest
+}
+
+// `arquivo:linha: mensagem`, com continuações indentadas coladas na anterior.
+func parseDiagnostics(output: Str): model.Diagnostic[dyn] {
+	mut model.Diagnostic[dyn] found = []
+	for each raw in split(replaceAll(output, "\r", ""), "\n") {
+		continued := raw is " {rest}" || raw is "\t{rest}"
+		if continued {
+			last := len(found) - 1
+			if found bounds last {
+				found[last].message = found[last].message + " " + trimLeft(raw)
+			}
+		} else if raw is "{file}:{digits is (\d+)}: {message}" {
+			if hive.conv.sti(digits) is Result.Ok(line) {
+				append(found, model.Diagnostic(file, line, message))
+			}
+		}
+	}
+	return found
+}
+
+func symbolOf(line: Str, number: Int): Result<model.Symbol, Bool> {
+	if line is "func {name is (\w+)}{rest}" {
+		return Result.Ok(model.Symbol("func", name, number))
+	} else if line is "proc {name is (\w+)}{rest}" {
+		return Result.Ok(model.Symbol("proc", name, number))
+	} else if line is "type {name is (\w+)}{rest}" {
+		return Result.Ok(model.Symbol("type", name, number))
+	} else if line is "query {name is (\w+)}{rest}" {
+		return Result.Ok(model.Symbol("query", name, number))
+	} else if line is `test "{name}"{rest}` {
+		return Result.Ok(model.Symbol("test", name, number))
+	} else if line is "import {path}" {
+		return Result.Ok(model.Symbol("import", trimLeft(path), number))
+	}
+	return Result.Error(false)
+}
+
+// As declarações de topo, com a linha (a partir de 1) onde cada uma começa.
+func outline(text: Str): model.Symbol[dyn] {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	mut model.Symbol[dyn] found = []
+	for i := 0; i < len(lines); i++ {
+		if symbolOf(lines[i], i + 1) is Result.Ok(symbol) {
+			append(found, symbol)
+		}
+	}
+	return found
+}
+
+func countLines(text: Str): Int {
+	return len(split(text, "\n"))
+}
+
+func pad(number: Int, width: Int): Str {
+	mut label := "{number}"
+	for ; len(label) < width; {
+		label = " " + label
+	}
+	return label
+}
+
+// As linhas em volta de `line`, numeradas, com a própria linha marcada.
+func excerpt(text: Str, line: Int, radius: Int): Str[dyn] {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	mut Str[dyn] shown = []
+	for i := 0; i < len(lines); i++ {
+		number := i + 1
+		if number >= line - radius && number <= line + radius {
+			mut marker := "  "
+			if number == line {
+				marker = "> "
+			}
+			append(shown, marker + pad(number, 4) + "  " + lines[i])
+		}
+	}
+	return shown
+}
+
+test "diagnósticos do compilador viram itens" {
+	output := "main.hive:12: cannot prove this index is in range: the index is a computed\n    expression. Bind it.\nC:\\p\\lib\\x.hive:3: expected `]` but found `,`\nCompiled nothing"
+	found := parseDiagnostics(output)
+	assert len(found) == 2
+	if found is [first, second] {
+		assert first.file == "main.hive"
+		assert first.line == 12
+		assert first.message == "cannot prove this index is in range: the index is a computed expression. Bind it."
+		assert second.file == "C:\\p\\lib\\x.hive"
+		assert second.line == 3
+	}
+}
+
+test "saída sem erros não gera diagnóstico" {
+	assert len(parseDiagnostics("No problems found in x.hive (0s)")) == 0
+}
+
+test "a estrutura lista as declarações de topo" {
+	source := "import ./lib/a\n\ntype User \{\n\tname: Str\n}\n\nfunc greet(u: User): Str \{\n\treturn u.name\n}\n\nproc main(): void \{\n}\n\ntest \"greets\" \{\n}\n"
+	found := outline(source)
+	assert len(found) == 5
+	if found is [imp, ty, fn, pr, te] {
+		assert imp.name == "./lib/a"
+		assert ty.kind == "type" && ty.name == "User" && ty.line == 3
+		assert fn.kind == "func" && fn.name == "greet" && fn.line == 7
+		assert pr.name == "main" && pr.line == 11
+		assert te.kind == "test" && te.name == "greets"
+	}
+}
+
+test "o trecho marca a linha pedida" {
+	shown := excerpt("a\nb\nc\nd\ne", 3, 1)
+	assert len(shown) == 3
+	assert shown == ["     2  b", ">    3  c", "     4  d"]
+}

@@ -1,0 +1,190 @@
+// Caminhos e listagem de pastas. Tudo usa `/`, que o Windows também aceita.
+
+import ./model
+
+func normalize(path: Str): Str {
+	clean := replaceAll(path, "\\", "/")
+	if clean == "" {
+		return "."
+	}
+	// Uma barra final sai, menos na raiz (`/`, `C:/`).
+	if clean is "{head}/" && head != "" {
+		if head is "{drive}:" {
+			return clean
+		}
+		return head
+	}
+	return clean
+}
+
+func joinPath(folder: Str, name: Str): Str {
+	base := normalize(folder)
+	if base is "{head}/" {
+		return base + name
+	}
+	return base + "/" + name
+}
+
+func baseName(path: Str): Str {
+	parts := split(normalize(path), "/")
+	last := len(parts) - 1
+	if parts bounds last {
+		return parts[last]
+	}
+	return path
+}
+
+// A pasta que contém `path`. Um caminho relativo sem pai sobe com `..`.
+func parentOf(path: Str): Str {
+	clean := normalize(path)
+	if clean == "." {
+		return ".."
+	}
+	if clean is ".." || clean is "{up}/.." {
+		return clean + "/.."
+	}
+	parts := split(clean, "/")
+	last := len(parts) - 2
+	if parts bounds 0 && parts bounds last {
+		up := join(parts[0:last], "/")
+		if up == "" {
+			return "/"
+		}
+		if up is "{drive}:" {
+			return up + "/"
+		}
+		return up
+	}
+	return "."
+}
+
+func isHidden(name: Str): Bool {
+	return name is ".{rest}" || name is "{stem}.hive-build" || name is "{stem}.exe"
+}
+
+func isHive(path: Str): Bool {
+	return path is "{stem}.hive"
+}
+
+func entryOrder(a: model.Entry, b: model.Entry): Bool {
+	if a.folder != b.folder {
+		return a.folder
+	}
+	return a.name < b.name
+}
+
+// O conteúdo de uma pasta: pastas primeiro; ocultos e artefatos de build
+// ficam fora a menos que `showHidden` peça.
+func listEntries(folder: Str, showHidden: Bool): Result<model.Entry[dyn], Str> {
+	listed := hive.file.list(folder)
+	if listed is Result.Error(why) {
+		return Result.Error(why.message)
+	}
+	mut model.Entry[dyn] found = []
+	if listed is Result.Ok(names) {
+		for each name in names {
+			if showHidden || !isHidden(name) {
+				path := joinPath(folder, name)
+				isFolder := hive.file.list(path) is Result.Ok(_)
+				append(found, model.Entry(name, path, isFolder))
+			}
+		}
+	}
+	return Result.Ok(sort(found, entryOrder))
+}
+
+func isExpanded(expanded: Str[], path: Str): Bool {
+	return indexOf(expanded, path) is Result.Ok(_)
+}
+
+// As linhas visíveis da árvore: cada pasta expandida mostra seus filhos logo abaixo.
+func buildTree(folder: Str, depth: Int, expanded: Str[], showHidden: Bool): model.TreeRow[dyn] {
+	mut model.TreeRow[dyn] rows = []
+	if listEntries(folder, showHidden) is Result.Ok(entries) {
+		for each entry in entries {
+			open := entry.folder && isExpanded(expanded, entry.path)
+			append(rows, model.TreeRow(entry, depth, open))
+			if open {
+				for each child in buildTree(entry.path, depth + 1, expanded, showHidden) {
+					append(rows, child)
+				}
+			}
+		}
+	}
+	return rows
+}
+
+// `path` visto a partir de `root`, em pedaços — o breadcrumb.
+func crumbs(root: Str, path: Str): Str[dyn] {
+	base := normalize(root)
+	full := normalize(path)
+	if base == "." && full is "./{rest}" {
+		return split(rest, "/")
+	}
+	if indexOf(full, base + "/") is Result.Ok(at) {
+		if at == 0 {
+			start := len(base) + 1
+			if full bounds start {
+				return split(full[start:], "/")
+			}
+		}
+	}
+	return split(full, "/")
+}
+
+test "caminhos se juntam com uma barra só" {
+	assert joinPath(".", "a.hive") == "./a.hive"
+	assert joinPath("src/", "a.hive") == "src/a.hive"
+	assert joinPath("C:\\proj", "a.hive") == "C:/proj/a.hive"
+}
+
+test "o nome de um arquivo é o último pedaço do caminho" {
+	assert baseName("C:\\proj\\lib\\a.hive") == "a.hive"
+	assert baseName("a.hive") == "a.hive"
+}
+
+test "subir uma pasta" {
+	assert parentOf("C:/proj/lib") == "C:/proj"
+	assert parentOf("C:/proj") == "C:/"
+	assert parentOf("lib") == "."
+	assert parentOf(".") == ".."
+	assert parentOf("..") == "../.."
+	assert parentOf("/home") == "/"
+}
+
+test "breadcrumb é o caminho a partir da raiz" {
+	assert crumbs("C:/proj", "C:/proj/lib/a.hive") == split("lib/a.hive", "/")
+	assert crumbs(".", "./studio.hive") == split("studio.hive", "/")
+	assert crumbs("C:/proj/", "C:\\proj\\a.hive") == split("a.hive", "/")
+}
+
+test "a árvore mostra os filhos só das pastas expandidas" {
+	if hive.file.makeDir("./tree-test/lib/inner") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./tree-test/main.hive", "") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./tree-test/lib/a.hive", "") is Result.Error(why) {
+		panic why
+	}
+	Str[dyn] closed = []
+	collapsed := buildTree("./tree-test", 0, closed, false)
+	assert len(collapsed) == 2
+	opened := buildTree("./tree-test", 0, ["./tree-test/lib"], false)
+	assert len(opened) == 4
+	if opened is [lib, inner, a, main] {
+		assert lib.open && lib.entry.folder
+		assert inner.depth == 1 && inner.entry.name == "inner" && !inner.open
+		assert a.depth == 1 && a.entry.name == "a.hive"
+		assert main.depth == 0 && main.entry.name == "main.hive"
+	}
+}
+
+test "artefatos de build ficam fora do explorador" {
+	assert isHidden(".git")
+	assert isHidden("app.hive-build")
+	assert !isHidden("app.hive")
+	assert isHive("lib/x.hive")
+	assert !isHive("x.go")
+}

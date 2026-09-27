@@ -1,0 +1,263 @@
+// Tudo o que a janela sabe, tudo o que pode acontecer com ela, e o que
+// viaja entre a página e o programa.
+
+import ./settings
+
+// Um item do explorador: arquivo ou pasta.
+type Entry {
+	name:   Str
+	path:   Str
+	folder: Bool
+}
+
+// Uma linha visível da árvore: o item, a profundidade e se está expandido.
+type TreeRow {
+	entry: Entry
+	depth: Int
+	open:  Bool
+}
+
+// Um arquivo aberto numa aba. `saved` é o conteúdo em disco, então a aba está
+// suja quando `text != saved`. O texto fica sempre com `\n`; `eol` lembra o
+// fim de linha do arquivo para salvar do jeito que veio. `html` é o realce
+// guardado, refeito só quando o texto muda. `mode` é `edit`, `preview` ou `split`.
+type Doc {
+	path:  Str
+	name:  Str
+	text:  Str
+	saved: Str
+	eol:   Str
+	html:  Str
+	mode:  Str
+}
+
+// Uma linha `arquivo:linha: mensagem` do compilador.
+type Diagnostic {
+	file:    Str
+	line:    Int
+	message: Str
+}
+
+// Uma declaração de topo do arquivo ativo, para o painel de estrutura.
+type Symbol {
+	kind: Str
+	name: Str
+	line: Int
+}
+
+// Uma sugestão do autocomplete.
+type Suggestion {
+	word:   Str
+	kind:   Str
+	detail: Str
+}
+
+type Pane {
+	OutputPane
+	ProblemsPane
+}
+
+type SideView {
+	ExplorerSide
+	OutlineSide
+}
+
+type EditorView {
+	DocView
+	SettingsView
+}
+
+// A caixa de texto no topo do explorador, e para que ela serve agora.
+type Prompt {
+	NoPrompt
+	NewFilePrompt
+	NewFolderPrompt
+	OpenFolderPrompt
+}
+
+type Msg {
+	Toggle           { path: Str }
+	Open             { path: Str }
+	Refresh
+	CollapseAll
+	GoUp
+	StartPrompt      { prompt: Prompt }
+	PromptTyped      { text: Str }
+	PromptSubmit     { text: Str }
+	PromptCancel
+	Focus            { index: Int }
+	CloseDoc         { index: Int }
+	CycleTab         { step: Int }
+	EditAt           { text: Str, caret: Int }
+	CaretAt          { caret: Int }
+	SuggestAt        { caret: Int }
+	PopupKey         { key: Str }
+	AcceptSuggestion { index: Int }
+	CloseSuggest
+	Save
+	SaveAll
+	PinEntry
+	SetMode          { mode: Str }
+	TogglePreview
+	Invoke           { command: Str }
+	Finished         { command: Str, output: Str, ok: Bool }
+	ShowPane         { pane: Pane }
+	TogglePanel
+	ShowSide         { side: SideView }
+	ToggleSidebar
+	OpenSettings
+	CloseSettings
+	SetTheme         { name: Str }
+	ToggleSetting    { name: Str }
+	SetFontSize      { size: Int }
+	SetTabSize       { size: Int }
+	CompilerTyped    { text: Str }
+	BrowserTyped     { text: Str }
+	StartRecording   { action: Str }
+	CancelRecording
+	KeyPressed       { combo: Str }
+	ResetKey         { action: Str }
+	ResetKeys
+	Peek             { file: Str, line: Int }
+	ClosePeek
+	ClearOutput
+	Connected
+	Disconnected
+}
+
+type State {
+	root:          Str
+	tree:          TreeRow[dyn]
+	expanded:      Str[dyn]
+	selected:      Str
+	prompt:        Prompt
+	promptText:    Str
+	docs:          Doc[dyn]
+	active:        Int
+	entrypoint:    Str
+	textSerial:    Int
+	caret:         Int
+	suggestions:   Suggestion[dyn]
+	suggestIndex:  Int
+	running:       Str
+	output:        Str
+	diagnostics:   Diagnostic[dyn]
+	pane:          Pane
+	panelOpen:     Bool
+	side:          SideView
+	sideOpen:      Bool
+	editorView:    EditorView
+	settingsOpen:  Bool
+	settings:      settings.Settings
+	recording:     Str
+	peekFile:      Str
+	peekLine:      Int
+	peekText:      Str
+	status:        Str
+	pulse:         Int
+	clients:       Int
+}
+
+// ── o que viaja entre a página e o programa ──────────────────────────────
+
+// Um evento da página, em JSON. `kind` diz o que foi; o resto depende dele.
+type Event {
+	kind:  Str
+	act:   Str -- Default as "";
+	arg:   Str -- Default as "";
+	text:  Str -- Default as "";
+	caret: Int -- Default as 0;
+}
+
+// Um pedaço da página, trocado inteiro quando muda.
+type Region {
+	id:   Str
+	html: Str
+}
+
+// Tudo o que a página precisa para se desenhar. O texto do editor só é
+// aplicado quando `serial` muda — digitar não reescreve o que se digita.
+type Frame {
+	regions:   Region[dyn]
+	css:       Str
+	text:      Str
+	serial:    Int
+	caret:     Int
+	keys:      Str[dyn]
+	layout:    Str
+	side:      Bool
+	panel:     Bool
+	popup:     Bool
+	numbers:   Bool
+	recording: Bool
+	title:     Str
+}
+
+// A caixa de mensagens do serviço que guarda o estado.
+type Cmd {
+	Ui         { event: Str }
+	Post       { msg: Msg }
+	Render
+	Pulse
+	Clients
+	Reply      { frame: Str }
+	PulseIs    { n: Int }
+	ClientsAre { n: Int }
+}
+
+func initial(root: Str, prefs: settings.Settings): State {
+	TreeRow[dyn] tree = []
+	Str[dyn] expanded = []
+	Doc[dyn] docs = []
+	Diagnostic[dyn] diagnostics = []
+	Suggestion[dyn] suggestions = []
+	return State(
+		root: root,
+		tree: tree,
+		expanded: expanded,
+		selected: "",
+		prompt: Prompt.NoPrompt(),
+		promptText: "",
+		docs: docs,
+		active: -1,
+		entrypoint: "",
+		textSerial: 0,
+		caret: 0,
+		suggestions: suggestions,
+		suggestIndex: 0,
+		running: "",
+		output: "",
+		diagnostics: diagnostics,
+		pane: Pane.OutputPane(),
+		panelOpen: true,
+		side: SideView.ExplorerSide(),
+		sideOpen: true,
+		editorView: EditorView.DocView(),
+		settingsOpen: false,
+		settings: prefs,
+		recording: "",
+		peekFile: "",
+		peekLine: 0,
+		peekText: "",
+		status: "pronto",
+		pulse: 0,
+		clients: 0
+	)
+}
+
+func dirty(doc: Doc): Bool {
+	return doc.text != doc.saved
+}
+
+func anyDirty(docs: Doc[]): Bool {
+	for each doc in docs {
+		if dirty(doc) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMarkdown(path: Str): Bool {
+	return path is "{stem}.md" || path is "{stem}.markdown"
+}
