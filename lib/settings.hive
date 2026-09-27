@@ -1,0 +1,82 @@
+// Preferências do usuário, guardadas como JSON fora do projeto.
+
+type Settings {
+	theme:         Str  -- Default as "Hive Dark";
+	lineNumbers:   Bool -- JSON as line_numbers; Default as true;
+	showHidden:    Bool -- JSON as show_hidden; Default as false;
+	saveBeforeRun: Bool -- JSON as save_before_run; Default as true;
+	compiler:      Str  -- Default as "hivec";
+	fontSize:      Int  -- JSON as font_size; Default as 14;
+	tabSize:       Int  -- JSON as tab_size; Default as 4;
+	autocomplete:  Bool -- Default as true;
+	keymap:        Str  -- Default as "";
+	browser:       Str  -- Default as "";
+}
+
+func defaults(): Settings {
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "")
+}
+
+func envOr(name: Str, fallback: Str): Str {
+	if hive.env.get(name) is Result.Ok(value) {
+		if value != "" {
+			return replaceAll(value, "\\", "/")
+		}
+	}
+	return fallback
+}
+
+// `%APPDATA%/HiveStudio` no Windows, `~/.config/hive-studio` no resto.
+func folder(): Str {
+	appData := envOr("APPDATA", "")
+	if appData != "" {
+		return appData + "/HiveStudio"
+	}
+	home := envOr("HOME", "")
+	if home != "" {
+		return home + "/.config/hive-studio"
+	}
+	return "./.hive-studio"
+}
+
+func path(): Str {
+	return folder() + "/settings.json"
+}
+
+func load(): Settings {
+	if hive.file.read(path()) is Result.Ok(text) {
+		if Settings.decode(text, hive.json.codec()) is Result.Ok(found) {
+			return found
+		}
+	}
+	return defaults()
+}
+
+func save(value: Settings): Result<Bool, Str> {
+	if hive.file.makeDir(folder()) is Result.Error(why) {
+		return Result.Error(why.message)
+	}
+	if hive.file.write(path(), encode(value, hive.json.codec())) is Result.Error(why) {
+		return Result.Error(why.message)
+	}
+	return Result.Ok(true)
+}
+
+test "configurações vão e voltam em JSON, com padrões para o que falta" {
+	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "")
+	text := encode(custom, hive.json.codec())
+	if Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
+		assert back == custom
+	} else {
+		assert false
+	}
+	if Settings.decode(`\{"theme": "Dracula"}`, hive.json.codec()) is Result.Ok(partial) {
+		assert partial.theme == "Dracula"
+		assert partial.lineNumbers
+		assert partial.compiler == "hivec"
+		assert partial.fontSize == 14
+		assert partial.keymap == ""
+	} else {
+		assert false
+	}
+}
