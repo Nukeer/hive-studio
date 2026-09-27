@@ -1,0 +1,240 @@
+// Buscas: no arquivo aberto (Ctrl+F), no projeto inteiro (Ctrl+Shift+F) e
+// pelo nome de um arquivo (Ctrl+P).
+
+import ./workspace
+import ./model
+import ./complete
+
+// Minúsculas sem mudar o comprimento — cada letra vira uma letra —, então uma
+// posição no texto em minúsculas é a mesma posição no original.
+func lower(text: Str): Str {
+	mut out := text
+	upper := split("ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜ", "")
+	small := split("abcdefghijklmnopqrstuvwxyzàáâãäçèéêëìíîïñòóôõöùúûü", "")
+	for i := 0; i < len(upper); i++ {
+		if small bounds i {
+			out = replaceAll(out, upper[i], small[i])
+		}
+	}
+	return out
+}
+
+// As posições (em caracteres) onde `wanted` aparece em `text`, no máximo `limit`.
+func occurrences(text: Str, wanted: Str, caseSensitive: Bool, limit: Int): Int[dyn] {
+	mut Int[dyn] found = []
+	if wanted == "" {
+		return found
+	}
+	mut haystack := text
+	mut needle := wanted
+	if !caseSensitive {
+		haystack = lower(text)
+		needle = lower(wanted)
+	}
+	mut offset := 0
+	for ; len(found) < limit; {
+		if indexOf(haystack, needle) is Result.Ok(at) {
+			append(found, offset + at)
+			cut := at + len(needle)
+			offset = offset + cut
+			haystack = complete.skip(haystack, cut)
+		} else {
+			break
+		}
+	}
+	return found
+}
+
+func skippedFolder(name: Str): Bool {
+	return name == "node_modules" || name == ".git" || name == "dist" || name is "{stem}.hive-build"
+}
+
+// Todos os arquivos debaixo de `root`, como caminhos relativos a ela.
+proc allFiles(root: Str, showHidden: Bool, limit: Int): Str[dyn] {
+	mut Str[dyn] found = []
+	mut Str[dyn] pending = [""]
+	for ; len(pending) > 0 && len(found) < limit; {
+		mut current := ""
+		last := len(pending) - 1
+		if pending bounds last {
+			current = pending[last]
+			drop(pending, last, last)
+		}
+		mut folder := root
+		if current != "" {
+			folder = workspace.joinPath(root, current)
+		}
+		if workspace.listEntries(folder, showHidden) is Result.Ok(entries) {
+			for each entry in entries {
+				mut rel := entry.name
+				if current != "" {
+					rel = current + "/" + entry.name
+				}
+				if entry.folder {
+					if !skippedFolder(entry.name) {
+						append(pending, rel)
+					}
+				} else if len(found) < limit {
+					append(found, rel)
+				}
+			}
+		}
+	}
+	return sort(found)
+}
+
+func isTextFile(path: Str): Bool {
+	for each ending in [".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".exe~", ".db", ".sqlite", ".zip", ".pdf", ".xlsx", ".ods", ".woff", ".woff2", ".ttf", ".syso", ".bin"] {
+		if complete.startsWith(lower(complete.skip(path, len(path) - len(ending))), ending) {
+			return false
+		}
+	}
+	return true
+}
+
+type ProjectResult {
+	hits:      model.Hit[dyn]
+	files:     Int
+	truncated: Bool
+}
+
+proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool, limit: Int): ProjectResult {
+	mut model.Hit[dyn] hits = []
+	mut files := 0
+	mut truncated := false
+	if wanted == "" {
+		return ProjectResult(hits, 0, false)
+	}
+	for each rel in allFiles(root, showHidden, 20000) {
+		if isTextFile(rel) && !truncated {
+			path := workspace.joinPath(root, rel)
+			mut small := true
+			if hive.file.size(path) is Result.Ok(bytes) {
+				small = bytes < 1000000
+			}
+			if small {
+				if hive.file.read(path) is Result.Ok(content) {
+					mut matched := false
+					lines := split(replaceAll(content, "\r", ""), "\n")
+					for i := 0; i < len(lines); i++ {
+						at := occurrences(lines[i], wanted, caseSensitive, 1)
+						if at is [column] {
+							if len(hits) < limit {
+								append(hits, model.Hit(rel, i + 1, column, lines[i]))
+								matched = true
+							} else {
+								truncated = true
+							}
+						}
+					}
+					if matched {
+						files++
+					}
+				}
+			}
+		}
+	}
+	return ProjectResult(hits, files, truncated)
+}
+
+// `wanted` aparece em `text` nessa ordem, mesmo com coisas no meio.
+func subsequence(text: Str, wanted: Str): Bool {
+	mut rest := text
+	for each c in split(wanted, "") {
+		if indexOf(rest, c) is Result.Ok(at) {
+			rest = complete.skip(rest, at + 1)
+		} else {
+			return false
+		}
+	}
+	return true
+}
+
+func containsAll(text: Str, words: Str[]): Bool {
+	for each word in words {
+		if word != "" && indexOf(text, word) is Result.Error(_) {
+			return false
+		}
+	}
+	return true
+}
+
+// Os arquivos que casam com o que foi digitado no Ctrl+P, dos melhores para os
+// piores: nome começando igual, nome contendo, caminho contendo todas as
+// palavras, e por fim as letras na ordem.
+func quickOpen(files: Str[], wanted: Str, limit: Int): Str[dyn] {
+	mut Str[dyn] found = []
+	q := lower(replaceAll(wanted, "\\", "/"))
+	if q == "" {
+		for each file in files {
+			if len(found) < limit {
+				append(found, file)
+			}
+		}
+		return found
+	}
+	words := split(q, " ")
+	mut Str[dyn] first = []
+	mut Str[dyn] second = []
+	mut Str[dyn] third = []
+	mut Str[dyn] fourth = []
+	for each file in files {
+		path := lower(file)
+		name := workspace.baseName(path)
+		if complete.startsWith(name, q) {
+			append(first, file)
+		} else if indexOf(name, q) is Result.Ok(_) {
+			append(second, file)
+		} else if containsAll(path, words) {
+			append(third, file)
+		} else if len(first) + len(second) + len(third) + len(fourth) < limit && subsequence(path, replaceAll(q, " ", "")) {
+			append(fourth, file)
+		}
+	}
+	for each group in [first, second, third, fourth] {
+		for each file in group {
+			if len(found) < limit {
+				append(found, file)
+			}
+		}
+	}
+	return found
+}
+
+test "minúsculas guardam as posições e acham todas as ocorrências" {
+	assert lower("Olá MUNDO Ção") == "olá mundo ção"
+	assert occurrences("abc ABC abc", "abc", false, 10) == [0, 4, 8]
+	assert occurrences("abc ABC abc", "abc", true, 10) == [0, 8]
+	assert occurrences("aaaa", "aa", true, 10) == [0, 2]
+	assert len(occurrences("abc", "", false, 10)) == 0
+}
+
+test "Ctrl+P ordena por nome, depois caminho, depois letras em ordem" {
+	files := ["README.md", "lib/model.hive", "lib/render.hive", "studio.hive", "tools/embed.hive"]
+	assert quickOpen(files, "mod", 10) == ["lib/model.hive"]
+	assert quickOpen(files, "re", 10) == ["README.md", "lib/render.hive"]
+	found := quickOpen(files, "lib hive", 10)
+	assert len(found) == 2
+	assert quickOpen(files, "stdh", 10) == ["studio.hive"]
+	assert len(quickOpen(files, "", 3)) == 3
+}
+
+test "busca no projeto acha linhas em vários arquivos" {
+	if hive.file.makeDir("./search-test/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./search-test/main.hive", "proc main(): void \{\n\techo \"Olá\"\n}\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./search-test/lib/a.hive", "func ola(): Str \{\n\treturn \"olá\"\n}\n") is Result.Error(why) {
+		panic why
+	}
+	result := searchProject("./search-test", "olá", false, false, 100)
+	assert result.files == 2
+	assert len(result.hits) == 2
+	if result.hits is [first, second] {
+		assert first.line == 2
+		assert first.column == 7 || second.column == 7 || first.column == 9 || second.column == 9
+	}
+	assert allFiles("./search-test", false, 100) == ["lib/a.hive", "main.hive"]
+}
