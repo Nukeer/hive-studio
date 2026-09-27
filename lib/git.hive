@@ -1,0 +1,281 @@
+// Git: o que mudou desde o último commit, e as ações do painel.
+//
+// Classificação de um arquivo, a partir das duas letras do porcelain:
+//   new       ainda não versionado (??) ou adicionado (A) — verde
+//   modified  editado (M) — amarelo
+//   deleted   removido (D) — vermelho
+//   conflict  em conflito (U) — vermelho
+// Um arquivo que o git não lista está commitado e fica na cor normal.
+
+import ./model
+import ./process
+import ./complete
+
+func letterAt(text: Str, index: Int): Str {
+	if text bounds index {
+		return text[index]
+	}
+	return " "
+}
+
+func startsWith(text: Str, prefix: Str): Bool {
+	return complete.startsWith(text, prefix)
+}
+
+func numberIn(text: Str): Int {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		return n
+	}
+	return 0
+}
+
+func withBranch(info: model.GitInfo, header: Str): model.GitInfo {
+	mut next := info
+	if header is "No commits yet on {name}" {
+		next.branch = name
+	} else if header is "{name}...{rest}" {
+		next.branch = name
+		if rest is "{a}ahead {n is (\d+)}{b}" {
+			next.ahead = numberIn(n)
+		}
+		if rest is "{a}behind {n is (\d+)}{b}" {
+			next.behind = numberIn(n)
+		}
+	} else {
+		next.branch = header
+	}
+	return next
+}
+
+func parseFile(line: Str, prefix: Str): Result<model.GitFile, Bool> {
+	if line is "{xy is (..)} {path}" {
+		mut target := path
+		if target is "{old} -> {renamed}" {
+			target = renamed
+		}
+		if target is "\"{inner}\"" {
+			target = inner
+		}
+		mut rel := target
+		if prefix != "" {
+			if startsWith(target, prefix) {
+				rel = complete.skip(target, len(prefix))
+			} else {
+				rel = ""
+			}
+		}
+		return Result.Ok(model.GitFile(target, rel, letterAt(xy, 0), letterAt(xy, 1)))
+	}
+	return Result.Error(false)
+}
+
+// Lê o estado do repositório que contém `root`. O rascunho da mensagem de
+// commit e o que estiver em andamento sobrevivem à releitura.
+proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
+	mut info := model.emptyGit()
+	info.message = previous.message
+	info.busy = previous.busy
+	info.confirm = previous.confirm
+	top := process.run("git", ["rev-parse", "--show-toplevel"], root)
+	if top.code != 0 {
+		return info
+	}
+	info.repo = true
+	info.top = process.firstLine(top.text)
+	info.prefix = process.firstLine(process.run("git", ["rev-parse", "--show-prefix"], root).text)
+	status := process.run("git", ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b", "--untracked-files=all"], root)
+	mut model.GitFile[dyn] files = []
+	for each line in split(replaceAll(status.text, "\r", ""), "\n") {
+		if line is "## {header}" {
+			info = withBranch(info, header)
+		} else if parseFile(line, info.prefix) is Result.Ok(file) {
+			append(files, file)
+		}
+	}
+	info.files = files
+	history := process.run("git", ["log", "--oneline", "--no-color", "-15"], root)
+	if history.code == 0 {
+		mut Str[dyn] log = []
+		for each line in split(replaceAll(history.text, "\r", ""), "\n") {
+			if line != "" {
+				append(log, line)
+			}
+		}
+		info.log = log
+	}
+	return info
+}
+
+func kindOf(file: model.GitFile): Str {
+	x := file.index
+	y := file.work
+	if x == "?" || x == "A" {
+		return "new"
+	} else if x == "U" || y == "U" {
+		return "conflict"
+	} else if x == "D" || y == "D" {
+		return "deleted"
+	} else if x == "R" || x == "C" {
+		return "new"
+	}
+	return "modified"
+}
+
+func badge(kind: Str, file: model.GitFile): Str {
+	if kind == "new" {
+		if file.index == "?" {
+			return "U"
+		}
+		return "A"
+	} else if kind == "deleted" {
+		return "D"
+	} else if kind == "conflict" {
+		return "!"
+	}
+	return "M"
+}
+
+func cssOf(kind: Str): Str {
+	if kind == "new" {
+		return "g-new"
+	} else if kind == "modified" {
+		return "g-mod"
+	} else if kind == "deleted" || kind == "conflict" {
+		return "g-del"
+	}
+	return ""
+}
+
+func staged(file: model.GitFile): Bool {
+	return file.index != " " && file.index != "?"
+}
+
+func unstaged(file: model.GitFile): Bool {
+	return file.work != " "
+}
+
+func fileKind(info: model.GitInfo, rel: Str): Str {
+	for each file in info.files {
+		if file.rel == rel && rel != "" {
+			return kindOf(file)
+		}
+	}
+	return ""
+}
+
+// Uma pasta leva a cor do que tem dentro: editado vence novo.
+func folderKind(info: model.GitInfo, rel: Str): Str {
+	mut found := ""
+	for each file in info.files {
+		if file.rel != "" && startsWith(file.rel, rel + "/") {
+			kind := kindOf(file)
+			if kind == "modified" || kind == "conflict" || kind == "deleted" {
+				return "modified"
+			}
+			found = "new"
+		}
+	}
+	return found
+}
+
+func count(info: model.GitInfo, wantStaged: Bool): Int {
+	mut n := 0
+	for each file in info.files {
+		if (wantStaged && staged(file)) || (!wantStaged && unstaged(file)) {
+			n++
+		}
+	}
+	return n
+}
+
+// ── ações ────────────────────────────────────────────────────────────────
+
+proc stage(info: model.GitInfo, path: Str): process.Output {
+	return process.run("git", ["add", "--", path], info.top)
+}
+
+proc unstage(info: model.GitInfo, path: Str): process.Output {
+	restored := process.run("git", ["restore", "--staged", "--", path], info.top)
+	if restored.code != 0 {
+		// Sem nenhum commit ainda não há o que restaurar: tira do índice.
+		return process.run("git", ["rm", "--cached", "-r", "-q", "--", path], info.top)
+	}
+	return restored
+}
+
+proc stageAll(info: model.GitInfo): process.Output {
+	return process.run("git", ["add", "-A"], info.top)
+}
+
+proc unstageAll(info: model.GitInfo): process.Output {
+	restored := process.run("git", ["restore", "--staged", "--", "."], info.top)
+	if restored.code != 0 {
+		return process.run("git", ["rm", "--cached", "-r", "-q", "--", "."], info.top)
+	}
+	return restored
+}
+
+// Descarta as alterações de um arquivo. Um arquivo novo é apagado.
+proc discard(info: model.GitInfo, path: Str): process.Output {
+	for each file in info.files {
+		if file.path == path && file.index == "?" {
+			return process.run("git", ["clean", "-f", "--", path], info.top)
+		}
+	}
+	return process.run("git", ["restore", "--source=HEAD", "--staged", "--worktree", "--", path], info.top)
+}
+
+// Commit, push e pull podem demorar (hooks, rede), então rodam numa thread e
+// respondem com `GitDone`.
+proc runAsync(db: hive.syslink.Address, directory: Str, label: Str, arguments: Str[dyn]): void {
+	result := process.run("git", arguments, directory)
+	async db(model.Cmd.Post(model.Msg.GitDone(label, result.text, result.code == 0)))
+}
+
+proc commitAsync(db: hive.syslink.Address, directory: Str, message: Str, everything: Bool): void {
+	if everything {
+		added := process.run("git", ["add", "-A"], directory)
+		if added.code != 0 {
+			async db(model.Cmd.Post(model.Msg.GitDone("commit", added.text, false)))
+			return
+		}
+	}
+	Str[dyn] arguments = ["commit", "-m", message]
+	runAsync(db, directory, "commit", arguments)
+}
+
+test "o porcelain vira arquivos com caminho relativo à pasta aberta" {
+	if parseFile("?? lib/novo.hive", "") is Result.Ok(fresh) {
+		assert kindOf(fresh) == "new" && badge("new", fresh) == "U"
+		assert fresh.rel == "lib/novo.hive"
+	} else {
+		assert false
+	}
+	if parseFile(" M app/lib/x.hive", "app/") is Result.Ok(edited) {
+		assert kindOf(edited) == "modified" && edited.rel == "lib/x.hive"
+		assert unstaged(edited) && !staged(edited)
+	} else {
+		assert false
+	}
+	if parseFile("R  velho.hive -> novo.hive", "") is Result.Ok(renamed) {
+		assert renamed.path == "novo.hive" && staged(renamed)
+	}
+	if parseFile(" M outro/y.hive", "app/") is Result.Ok(outside) {
+		assert outside.rel == ""
+	}
+}
+
+test "o cabeçalho diz o branch e quanto está à frente" {
+	info := withBranch(model.emptyGit(), "main...origin/main [ahead 2, behind 1]")
+	assert info.branch == "main" && info.ahead == 2 && info.behind == 1
+	assert withBranch(model.emptyGit(), "No commits yet on main").branch == "main"
+}
+
+test "pastas herdam a cor dos arquivos" {
+	mut info := model.emptyGit()
+	info.files = [model.GitFile("lib/a.hive", "lib/a.hive", "?", "?"), model.GitFile("src/b.hive", "src/b.hive", " ", "M")]
+	assert folderKind(info, "lib") == "new"
+	assert folderKind(info, "src") == "modified"
+	assert folderKind(info, "docs") == ""
+	assert fileKind(info, "src/b.hive") == "modified"
+}
