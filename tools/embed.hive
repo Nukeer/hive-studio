@@ -1,0 +1,35 @@
+// Copia assets/shell.html para lib/assets.hive como texto Hive, para que o
+// executável carregue a página dentro dele. Rode depois de editar o shell:
+//
+//     hivec run tools/embed.hive
+
+proc main(): void {
+	source := "../assets/shell.html"
+	target := "../lib/assets.hive"
+	read := hive.file.read(source)
+	if read is Result.Error(why) {
+		echo "não foi possível ler {source}: {why.message}"
+		hive.term.exit(1)
+	}
+	if read is Result.Ok(page) {
+		clean := replaceAll(page, "\r", "")
+		if indexOf(clean, "`") is Result.Ok(at) {
+			echo "{source} tem uma crase (caractere {at}); use \x60 no JavaScript"
+			hive.term.exit(1)
+		}
+		brace := "\{"
+		slash := "\\"
+		escaped := replaceAll(clean, brace, slash + brace)
+		mut Str[dyn] lines = []
+		for each line in split(escaped, "\n") {
+			append(lines, "\t\t" + line)
+		}
+		body := "// Gerado por tools/embed.hive a partir de assets/shell.html. Não edite à mão.\n\n" +
+			"func shell(): Str \{\n\treturn " + "`" + "\n" + join(lines, "\n") + "\n\t" + "`" + "\n}\n"
+		if hive.file.write(target, body) is Result.Error(why) {
+			echo "não foi possível escrever {target}: {why.message}"
+			hive.term.exit(1)
+		}
+		echo "escrito {target} ({len(clean)} caracteres)"
+	}
+}
