@@ -46,12 +46,17 @@ func showingSettings(state: model.State): Bool {
 	return state.settingsOpen && state.editorView == model.EditorView.SettingsView()
 }
 
-// O arquivo que Check/Run/Test/Build recebem: o fixado, senão o ativo.
+// O arquivo que Check/Run/Test/Build recebem: o fixado, senão o ativo —
+// desde que seja um `.hive`.
 func targetOf(state: model.State): Str {
 	if state.entrypoint != "" {
 		return state.entrypoint
 	}
-	return activePath(state)
+	path := activePath(state)
+	if path is "{stem}.hive" {
+		return path
+	}
+	return ""
 }
 
 func layoutOf(state: model.State): Str {
@@ -580,7 +585,7 @@ func statusBar(state: model.State): Str {
 				language = "Go"
 			}
 			append(items, statusItem(language, "", "", ""))
-			if doc.path != state.entrypoint {
+			if doc.path != state.entrypoint && doc.path is "{stem}.hive" {
 				append(items, statusItem("📌 Fixar como entrada", "pin", "", "Check/Run/Test/Build passam a usar este arquivo"))
 			}
 		}

@@ -160,11 +160,24 @@ func checkbox(item: Str): Str {
 	return inline(item)
 }
 
+func itemHtml(list: Str, text: Str): Str {
+	if list == "ul" {
+		return "<li>" + checkbox(text) + "</li>"
+	}
+	return "<li>" + inline(text) + "</li>"
+}
+
+func indented(line: Str): Bool {
+	return line is " {rest}" || line is "\t{rest}"
+}
+
 func render(text: Str): Str {
 	lines := split(replaceAll(text, "\r", ""), "\n")
 	mut Str[dyn] out = []
 	mut Str[dyn] paragraph = []
 	mut list := ""
+	mut pending := ""
+	mut hasItem := false
 	mut fence := false
 	mut fenceLang := ""
 	mut Str[dyn] code = []
@@ -198,11 +211,22 @@ func render(text: Str): Str {
 		numbered := orderedItem(line)
 		isItem := item is Result.Ok(_) || numbered is Result.Ok(_)
 
+		// Uma linha indentada logo depois de um item continua esse item.
+		if hasItem && !blank && !isItem && indented(line) {
+			pending = pending + " " + trimBoth(line)
+			continue
+		}
+
 		// Fecha o que estiver aberto quando a linha não continua aquilo.
 		if len(paragraph) > 0 && (blank || isItem || line is "#{rest}" || line is ">{rest}" || line is "```{rest}" || line is "|{rest}" || isRule(line)) {
-			append(out, "<p>" + join(paragraph, " ") + "</p>")
+			append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
 			Str[dyn] none = []
 			paragraph = none
+		}
+		if hasItem {
+			append(out, itemHtml(list, pending))
+			hasItem = false
+			pending = ""
 		}
 		if list != "" && !isItem {
 			append(out, "</" + list + ">")
@@ -242,7 +266,8 @@ func render(text: Str): Str {
 				append(out, "<ul>")
 				list = "ul"
 			}
-			append(out, "<li>" + checkbox(content) + "</li>")
+			pending = content
+			hasItem = true
 			continue
 		}
 		if numbered is Result.Ok(content) {
@@ -253,7 +278,8 @@ func render(text: Str): Str {
 				append(out, "<ol>")
 				list = "ol"
 			}
-			append(out, "<li>" + inline(content) + "</li>")
+			pending = content
+			hasItem = true
 			continue
 		}
 		mut next := ""
@@ -287,10 +313,13 @@ func render(text: Str): Str {
 			append(out, join(table, ""))
 			continue
 		}
-		append(paragraph, inline(trimSpaces(line)))
+		append(paragraph, trimBoth(line))
 	}
 	if len(paragraph) > 0 {
-		append(out, "<p>" + join(paragraph, " ") + "</p>")
+		append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
+	}
+	if hasItem {
+		append(out, itemHtml(list, pending))
 	}
 	if list != "" {
 		append(out, "</" + list + ">")
@@ -315,6 +344,18 @@ test "listas, citação e bloco hive com realce" {
 	assert indexOf(html, "<ol>") is Result.Ok(_)
 	assert indexOf(html, "<blockquote>nota</blockquote>") is Result.Ok(_)
 	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+}
+
+test "item de lista e parágrafo em várias linhas ficam inteiros" {
+	html := render("- **um
+  dois** três
+- quatro
+
+linha *a
+b* fim")
+	assert indexOf(html, "<li><strong>um dois</strong> três</li>") is Result.Ok(_)
+	assert indexOf(html, "<li>quatro</li>") is Result.Ok(_)
+	assert indexOf(html, "<p>linha <em>a b</em> fim</p>") is Result.Ok(_)
 }
 
 test "tabela e links seguros" {
