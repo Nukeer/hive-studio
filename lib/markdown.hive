@@ -1,0 +1,326 @@
+// Markdown → HTML para o preview. Cobre o que um README usa: títulos,
+// parágrafos, ênfase, código (com realce para blocos `hive`), listas,
+// citações, tabelas, links, imagens e linhas horizontais.
+
+import ./highlight
+
+func esc(text: Str): Str {
+	return highlight.escape(text)
+}
+
+// Só destinos inofensivos viram link: web, e-mail e âncoras.
+func safeHref(url: Str): Str {
+	if url is "http://{rest}" || url is "https://{rest}" || url is "mailto:{rest}" || url is "#{rest}" {
+		return url
+	}
+	return ""
+}
+
+// Ênfase, links e imagens num trecho que não é código. Já chega escapado.
+func emphasis(text: Str): Str {
+	mut out := text
+	for ;; {
+		if out is "{before}![{alt}]({url}){rest}" {
+			href := safeHref(url)
+			if href != "" {
+				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\">" + rest
+			} else {
+				out = before + "<span class=\"md-img\">🖼 " + alt + "</span>" + rest
+			}
+		} else if out is "{before}[{label}]({url}){rest}" {
+			out = before + "<a href=\"" + safeHref(url) + "\" title=\"" + url + "\">" + label + "</a>" + rest
+		} else if out is "{before}**{inner}**{rest}" && inner != "" {
+			out = before + "<strong>" + inner + "</strong>" + rest
+		} else if out is "{before}__{inner}__{rest}" && inner != "" {
+			out = before + "<strong>" + inner + "</strong>" + rest
+		} else if out is "{before}*{inner}*{rest}" && inner != "" {
+			out = before + "<em>" + inner + "</em>" + rest
+		} else if out is "{before}~~{inner}~~{rest}" && inner != "" {
+			out = before + "<del>" + inner + "</del>" + rest
+		} else {
+			return out
+		}
+	}
+	return out
+}
+
+// O texto de uma linha: pedaços entre crases são código, o resto tem ênfase.
+func inline(text: Str): Str {
+	parts := split(text, "`")
+	mut Str[dyn] out = []
+	for i := 0; i < len(parts); i++ {
+		if i % 2 == 1 && i < len(parts) - 1 {
+			append(out, "<code>" + esc(parts[i]) + "</code>")
+		} else if i % 2 == 1 {
+			append(out, "`" + emphasis(esc(parts[i])))
+		} else {
+			append(out, emphasis(esc(parts[i])))
+		}
+	}
+	return join(out, "")
+}
+
+func trimSpaces(text: Str): Str {
+	mut rest := text
+	for ;; {
+		if rest is " {tail}" {
+			rest = tail
+		} else if rest is "\t{tail}" {
+			rest = tail
+		} else {
+			return rest
+		}
+	}
+	return rest
+}
+
+func trimBoth(text: Str): Str {
+	mut rest := trimSpaces(text)
+	for ;; {
+		if rest is "{head} " {
+			rest = head
+		} else if rest is "{head}	" {
+			rest = head
+		} else {
+			return rest
+		}
+	}
+	return rest
+}
+
+func cells(line: Str): Str[dyn] {
+	mut body := trimBoth(line)
+	if body is "|{inner}" {
+		body = inner
+	}
+	if body is "{inner}|" {
+		body = inner
+	}
+	mut Str[dyn] found = []
+	for each cell in split(body, "|") {
+		append(found, trimBoth(cell))
+	}
+	return found
+}
+
+func isRule(line: Str): Bool {
+	clean := replaceAll(trimSpaces(line), " ", "")
+	return clean == "---" || clean == "***" || clean == "___" || clean is "----{rest}"
+}
+
+func isTableSeparator(line: Str): Bool {
+	clean := replaceAll(replaceAll(replaceAll(replaceAll(trimSpaces(line), "|", ""), "-", ""), ":", ""), " ", "")
+	return clean == "" && indexOf(line, "-") is Result.Ok(_) && indexOf(line, "|") is Result.Ok(_)
+}
+
+func listItem(line: Str): Result<Str, Bool> {
+	clean := trimSpaces(line)
+	if clean is "- {item}" {
+		return Result.Ok(item)
+	} else if clean is "* {item}" {
+		return Result.Ok(item)
+	} else if clean is "+ {item}" {
+		return Result.Ok(item)
+	}
+	return Result.Error(false)
+}
+
+func orderedItem(line: Str): Result<Str, Bool> {
+	if trimSpaces(line) is "{n is (\d+)}. {item}" {
+		return Result.Ok(item)
+	}
+	return Result.Error(false)
+}
+
+func heading(line: Str): Result<Str, Bool> {
+	if line is "###### {t}" {
+		return Result.Ok("<h6>" + inline(t) + "</h6>")
+	} else if line is "##### {t}" {
+		return Result.Ok("<h5>" + inline(t) + "</h5>")
+	} else if line is "#### {t}" {
+		return Result.Ok("<h4>" + inline(t) + "</h4>")
+	} else if line is "### {t}" {
+		return Result.Ok("<h3>" + inline(t) + "</h3>")
+	} else if line is "## {t}" {
+		return Result.Ok("<h2>" + inline(t) + "</h2>")
+	} else if line is "# {t}" {
+		return Result.Ok("<h1>" + inline(t) + "</h1>")
+	}
+	return Result.Error(false)
+}
+
+func checkbox(item: Str): Str {
+	if item is "[ ] {rest}" {
+		return "<input type=\"checkbox\" disabled> " + inline(rest)
+	} else if item is "[x] {rest}" {
+		return "<input type=\"checkbox\" checked disabled> " + inline(rest)
+	} else if item is "[X] {rest}" {
+		return "<input type=\"checkbox\" checked disabled> " + inline(rest)
+	}
+	return inline(item)
+}
+
+func render(text: Str): Str {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	mut Str[dyn] out = []
+	mut Str[dyn] paragraph = []
+	mut list := ""
+	mut fence := false
+	mut fenceLang := ""
+	mut Str[dyn] code = []
+	mut i := 0
+	for ; i < len(lines); {
+		mut line := ""
+		if lines bounds i {
+			line = lines[i]
+		}
+		i++
+
+		if fence {
+			if trimSpaces(line) is "```{rest}" {
+				body := join(code, "\n")
+				if fenceLang == "hive" {
+					append(out, "<pre class=\"md-code\"><code>" + highlight.highlight(body) + "</code></pre>")
+				} else {
+					append(out, "<pre class=\"md-code\"><code>" + esc(body) + "</code></pre>")
+				}
+				Str[dyn] none = []
+				code = none
+				fence = false
+			} else {
+				append(code, line)
+			}
+			continue
+		}
+
+		blank := trimSpaces(line) == ""
+		item := listItem(line)
+		numbered := orderedItem(line)
+		isItem := item is Result.Ok(_) || numbered is Result.Ok(_)
+
+		// Fecha o que estiver aberto quando a linha não continua aquilo.
+		if len(paragraph) > 0 && (blank || isItem || line is "#{rest}" || line is ">{rest}" || line is "```{rest}" || line is "|{rest}" || isRule(line)) {
+			append(out, "<p>" + join(paragraph, " ") + "</p>")
+			Str[dyn] none = []
+			paragraph = none
+		}
+		if list != "" && !isItem {
+			append(out, "</" + list + ">")
+			list = ""
+		}
+
+		if blank {
+			continue
+		}
+		if trimSpaces(line) is "```{lang}" {
+			fence = true
+			fenceLang = trimSpaces(lang)
+			continue
+		}
+		if trimSpaces(line) == "```" {
+			fence = true
+			fenceLang = ""
+			continue
+		}
+		if heading(line) is Result.Ok(html) {
+			append(out, html)
+			continue
+		}
+		if isRule(line) {
+			append(out, "<hr>")
+			continue
+		}
+		if line is ">{quote}" {
+			append(out, "<blockquote>" + inline(trimSpaces(quote)) + "</blockquote>")
+			continue
+		}
+		if item is Result.Ok(content) {
+			if list != "ul" {
+				if list != "" {
+					append(out, "</" + list + ">")
+				}
+				append(out, "<ul>")
+				list = "ul"
+			}
+			append(out, "<li>" + checkbox(content) + "</li>")
+			continue
+		}
+		if numbered is Result.Ok(content) {
+			if list != "ol" {
+				if list != "" {
+					append(out, "</" + list + ">")
+				}
+				append(out, "<ol>")
+				list = "ol"
+			}
+			append(out, "<li>" + inline(content) + "</li>")
+			continue
+		}
+		mut next := ""
+		if lines bounds i {
+			next = lines[i]
+		}
+		if line is "{lead}|{rest}" && isTableSeparator(next) {
+			i++
+			mut Str[dyn] table = ["<table><thead><tr>"]
+			for each cell in cells(line) {
+				append(table, "<th>" + inline(cell) + "</th>")
+			}
+			append(table, "</tr></thead><tbody>")
+			for ; i < len(lines); {
+				mut row := ""
+				if lines bounds i {
+					row = lines[i]
+				}
+				if row is "{a}|{b}" {
+					append(table, "<tr>")
+				} else {
+					break
+				}
+				for each cell in cells(row) {
+					append(table, "<td>" + inline(cell) + "</td>")
+				}
+				append(table, "</tr>")
+				i++
+			}
+			append(table, "</tbody></table>")
+			append(out, join(table, ""))
+			continue
+		}
+		append(paragraph, inline(trimSpaces(line)))
+	}
+	if len(paragraph) > 0 {
+		append(out, "<p>" + join(paragraph, " ") + "</p>")
+	}
+	if list != "" {
+		append(out, "</" + list + ">")
+	}
+	if fence {
+		append(out, "<pre class=\"md-code\"><code>" + esc(join(code, "\n")) + "</code></pre>")
+	}
+	return join(out, "\n")
+}
+
+test "títulos, ênfase e código inline" {
+	html := render("# Olá\n\nTexto **forte** e *leve* com `x := 1`.")
+	assert indexOf(html, "<h1>Olá</h1>") is Result.Ok(_)
+	assert indexOf(html, "<strong>forte</strong>") is Result.Ok(_)
+	assert indexOf(html, "<em>leve</em>") is Result.Ok(_)
+	assert indexOf(html, "<code>x := 1</code>") is Result.Ok(_)
+}
+
+test "listas, citação e bloco hive com realce" {
+	html := render("- um\n- dois\n\n1. a\n2. b\n\n> nota\n\n```hive\nproc main(): void \{}\n```\n")
+	assert indexOf(html, "<ul>\n<li>um</li>\n<li>dois</li>\n</ul>") is Result.Ok(_)
+	assert indexOf(html, "<ol>") is Result.Ok(_)
+	assert indexOf(html, "<blockquote>nota</blockquote>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+}
+
+test "tabela e links seguros" {
+	html := render("| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[site](https://x.dev) e [ruim](javascript:alert)")
+	assert indexOf(html, "<th>a</th><th>b</th>") is Result.Ok(_)
+	assert indexOf(html, "<td>1</td><td>2</td>") is Result.Ok(_)
+	assert indexOf(html, "href=\"https://x.dev\"") is Result.Ok(_)
+	assert indexOf(html, "href=\"\" title=\"javascript:alert\"") is Result.Ok(_)
+}

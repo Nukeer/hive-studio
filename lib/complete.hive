@@ -1,0 +1,259 @@
+// Autocomplete: o que dá para escrever a partir do cursor.
+//
+// Palavras-chave, tipos e builtins da linguagem; os módulos `hive.*` e o que
+// cada um oferece depois do ponto; e as declarações e nomes do próprio arquivo.
+
+import ./highlight
+import ./analysis
+import ./model
+
+// O que está sendo digitado: o pedaço de nome antes do cursor e, se houver,
+// o que vem antes do ponto (`hive.file` em `hive.file.re|`).
+type Context {
+	prefix:    Str
+	qualifier: Str
+	start:     Int
+}
+
+type TextEdit {
+	text:  Str
+	caret: Int
+}
+
+func builtins(): Str[dyn] {
+	return ["len", "bytes", "append", "prepend", "drop", "join", "split", "replaceFirst", "replaceAll",
+		"indexOf", "row", "column", "toTable", "map", "filter", "filterMap", "sort", "encode"]
+}
+
+func modules(): Str[dyn] {
+	return ["conv", "math", "map", "file", "term", "json", "crypto", "net", "syslink", "task", "time", "env", "sql", "ui", "codec"]
+}
+
+func members(module: Str): Str[dyn] {
+	if module == "conv" {
+		return ["ceil", "floor", "round", "itf", "its", "fts", "sti", "stf", "ConversionError"]
+	} else if module == "math" {
+		return ["pi", "sin", "cos", "tan", "asin", "acos", "atan2", "sqrt", "hypot", "abs", "min", "max", "clamp"]
+	} else if module == "map" {
+		return ["new", "set", "get", "has", "delete", "keys", "values", "fromTable", "toTable", "Map"]
+	} else if module == "file" {
+		return ["read", "lines", "write", "writeSecret", "append", "size", "copy", "delete", "makeDir", "move", "list", "exists", "csv", "xlsx", "ods", "FileError", "TableError"]
+	} else if module == "term" {
+		return ["print", "status", "isTerminal", "read", "readSecret", "args", "codec", "exit", "exec", "attach", "execWith", "ExecError", "FlagError"]
+	} else if module == "json" {
+		return ["codec", "flatten", "get", "table", "JsonError"]
+	} else if module == "crypto" {
+		return ["sha256", "sha512", "hmacSha256", "encrypt", "decrypt", "base64Encode", "base64Decode", "randomHex", "jwtCodec", "jwtDecode", "jwtHeader", "CryptoError", "JwtError"]
+	} else if module == "net" {
+		return ["httpRequest", "httpServe", "wsConnect", "wsServe", "wsSend", "wsReceive", "wsRequest", "wsClose",
+			"socketConnect", "socketServe", "socketSend", "socketReceive", "socketReceiveLine", "socketPeer", "socketClose",
+			"resolve", "localAddress", "urlEncode", "queryParamsCodec", "HttpRequest", "HttpResponse", "HttpError", "WsConnection", "WsError"]
+	} else if module == "syslink" {
+		return ["spawn", "register", "at", "on", "self", "answer", "monitor", "stop", "listen", "node", "peers", "Address", "Envelope", "SyslinkError"]
+	} else if module == "task" {
+		return ["sleep", "TimeoutError"]
+	} else if module == "time" {
+		return ["now", "timezone", "timezoneOffset", "format", "dateFrom", "dateTimeFrom", "year", "month", "day", "weekday", "lastDayOfMonth", "hour", "minute", "second", "millisecond"]
+	} else if module == "env" {
+		return ["get", "EnvironmentError"]
+	} else if module == "sql" {
+		return ["run", "raw", "connect", "pool", "close", "DatabaseDriver", "SqlConnection", "SqlError", "Fragment"]
+	} else if module == "ui" {
+		return ["window", "html", "page", "row", "column", "spacer", "spinner", "none", "overlay", "text", "image", "link", "icon",
+			"button", "input", "textarea", "checkbox", "select", "table", "canvas", "scene", "inset",
+			"gap", "pad", "width", "height", "grow", "align", "justify", "scroll", "size", "heading", "tone", "background", "paint",
+			"on", "onInput", "onSubmit", "onChoose", "onToggle", "onPick", "onSort", "View", "Tone", "Align", "Justify", "TextSize", "Axis", "Icon"]
+	}
+	return []
+}
+
+func memberKind(word: Str): Str {
+	if word bounds 0 {
+		if highlight.isUpper(word[0]) {
+			return "type"
+		}
+	}
+	return "func"
+}
+
+func context(text: Str, caret: Int): Context {
+	chars := split(text, "")
+	mut i := caret - 1
+	for ; chars bounds i; i-- {
+		if !highlight.isIdent(chars[i]) {
+			break
+		}
+	}
+	start := i + 1
+	prefix := highlight.piece(chars, start, caret)
+	mut qualifier := ""
+	if chars bounds i {
+		if chars[i] == "." {
+			mut k := i - 1
+			for ; chars bounds k; k-- {
+				c := chars[k]
+				if !(highlight.isIdent(c) || c == ".") {
+					break
+				}
+			}
+			qualifier = highlight.piece(chars, k + 1, i)
+		}
+	}
+	return Context(prefix, qualifier, start)
+}
+
+func startsWith(word: Str, prefix: Str): Bool {
+	if prefix == "" {
+		return true
+	}
+	if indexOf(word, prefix) is Result.Ok(at) {
+		return at == 0
+	}
+	return false
+}
+
+func contains(values: Str[], value: Str): Bool {
+	return indexOf(values, value) is Result.Ok(_)
+}
+
+// Os nomes que aparecem no arquivo, para completar variáveis locais também.
+func wordsIn(text: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	mut Str[dyn] current = []
+	for each c in split(text, "") {
+		if highlight.isIdent(c) {
+			append(current, c)
+		} else if len(current) > 0 {
+			word := join(current, "")
+			if len(word) >= 3 && !contains(found, word) {
+				append(found, word)
+			}
+			Str[dyn] reset = []
+			current = reset
+		}
+	}
+	return found
+}
+
+func add(found: model.Suggestion[], candidate: model.Suggestion, prefix: Str): model.Suggestion[dyn] {
+	mut model.Suggestion[dyn] next = found
+	if candidate.word == prefix || !startsWith(candidate.word, prefix) {
+		return next
+	}
+	for each s in found {
+		if s.word == candidate.word {
+			return next
+		}
+	}
+	append(next, candidate)
+	return next
+}
+
+func suggest(text: Str, caret: Int, limit: Int): model.Suggestion[dyn] {
+	ctx := context(text, caret)
+	mut model.Suggestion[dyn] found = []
+	if ctx.qualifier == "hive" {
+		for each m in modules() {
+			found = add(found, model.Suggestion(m, "module", "hive.{m}"), ctx.prefix)
+		}
+		for each b in builtins() {
+			found = add(found, model.Suggestion(b, "func", "builtin"), ctx.prefix)
+		}
+	} else if ctx.qualifier is "hive.{module}" {
+		for each m in members(module) {
+			found = add(found, model.Suggestion(m, memberKind(m), "hive.{module}"), ctx.prefix)
+		}
+	} else if ctx.qualifier != "" {
+		for each m in members(ctx.qualifier) {
+			found = add(found, model.Suggestion(m, memberKind(m), ctx.qualifier), ctx.prefix)
+		}
+	} else {
+		for each k in highlight.keywords() {
+			found = add(found, model.Suggestion(k, "keyword", "palavra-chave"), ctx.prefix)
+		}
+		for each t in highlight.builtinTypes() {
+			found = add(found, model.Suggestion(t, "type", "tipo"), ctx.prefix)
+		}
+		found = add(found, model.Suggestion("true", "keyword", "Bool"), ctx.prefix)
+		found = add(found, model.Suggestion("false", "keyword", "Bool"), ctx.prefix)
+		found = add(found, model.Suggestion("hive", "module", "biblioteca padrão"), ctx.prefix)
+		for each b in builtins() {
+			found = add(found, model.Suggestion(b, "func", "builtin"), ctx.prefix)
+		}
+		for each symbol in analysis.outline(text) {
+			if symbol.kind != "import" {
+				found = add(found, model.Suggestion(symbol.name, symbol.kind, "linha {symbol.line}"), ctx.prefix)
+			}
+		}
+		if ctx.prefix != "" {
+			for each w in wordsIn(text) {
+				found = add(found, model.Suggestion(w, "word", "no arquivo"), ctx.prefix)
+			}
+		}
+	}
+	mut model.Suggestion[dyn] limited = []
+	for each s in found {
+		if len(limited) < limit {
+			append(limited, s)
+		}
+	}
+	return limited
+}
+
+func take(text: Str, count: Int): Str {
+	last := count - 1
+	if last < 0 {
+		return ""
+	}
+	if text bounds last {
+		return text[:last]
+	}
+	return text
+}
+
+func skip(text: Str, count: Int): Str {
+	if count <= 0 {
+		return text
+	}
+	if text bounds count {
+		return text[count:]
+	}
+	return ""
+}
+
+// Troca o pedaço digitado pela palavra escolhida e põe o cursor depois dela.
+func accept(text: Str, caret: Int, word: Str): TextEdit {
+	ctx := context(text, caret)
+	before := take(text, ctx.start)
+	return TextEdit(before + word + skip(text, caret), len(before) + len(word))
+}
+
+test "o contexto separa prefixo e qualificador" {
+	ctx := context("x := hive.file.re", 17)
+	assert ctx.prefix == "re"
+	assert ctx.qualifier == "hive.file"
+	assert ctx.start == 15
+	plain := context("pro", 3)
+	assert plain.prefix == "pro" && plain.qualifier == ""
+}
+
+test "sugere palavras-chave, membros de módulo e nomes do arquivo" {
+	first := suggest("pr", 2, 10)
+	assert len(filter(first, isWord(_, "proc"))) == 1
+	assert len(filter(first, isWord(_, "prepend"))) == 1
+	files := suggest("hive.file.re", 12, 10)
+	assert len(filter(files, isWord(_, "read"))) == 1
+	source := "func greeting(): Str \{ return \"\" }\ngre"
+	own := suggest(source, len(source), 10)
+	assert len(filter(own, isWord(_, "greeting"))) == 1
+}
+
+func isWord(s: model.Suggestion, word: Str): Bool {
+	return s.word == word
+}
+
+test "aceitar troca o prefixo e move o cursor" {
+	edit := accept("x := hive.file.re\n", 17, "read")
+	assert edit.text == "x := hive.file.read\n"
+	assert edit.caret == 19
+}

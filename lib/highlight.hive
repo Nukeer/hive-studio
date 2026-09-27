@@ -1,0 +1,202 @@
+// Realce de sintaxe: transforma código Hive em HTML com uma classe por token.
+// As cores ficam no CSS do tema (`.tk` palavra-chave, `.tt` tipo, `.ts` texto,
+// `.tn` número, `.tc` comentário, `.tf` chamada, `.ta` átomo, `.tb` literal,
+// `.tm` módulo), então o realce não sabe nada de tema.
+
+func keywords(): Str[dyn] {
+	return [
+		"import", "proc", "func", "query", "test", "type",
+		"if", "else", "return", "is", "with",
+		"void", "echo", "assert", "panic",
+		"dyn", "mut", "async", "await", "for", "in",
+		"each", "bounds", "break", "continue", "as", "timeout"
+	]
+}
+
+func builtinTypes(): Str[dyn] {
+	return ["Str", "Int", "Float", "Bool", "Atom", "Result", "Table"]
+}
+
+func escape(text: Str): Str {
+	return replaceAll(replaceAll(replaceAll(replaceAll(text, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), "\"", "&quot;")
+}
+
+func isDigit(c: Str): Bool {
+	return c >= "0" && c <= "9"
+}
+
+func isUpper(c: Str): Bool {
+	return c >= "A" && c <= "Z"
+}
+
+func isIdentStart(c: Str): Bool {
+	return (c >= "a" && c <= "z") || isUpper(c) || c == "_"
+}
+
+func isIdent(c: Str): Bool {
+	return isIdentStart(c) || isDigit(c)
+}
+
+func piece(chars: Str[], from: Int, to: Int): Str {
+	mut Str[dyn] taken = []
+	for k := from; k < to; k++ {
+		if chars bounds k {
+			append(taken, chars[k])
+		}
+	}
+	return join(taken, "")
+}
+
+// A classe CSS de uma palavra, olhando o que vem depois dela.
+func wordClass(word: Str, next: Str): Str {
+	if indexOf(keywords(), word) is Result.Ok(_) {
+		return "tk"
+	}
+	if word == "true" || word == "false" {
+		return "tb"
+	}
+	if word == "hive" {
+		return "tm"
+	}
+	if indexOf(builtinTypes(), word) is Result.Ok(_) {
+		return "tt"
+	}
+	if next == "(" {
+		return "tf"
+	}
+	if word bounds 0 {
+		if isUpper(word[0]) {
+			return "tt"
+		}
+	}
+	return ""
+}
+
+func span(cls: Str, text: Str): Str {
+	if cls == "" {
+		return escape(text)
+	}
+	return "<span class=\"{cls}\">{escape(text)}</span>"
+}
+
+// O primeiro caractere que não é espaço a partir de `from`.
+func nextVisible(chars: Str[], from: Int): Str {
+	for k := from; k < len(chars); k++ {
+		if chars bounds k {
+			c := chars[k]
+			if c != " " && c != "\t" {
+				return c
+			}
+		}
+	}
+	return ""
+}
+
+func highlight(text: Str): Str {
+	chars := split(text, "")
+	total := len(chars)
+	mut Str[dyn] out = []
+	mut i := 0
+	for ; i < total; {
+		mut c := ""
+		if chars bounds i {
+			c = chars[i]
+		}
+		mut after := ""
+		ahead := i + 1
+		if chars bounds ahead {
+			after = chars[ahead]
+		}
+		mut j := i + 1
+		if c == "/" && after == "/" {
+			for ; j < total; j++ {
+				if chars bounds j {
+					if chars[j] == "\n" {
+						break
+					}
+				}
+			}
+			append(out, span("tc", piece(chars, i, j)))
+		} else if c == "\"" {
+			for ; j < total; j++ {
+				if chars bounds j {
+					if chars[j] == "\\" {
+						j++
+					} else if chars[j] == "\"" {
+						j++
+						break
+					}
+				}
+			}
+			append(out, span("ts", piece(chars, i, j)))
+		} else if c == "`" {
+			for ; j < total; j++ {
+				if chars bounds j {
+					if chars[j] == "`" {
+						j++
+						break
+					}
+				}
+			}
+			append(out, span("ts", piece(chars, i, j)))
+		} else if c == "#" && isUpper(after) {
+			for ; j < total; j++ {
+				if chars bounds j {
+					if !isIdent(chars[j]) {
+						break
+					}
+				}
+			}
+			append(out, span("ta", piece(chars, i, j)))
+		} else if isDigit(c) {
+			for ; j < total; j++ {
+				if chars bounds j {
+					d := chars[j]
+					if !(isDigit(d) || d == "." || d == "_") {
+						break
+					}
+				}
+			}
+			append(out, span("tn", piece(chars, i, j)))
+		} else if isIdentStart(c) {
+			for ; j < total; j++ {
+				if chars bounds j {
+					if !isIdent(chars[j]) {
+						break
+					}
+				}
+			}
+			word := piece(chars, i, j)
+			append(out, span(wordClass(word, nextVisible(chars, j)), word))
+		} else {
+			append(out, escape(c))
+		}
+		i = j
+	}
+	return join(out, "")
+}
+
+test "palavras-chave, tipos, textos e comentários ganham classes" {
+	html := highlight("proc main(): void \{ // oi\n\tx := \"a<b\" + 1\n}")
+	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tf\">main</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tk\">void</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tc\">// oi</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"ts\">&quot;a&lt;b&quot;</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tn\">1</span>") is Result.Ok(_)
+}
+
+test "tipos, átomos e o módulo hive" {
+	html := highlight("hive.file.read(p) is Result.Ok(#Ready)")
+	assert indexOf(html, "<span class=\"tm\">hive</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tt\">Result</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"ta\">#Ready</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tf\">read</span>") is Result.Ok(_)
+}
+
+test "o texto sai igual, só com marcação em volta" {
+	source := "type A \{ x: Int }\n"
+	html := highlight(source)
+	plain := replaceAll(replaceAll(html, "<span class=\"tk\">", ""), "</span>", "")
+	assert replaceAll(replaceAll(plain, "<span class=\"tt\">", ""), "&lt;", "<") == source
+}

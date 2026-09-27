@@ -1,0 +1,171 @@
+// Atalhos de teclado: as ações, as teclas padrão e o mapa do usuário.
+//
+// O mapa do usuário é guardado como `acao=Tecla;acao=Tecla`, só com o que
+// difere do padrão — assim uma ação nova ganha o atalho padrão sozinha.
+
+type Action {
+	id:       Str
+	label:    Str
+	fallback: Str
+}
+
+type Binding {
+	action: Str
+	keys:   Str
+}
+
+func actions(): Action[dyn] {
+	return [
+		Action("newFile", "Novo arquivo", "Ctrl+N"),
+		Action("newFolder", "Nova pasta", "Ctrl+Shift+N"),
+		Action("save", "Salvar", "Ctrl+S"),
+		Action("saveAll", "Salvar tudo", "Ctrl+Shift+S"),
+		Action("closeTab", "Fechar aba", "Ctrl+W"),
+		Action("nextTab", "Próxima aba", "Ctrl+PageDown"),
+		Action("prevTab", "Aba anterior", "Ctrl+PageUp"),
+		Action("togglePanel", "Mostrar/ocultar painel (Problemas, Saída)", "Ctrl+`"),
+		Action("toggleSidebar", "Mostrar/ocultar barra lateral", "Ctrl+B"),
+		Action("explorer", "Explorador", "Ctrl+Shift+E"),
+		Action("outline", "Estrutura", "Ctrl+Shift+O"),
+		Action("settings", "Configurações", "Ctrl+,"),
+		Action("suggest", "Sugestões (autocomplete)", "Ctrl+Space"),
+		Action("preview", "Preview do Markdown", "Ctrl+Shift+V"),
+		Action("check", "Check", "F8"),
+		Action("run", "Run", "F5"),
+		Action("test", "Test", "Ctrl+Shift+T"),
+		Action("build", "Build", "Ctrl+Shift+B")
+	]
+}
+
+func parse(stored: Str): Binding[dyn] {
+	mut Binding[dyn] found = []
+	for each pair in split(stored, ";") {
+		if pair is "{action}={keys}" {
+			if keys == "-" {
+				append(found, Binding(action, ""))
+			} else {
+				append(found, Binding(action, keys))
+			}
+		}
+	}
+	return found
+}
+
+func serialize(bindings: Binding[]): Str {
+	mut Str[dyn] pairs = []
+	for each b in bindings {
+		if b.keys == "" {
+			append(pairs, "{b.action}=-")
+		} else {
+			append(pairs, "{b.action}={b.keys}")
+		}
+	}
+	return join(pairs, ";")
+}
+
+// A tecla de uma ação: a do usuário, senão a padrão. `""` é "sem atalho".
+func keysFor(stored: Str, action: Str): Str {
+	for each b in parse(stored) {
+		if b.action == action {
+			return b.keys
+		}
+	}
+	for each a in actions() {
+		if a.id == action {
+			return a.fallback
+		}
+	}
+	return ""
+}
+
+// O mapa inteiro, resolvido: uma linha por ação.
+func resolved(stored: Str): Binding[dyn] {
+	mut Binding[dyn] all = []
+	for each a in actions() {
+		append(all, Binding(a.id, keysFor(stored, a.id)))
+	}
+	return all
+}
+
+func actionFor(stored: Str, combo: Str): Result<Str, Bool> {
+	for each b in resolved(stored) {
+		if b.keys == combo && combo != "" {
+			return Result.Ok(b.action)
+		}
+	}
+	return Result.Error(false)
+}
+
+func combos(stored: Str): Str[dyn] {
+	mut Str[dyn] all = []
+	for each b in resolved(stored) {
+		if b.keys != "" {
+			append(all, b.keys)
+		}
+	}
+	return all
+}
+
+func isDefault(action: Str, keys: Str): Bool {
+	for each a in actions() {
+		if a.id == action {
+			return a.fallback == keys
+		}
+	}
+	return false
+}
+
+// Grava `keys` em `action`. Quem já usava a mesma combinação fica sem atalho,
+// para nunca haver duas ações numa tecla só.
+func assign(stored: Str, action: Str, keys: Str): Str {
+	mut Binding[dyn] next = []
+	for each b in resolved(stored) {
+		mut chosen := b.keys
+		if b.action == action {
+			chosen = keys
+		} else if b.keys == keys {
+			chosen = ""
+		}
+		if !isDefault(b.action, chosen) {
+			append(next, Binding(b.action, chosen))
+		}
+	}
+	return serialize(next)
+}
+
+func reset(stored: Str, action: Str): Str {
+	mut Binding[dyn] next = []
+	for each b in parse(stored) {
+		if b.action != action {
+			append(next, b)
+		}
+	}
+	return serialize(next)
+}
+
+test "padrões valem até o usuário mudar" {
+	assert keysFor("", "newFile") == "Ctrl+N"
+	assert keysFor("", "togglePanel") == "Ctrl+`"
+	if actionFor("", "Ctrl+N") is Result.Ok(found) {
+		assert found == "newFile"
+	} else {
+		assert false
+	}
+}
+
+test "gravar um atalho tira ele de quem usava antes" {
+	stored := assign("", "save", "Ctrl+N")
+	assert keysFor(stored, "save") == "Ctrl+N"
+	assert keysFor(stored, "newFile") == ""
+	if actionFor(stored, "Ctrl+N") is Result.Ok(found) {
+		assert found == "save"
+	}
+	back := reset(reset(stored, "save"), "newFile")
+	assert back == ""
+	assert keysFor(back, "newFile") == "Ctrl+N"
+}
+
+test "voltar ao padrão não deixa lixo guardado" {
+	assert assign("", "run", "F5") == ""
+	assert assign("", "run", "F9") == "run=F9"
+}
