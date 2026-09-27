@@ -1,0 +1,7 @@
+*.hive-build/
+*.exe
+*-analysis.html
+*.hive-lock.tmp
+.hivedocs/
+studio-test/
+tree-test/

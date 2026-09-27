@@ -1,0 +1,26 @@
+#!/bin/sh
+# Hive Studio — verificações antes de cada commit.
+#   HIVE_SKIP_TESTS=1 git commit ...   pula a suíte de testes
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v hivec >/dev/null 2>&1; then
+	echo "pre-commit: hivec não está no PATH" >&2
+	exit 1
+fi
+
+# A página embutida precisa refletir assets/shell.html.
+(cd tools && hivec run embed.hive >/dev/null)
+if ! git diff --quiet -- lib/assets.hive; then
+	echo "pre-commit: lib/assets.hive estava desatualizado e foi regenerado." >&2
+	echo "            Revise e rode: git add lib/assets.hive" >&2
+	exit 1
+fi
+
+echo "pre-commit: hivec check"
+hivec check studio.hive
+
+if [ "${HIVE_SKIP_TESTS:-0}" != "1" ]; then
+	echo "pre-commit: hivec test"
+	hivec test studio.hive
+fi

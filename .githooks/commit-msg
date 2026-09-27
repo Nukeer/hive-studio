@@ -1,0 +1,6 @@
+#!/bin/sh
+# Commits deste projeto não levam co-autor.
+if grep -qi '^[[:space:]]*co-authored-by:' "$1"; then
+	echo "commit-msg: remova a linha Co-Authored-By — commits aqui não têm co-autor." >&2
+	exit 1
+fi
