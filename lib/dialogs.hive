@@ -1,0 +1,84 @@
+// Diálogos nativos: escolher uma pasta ou um arquivo com o seletor do sistema.
+//
+// No Windows é o diálogo do Explorer (via assets/pick.ps1, rodado sem console);
+// no macOS, o `choose folder` do AppleScript; no Linux, o zenity.
+
+import ./model
+import ./process
+import ./settings
+import ./assets
+import ./server
+
+// O caminho escolhido; `Error("")` quando a pessoa cancela e `Error(motivo)`
+// quando não há seletor nenhum.
+proc pick(mode: Str, start: Str, title: Str): Result<Str, Str> {
+	folder := mode == "folder"
+	if server.isWindows() {
+		if hive.file.makeDir(settings.folder()) is Result.Error(why) {
+			return Result.Error(why.message)
+		}
+		script := settings.folder() + "/pick.ps1"
+		if hive.file.write(script, assets.pickScript()) is Result.Error(why) {
+			return Result.Error(why.message)
+		}
+		// A API do shell só entende a pasta inicial com barras invertidas.
+		windowsStart := replaceAll(start, "/", "\\")
+		result := process.run("powershell", ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass",
+			"-File", script, "-Mode", mode, "-Start", windowsStart, "-Title", title], "")
+		if result.code != 0 {
+			return Result.Error(process.firstLine(result.text))
+		}
+		chosen := process.firstLine(result.text)
+		if chosen == "" {
+			return Result.Error("")
+		}
+		return Result.Ok(replaceAll(chosen, "\\", "/"))
+	}
+	if hive.file.exists("/usr/bin/osascript") {
+		mut question := "choose file"
+		if folder {
+			question = "choose folder"
+		}
+		result := process.run("osascript", ["-e", "POSIX path of (" + question + " with prompt \"" + title + "\")"], "")
+		if result.code != 0 {
+			return Result.Error("")
+		}
+		return Result.Ok(process.firstLine(result.text))
+	}
+	Str[dyn] base = ["--file-selection", "--title=" + title]
+	mut Str[dyn] arguments = base
+	if folder {
+		append(arguments, "--directory")
+	}
+	result := process.run("zenity", arguments, start)
+	if result.code == -1 {
+		return Result.Error("zenity")
+	}
+	if result.code != 0 {
+		return Result.Error("")
+	}
+	return Result.Ok(process.firstLine(result.text))
+}
+
+// O diálogo espera a pessoa, então roda numa thread e responde com `Picked`.
+proc pickAsync(db: hive.syslink.Address, mode: Str, start: Str, title: Str): void {
+	chosen := pick(mode, start, title)
+	if chosen is Result.Ok(path) {
+		async db(model.Cmd.Post(model.Msg.Picked(mode, path)))
+	} else if chosen is Result.Error(why) {
+		if why != "" {
+			async db(model.Cmd.Post(model.Msg.PickFailed(mode, why)))
+		}
+	}
+}
+
+// Abre um endereço no navegador padrão do sistema.
+proc openUrl(url: Str): void {
+	if server.isWindows() {
+		_opened := process.run("rundll32", ["url.dll,FileProtocolHandler", url], "")
+	} else if hive.file.exists("/usr/bin/open") {
+		_opened := process.run("open", [url], "")
+	} else {
+		_opened := process.run("xdg-open", [url], "")
+	}
+}
