@@ -9,9 +9,11 @@ if ! command -v hivec >/dev/null 2>&1; then
 	exit 1
 fi
 
-# A página embutida precisa refletir assets/shell.html.
+# A página embutida precisa refletir assets/shell.html: regenera e compara.
+before=$(git hash-object lib/assets.hive)
 (cd tools && hivec run embed.hive >/dev/null)
-if ! git diff --quiet -- lib/assets.hive; then
+after=$(git hash-object lib/assets.hive)
+if [ "$before" != "$after" ]; then
 	echo "pre-commit: lib/assets.hive estava desatualizado e foi regenerado." >&2
 	echo "            Revise e rode: git add lib/assets.hive" >&2
 	exit 1
