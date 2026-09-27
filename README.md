@@ -18,6 +18,11 @@ hivec test studio.hive             # testes, com cobertura
   para a definição), **Ver** (barras e painéis, tema), **Executar** (Check, Run,
   Test, Build, fixar entrada), **Terminal** e **Ajuda** (documentação, atalhos,
   sobre). Cada item mostra o atalho configurado.
+- **Buscas**: `Ctrl+F` abre a busca no arquivo (contagem, ↑/↓, `Shift+Enter`,
+  diferenciar maiúsculas, todas as ocorrências destacadas); `Ctrl+Shift+F`
+  busca no projeto inteiro, com os resultados por arquivo (clique abre na
+  linha); `Ctrl+P` acha um arquivo da pasta pelo nome, como no VS Code. Os três
+  substituem os atalhos do navegador.
 - **Idioma da interface**: Português (Brasil), English ou Español, em
   Configurações → Aparência; muda na hora.
 
@@ -75,7 +80,8 @@ hivec test studio.hive             # testes, com cobertura
 | Test / Build | `Ctrl+Shift+T` / `Ctrl+Shift+B` | Terminal | ``Ctrl+Shift+` `` |
 | Ir para a definição | `F12` / `Ctrl+clique` | Git | `Ctrl+Shift+G` |
 | Maximizar painel | `Ctrl+Shift+M` | Abrir arquivo / pasta | `Ctrl+O` / `Ctrl+Alt+O` |
-| Sair | `Ctrl+Q` | | |
+| Sair | `Ctrl+Q` | Buscar no arquivo | `Ctrl+F` |
+| Buscar no projeto | `Ctrl+Shift+F` | Ir para arquivo | `Ctrl+P` |
 
 `Ctrl+`` ` é a tecla à esquerda do `1`, em qualquer layout (no ABNT2 é a do `'`).
 
@@ -134,6 +140,22 @@ se existir, vence o compilador configurado.
 | `lib/process.hive` | executar programas sem console (via `native.go`) |
 | `lib/native.go` | processos ocultos e sessões de shell (Go) |
 | `assets/shell.html` → `lib/assets.hive` | a página da janela |
+
+## Releases
+
+O mesmo padrão do [hive-lang](https://github.com/R0DR160HM/hive-lang/releases):
+`.github/workflows/build.yml` roda check e testes a cada push; uma **tag `v*`**
+carimba a versão em `lib/version.hive`, compila para Linux, macOS e Windows
+(amd64 e arm64) e publica `hive-studio-<os>-<arch>[.exe]` com um
+`SHA256SUMS`. As notas do release são a seção da versão no `CHANGELOG.md`. O
+`hivec` usado no CI está fixado por tag e digest em `.github/hivec.txt`.
+
+Para publicar a 0.1.0, com o repositório no GitHub:
+
+```
+git tag v0.1.0
+git push origin main v0.1.0
+```
 
 ## Git
 

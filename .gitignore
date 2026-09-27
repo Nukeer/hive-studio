@@ -6,3 +6,6 @@
 studio-test/
 tree-test/
 *.exe~
+studio-*-*
+dist/
+.hivec/

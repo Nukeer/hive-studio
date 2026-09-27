@@ -1,0 +1,166 @@
+name: build
+
+# O mesmo desenho dos releases do hive-lang: cada push roda o check e os testes;
+# uma tag `v*` compila para todas as plataformas e publica os binários, com as
+# notas tiradas da seção da versão no CHANGELOG.md.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # O hivec escreve um módulo Go e chama `go build`.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Restaurar os caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.hive
+          key: hive-studio-${{ runner.os }}-${{ hashFiles('**/*.hive', '.github/hivec.txt') }}
+          restore-keys: |
+            hive-studio-${{ runner.os }}-
+
+      # O compilador vem de um release do hive-lang, fixado por tag e por
+      # digest em .github/hivec.txt. O digest é conferido antes de rodar.
+      - name: Baixar o hivec
+        run: |
+          pin=.github/hivec.txt
+          tag=$(awk '$1=="tag:"{print $2}' "$pin")
+          asset=$(awk '$1=="asset:"{print $2}' "$pin")
+          want=$(awk '$1=="sha256:"{print $2}' "$pin")
+          mkdir -p .hivec
+          curl -fsSL -o ".hivec/$asset" "https://github.com/R0DR160HM/hive-lang/releases/download/$tag/$asset"
+          got=$(sha256sum ".hivec/$asset" | cut -d' ' -f1)
+          if [ "$got" != "$want" ]; then
+            echo "::error file=$pin::$asset de $tag não é o arquivo fixado. Esperado $want, veio $got."
+            exit 1
+          fi
+          chmod +x ".hivec/$asset"
+          ln -s "$PWD/.hivec/$asset" .hivec/hivec
+          echo "$PWD/.hivec" >> "$GITHUB_PATH"
+          echo "hivec $tag, digest confere"
+
+      # Numa tag, a versão entra no programa antes de compilar — o "Sobre" do
+      # Hive Studio publicado diz a tag, sem ninguém precisar lembrar.
+      - name: Carimbar a versão
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          said() { sed -n 's/^\treturn "\(v[^"]*\)"$/\1/p' lib/version.hive | head -n1; }
+          sed -i "s|^\treturn \"v[^\"]*\"$|\treturn \"$GITHUB_REF_NAME\"|" lib/version.hive
+          now=$(said)
+          if [ "$now" != "$GITHUB_REF_NAME" ]; then
+            echo "::error file=lib/version.hive::não foi possível escrever $GITHUB_REF_NAME em lib/version.hive (diz '$now')."
+            exit 1
+          fi
+
+      # A página embutida tem de refletir assets/.
+      - name: Página embutida em dia
+        run: |
+          (cd tools && hivec run embed.hive)
+          git diff --exit-code -- lib/assets.hive || {
+            echo "::error file=lib/assets.hive::lib/assets.hive está desatualizado — rode 'cd tools && hivec run embed.hive' e commite."
+            exit 1
+          }
+
+      - name: Check
+        run: hivec check studio.hive
+
+      - name: Testes
+        run: hivec test studio.hive
+
+      # Com Go 64 bits o hivec consegue embutir o ícone no executável; ver
+      # "Limites conhecidos" no README.
+      - name: Binários para cada plataforma
+        run: |
+          cp assets/logo.png assets/icon.png
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            name="hive-studio-$os-$arch"
+            built="studio-$os-$arch"
+            if [ "$os" = windows ]; then name="$name.exe"; built="$built.exe"; fi
+            hivec build studio.hive --target "$target"
+            mv "$built" "dist/$name"
+            echo "  $name — $(du -h "dist/$name" | cut -f1)"
+          done
+          cd dist && sha256sum hive-studio-* > SHA256SUMS && cd ..
+          cat dist/SHA256SUMS
+
+      - name: Guardar
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-studio
+          path: dist/
+          if-no-files-found: error
+
+  # Uma tag publica o que o job acima compilou e testou.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: hive-studio
+          path: dist
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+
+          # As notas são a seção desta versão no CHANGELOG.md.
+          notes=$(awk -v want="## $tag" '
+            $0 == want { inside = 1; next }
+            inside && /^## / { exit }
+            inside {
+              if ($0 == "") { blank = blank "\n"; next }
+              if (started) printf "%s", blank
+              blank = ""
+              started = 1
+              print
+            }
+          ' CHANGELOG.md)
+
+          if [ -z "$notes" ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md não tem uma seção '## $tag'. Adicione, mova a tag e envie de novo."
+            exit 1
+          fi
+
+          cd dist
+          sha256sum -c SHA256SUMS
+          printf '%s\n' "$notes" > notes.md
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" hive-studio-* SHA256SUMS --clobber
+            gh release edit "$tag" --notes-file notes.md
+          else
+            gh release create "$tag" hive-studio-* SHA256SUMS \
+              --title "$tag" --notes-file notes.md
+          fi

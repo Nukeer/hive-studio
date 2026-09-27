@@ -1,0 +1,7 @@
+// A versão deste Hive Studio. Num build de tag, o workflow reescreve a linha
+// do `return` com a tag (ver .github/workflows/build.yml); o que fica
+// commitado é sempre o que um build sem release diz.
+
+func current(): Str {
+	return "v0.1.0-dev"
+}
