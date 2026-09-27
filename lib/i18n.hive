@@ -1,0 +1,250 @@
+// Idiomas da interface. O texto em português é a chave: `tr` devolve a
+// tradução no idioma pedido, ou o próprio texto quando não há uma.
+
+type Language {
+	code: Str
+	name: Str
+}
+
+func languages(): Language[dyn] {
+	return [Language("pt-BR", "Português (Brasil)"), Language("en", "English"), Language("es", "Español")]
+}
+
+// pt-BR, en, es — uma linha por texto da interface.
+func table(): Str[3][dyn] {
+	Str[3][dyn] rows = [
+		["Explorador", "Explorer", "Explorador"],
+		["Controle de código", "Source Control", "Control de código"],
+		["Estrutura", "Outline", "Esquema"],
+		["Configurações", "Settings", "Configuración"],
+		["EXPLORADOR", "EXPLORER", "EXPLORADOR"],
+		["Novo arquivo", "New File", "Nuevo archivo"],
+		["Nova pasta", "New Folder", "Nueva carpeta"],
+		["Atualizar", "Refresh", "Actualizar"],
+		["Recolher tudo", "Collapse All", "Contraer todo"],
+		["Pasta acima", "Parent Folder", "Carpeta superior"],
+		["Abrir pasta", "Open Folder", "Abrir carpeta"],
+		["Abrir pasta…", "Open Folder…", "Abrir carpeta…"],
+		["Abrir arquivo…", "Open File…", "Abrir archivo…"],
+		["Pasta vazia.", "Empty folder.", "Carpeta vacía."],
+		["nome do arquivo (ex.: main.hive)", "file name (e.g. main.hive)", "nombre del archivo (ej.: main.hive)"],
+		["nome da pasta", "folder name", "nombre de la carpeta"],
+		["caminho da pasta", "folder path", "ruta de la carpeta"],
+		["Confirmar (Enter)", "Confirm (Enter)", "Confirmar (Enter)"],
+		["Cancelar (Esc)", "Cancel (Esc)", "Cancelar (Esc)"],
+		["ESTRUTURA", "OUTLINE", "ESQUEMA"],
+		["Nenhuma declaração.", "No declarations.", "Sin declaraciones."],
+		["Nenhum arquivo aberto.", "No file open.", "Ningún archivo abierto."],
+		["Ver alterações", "View Changes", "Ver cambios"],
+		["Descartar alterações", "Discard Changes", "Descartar cambios"],
+		["Preparar (stage)", "Stage", "Preparar (stage)"],
+		["Tirar da preparação (unstage)", "Unstage", "Quitar de preparados (unstage)"],
+		["CONTROLE DE CÓDIGO", "SOURCE CONTROL", "CONTROL DE CÓDIGO"],
+		["Esta pasta não está num repositório git.", "This folder is not in a git repository.", "Esta carpeta no está en un repositorio git."],
+		["Inicializar repositório", "Initialize Repository", "Inicializar repositorio"],
+		["✓ Commit", "✓ Commit", "✓ Commit"],
+		["✓ Commit (tudo)", "✓ Commit (all)", "✓ Commit (todo)"],
+		["PREPARADAS", "STAGED", "PREPARADOS"],
+		["ALTERAÇÕES", "CHANGES", "CAMBIOS"],
+		["Tirar tudo da preparação", "Unstage All", "Quitar todo de preparados"],
+		["Preparar tudo", "Stage All", "Preparar todo"],
+		["Nada para commitar — tudo em dia.", "Nothing to commit — all up to date.", "Nada que confirmar — todo al día."],
+		["clique para ver as alterações", "click to view the changes", "clic para ver los cambios"],
+		["Mensagem do commit (Ctrl+Enter)", "Commit message (Ctrl+Enter)", "Mensaje del commit (Ctrl+Enter)"],
+		["HISTÓRICO", "HISTORY", "HISTORIAL"],
+		["Fechar", "Close", "Cerrar"],
+		["Não salvo — fechar", "Unsaved — close", "Sin guardar — cerrar"],
+		["Editor", "Editor", "Editor"],
+		["Dividir", "Split", "Dividir"],
+		["Preview", "Preview", "Vista previa"],
+		["Usuário", "User", "Usuario"],
+		["entrada", "entry point", "entrada"],
+		["Abra um arquivo no explorador para começar.", "Open a file in the explorer to get started.", "Abre un archivo en el explorador para empezar."],
+		["Aparência", "Appearance", "Apariencia"],
+		["Salvas em", "Saved in", "Guardadas en"],
+		["Idioma", "Language", "Idioma"],
+		["Idioma da interface. Muda na hora.", "Interface language. Applies immediately.", "Idioma de la interfaz. Se aplica al instante."],
+		["Tema de cor", "Color Theme", "Tema de color"],
+		["Muda a janela inteira: painéis, barras de rolagem e cores do código.", "Changes the whole window: panels, scrollbars and code colors.", "Cambia toda la ventana: paneles, barras de desplazamiento y colores del código."],
+		["Tamanho da fonte", "Font Size", "Tamaño de fuente"],
+		["Do editor, em pixels.", "Of the editor, in pixels.", "Del editor, en píxeles."],
+		["Números de linha", "Line Numbers", "Números de línea"],
+		["Mostrar números de linha", "Show line numbers", "Mostrar números de línea"],
+		["Autocomplete", "Autocomplete", "Autocompletado"],
+		["Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita.", "Suggests keywords, builtins, hive.* modules and names from the file as you type.", "Sugiere palabras clave, builtins, módulos hive.* y nombres del archivo mientras escribes."],
+		["Sugerir enquanto digito", "Suggest as I type", "Sugerir mientras escribo"],
+		["Largura do tab", "Tab Width", "Ancho de tabulación"],
+		["Quantos espaços um tab ocupa na tela.", "How many spaces a tab takes on screen.", "Cuántos espacios ocupa una tabulación en pantalla."],
+		["Arquivos ocultos", "Hidden Files", "Archivos ocultos"],
+		["Mostrar arquivos ocultos e artefatos de build", "Show hidden files and build artifacts", "Mostrar archivos ocultos y artefactos de build"],
+		["Execução", "Running", "Ejecución"],
+		["Salvar antes de rodar", "Save Before Running", "Guardar antes de ejecutar"],
+		["Salvar arquivos antes de Check, Run, Test e Build", "Save files before Check, Run, Test and Build", "Guardar archivos antes de Check, Run, Test y Build"],
+		["Compilador", "Compiler", "Compilador"],
+		["Caminho do hivec. A variável HIVEC, se existir, tem prioridade.", "Path to hivec. The HIVEC variable, if set, takes precedence.", "Ruta de hivec. La variable HIVEC, si existe, tiene prioridad."],
+		["Navegador da janela", "Window Browser", "Navegador de la ventana"],
+		["Executável Chromium (Edge, Chrome, Brave) usado para a janela. Vazio = automático. Vale na próxima abertura.", "Chromium executable (Edge, Chrome, Brave) used for the window. Empty = automatic. Takes effect on next launch.", "Ejecutable Chromium (Edge, Chrome, Brave) usado para la ventana. Vacío = automático. Se aplica en la próxima apertura."],
+		["automático", "automatic", "automático"],
+		["Atalhos de teclado", "Keyboard Shortcuts", "Atajos de teclado"],
+		["Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.", "Click Record and press the combination. A key already in use is removed from the other action. Esc cancels.", "Haz clic en Grabar y presiona la combinación. Una tecla ya usada se quita de la otra acción. Esc cancela."],
+		["Restaurar todos os padrões", "Restore All Defaults", "Restaurar todos los predeterminados"],
+		["Ação", "Action", "Acción"],
+		["Atalho", "Shortcut", "Atajo"],
+		["personalizado", "custom", "personalizado"],
+		["Padrão", "Default", "Predeterminado"],
+		["pressione as teclas…", "press the keys…", "presiona las teclas…"],
+		["Gravar", "Record", "Grabar"],
+		["novo", "new", "nuevo"],
+		["removido", "deleted", "eliminado"],
+		["renomeado", "renamed", "renombrado"],
+		["binário", "binary", "binario"],
+		["editado", "modified", "modificado"],
+		["Arquivo binário — sem diff de texto.", "Binary file — no text diff.", "Archivo binario — sin diff de texto."],
+		["Sem alterações de conteúdo.", "No content changes.", "Sin cambios de contenido."],
+		["O diff é grande demais e foi cortado; use o terminal para vê-lo inteiro.", "The diff is too large and was cut; use the terminal to see all of it.", "El diff es demasiado grande y se cortó; usa la terminal para verlo entero."],
+		["arquivo(s)", "file(s)", "archivo(s)"],
+		["Alterações não commitadas", "Uncommitted changes", "Cambios sin confirmar"],
+		["Terminal encerrado — Enter abre um novo.", "Terminal closed — Enter opens a new one.", "Terminal cerrada — Enter abre una nueva."],
+		["comando (↑ ↓ histórico, Ctrl+C encerra o processo)", "command (↑ ↓ history, Ctrl+C ends the process)", "comando (↑ ↓ historial, Ctrl+C termina el proceso)"],
+		["Limpar", "Clear", "Limpiar"],
+		["Encerrar o processo (reinicia o shell)", "End the process (restarts the shell)", "Terminar el proceso (reinicia el shell)"],
+		["Maximizar painel", "Maximize Panel", "Maximizar panel"],
+		["Restaurar painel", "Restore Panel", "Restaurar panel"],
+		["Nenhum problema foi detectado.", "No problems have been detected.", "No se detectaron problemas."],
+		["PROBLEMAS", "PROBLEMS", "PROBLEMAS"],
+		["SAÍDA", "OUTPUT", "SALIDA"],
+		["TERMINAL", "TERMINAL", "TERMINAL"],
+		["Fechar painel", "Close Panel", "Cerrar panel"],
+		["Problemas", "Problems", "Problemas"],
+		["Texto", "Plain Text", "Texto"],
+		["📌 Fixar como entrada", "📌 Set as entry point", "📌 Fijar como entrada"],
+		["Check/Run/Test/Build passam a usar este arquivo", "Check/Run/Test/Build will use this file", "Check/Run/Test/Build usarán este archivo"],
+		["Trocar tema", "Change Theme", "Cambiar tema"],
+		["Painel", "Panel", "Panel"],
+		["Pressione a nova combinação de teclas. Esc cancela.", "Press the new key combination. Esc cancels.", "Presiona la nueva combinación de teclas. Esc cancela."],
+		["Descartar as alterações de", "Discard the changes to", "¿Descartar los cambios de"],
+		["Isto não pode ser desfeito. Um arquivo novo é apagado.", "This cannot be undone. A new file is deleted.", "Esto no se puede deshacer. Un archivo nuevo se elimina."],
+		["Cancelar", "Cancel", "Cancelar"],
+		["Descartar", "Discard", "Descartar"],
+		["Arquivo", "File", "Archivo"],
+		["Editar", "Edit", "Editar"],
+		["Ver", "View", "Ver"],
+		["Executar", "Run", "Ejecutar"],
+		["Terminal", "Terminal", "Terminal"],
+		["Ajuda", "Help", "Ayuda"],
+		["Salvar", "Save", "Guardar"],
+		["Salvar tudo", "Save All", "Guardar todo"],
+		["Fechar aba", "Close Tab", "Cerrar pestaña"],
+		["Próxima aba", "Next Tab", "Pestaña siguiente"],
+		["Aba anterior", "Previous Tab", "Pestaña anterior"],
+		["Sair", "Exit", "Salir"],
+		["Desfazer", "Undo", "Deshacer"],
+		["Refazer", "Redo", "Rehacer"],
+		["Recortar", "Cut", "Cortar"],
+		["Copiar", "Copy", "Copiar"],
+		["Colar", "Paste", "Pegar"],
+		["Selecionar tudo", "Select All", "Seleccionar todo"],
+		["Sugestões (autocomplete)", "Suggestions (autocomplete)", "Sugerencias (autocompletado)"],
+		["Ir para a definição (também Ctrl+clique)", "Go to Definition (also Ctrl+click)", "Ir a la definición (también Ctrl+clic)"],
+		["Ir para a definição", "Go to Definition", "Ir a la definición"],
+		["Mostrar/ocultar painel (Problemas, Saída)", "Toggle Panel (Problems, Output)", "Mostrar/ocultar panel (Problemas, Salida)"],
+		["Mostrar/ocultar barra lateral", "Toggle Sidebar", "Mostrar/ocultar barra lateral"],
+		["Maximizar/restaurar painel", "Maximize/Restore Panel", "Maximizar/restaurar panel"],
+		["Controle de código (git)", "Source Control (git)", "Control de código (git)"],
+		["Preview do Markdown", "Markdown Preview", "Vista previa de Markdown"],
+		["Saída", "Output", "Salida"],
+		["Tema de cor…", "Color Theme…", "Tema de color…"],
+		["Fixar arquivo atual como entrada", "Set Current File as Entry Point", "Fijar archivo actual como entrada"],
+		["Novo terminal", "New Terminal", "Nueva terminal"],
+		["Limpar terminal", "Clear Terminal", "Limpiar terminal"],
+		["Encerrar processo", "Kill Process", "Terminar proceso"],
+		["Documentação do Hive", "Hive Documentation", "Documentación de Hive"],
+		["Sobre o Hive Studio", "About Hive Studio", "Acerca de Hive Studio"],
+		["Uma IDE para Hive, escrita em Hive.", "An IDE for Hive, written in Hive.", "Un IDE para Hive, escrito en Hive."],
+		["Configurações em", "Settings in", "Configuración en"],
+		["pronto", "ready", "listo"],
+		["salvo", "saved", "guardado"],
+		["aberto", "opened", "abierto"],
+		["pasta", "folder", "carpeta"],
+		["arquivo(s) salvo(s)", "file(s) saved", "archivo(s) guardado(s)"],
+		["tema", "theme", "tema"],
+		["atalho gravado", "shortcut recorded", "atajo grabado"],
+		["atalhos restaurados", "shortcuts restored", "atajos restaurados"],
+		["definição", "definition", "definición"],
+		["já existe", "already exists", "ya existe"],
+		["idioma", "language", "idioma"],
+		["não foi possível abrir", "could not open", "no se pudo abrir"],
+		["não foi possível ler", "could not read", "no se pudo leer"],
+		["não foi possível salvar", "could not save", "no se pudo guardar"],
+		["não foi possível criar", "could not create", "no se pudo crear"],
+		["falhou — veja SAÍDA", "failed — see OUTPUT", "falló — ver SALIDA"],
+		["problema(s)", "problem(s)", "problema(s)"],
+		["falhou", "failed", "falló"],
+		["Nenhum seletor de pastas disponível — digite o caminho.", "No folder picker available — type the path.", "No hay selector de carpetas disponible — escribe la ruta."],
+		["Check", "Check", "Check"],
+		["Run", "Run", "Run"],
+		["Test", "Test", "Test"],
+		["Build", "Build", "Build"]
+	]
+	return rows
+}
+
+func column(lang: Str): Int {
+	if lang == "en" {
+		return 1
+	} else if lang == "es" {
+		return 2
+	}
+	return 0
+}
+
+// Todas as traduções de um idioma, para `tr` ser só uma consulta.
+func words(lang: Str): hive.map.Map<Str, Str> {
+	mut hive.map.Map<Str, Str> found = hive.map.new()
+	at := column(lang)
+	if at == 0 {
+		return found
+	}
+	for each row in table() {
+		if at == 1 {
+			hive.map.set(found, row[0], row[1])
+		} else {
+			hive.map.set(found, row[0], row[2])
+		}
+	}
+	return found
+}
+
+func tr(dictionary: hive.map.Map<Str, Str>, text: Str): Str {
+	if hive.map.get(dictionary, text) is Result.Ok(translated) {
+		return translated
+	}
+	return text
+}
+
+func unique(values: Str[]): Bool {
+	mut Str[dyn] seen = []
+	for each v in values {
+		if indexOf(seen, v) is Result.Ok(_) {
+			return false
+		}
+		append(seen, v)
+	}
+	return true
+}
+
+func keyOf(row: Str[]): Str {
+	if row bounds 0 {
+		return row[0]
+	}
+	return ""
+}
+
+test "traduções existem nos três idiomas e as chaves não repetem" {
+	english := words("en")
+	assert tr(english, "Configurações") == "Settings"
+	assert tr(words("es"), "Configurações") == "Configuración"
+	assert tr(words("pt-BR"), "Configurações") == "Configurações"
+	assert tr(english, "texto sem tradução") == "texto sem tradução"
+	assert unique(map(table(), keyOf))
+}
