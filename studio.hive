@@ -21,6 +21,8 @@ import ./lib/git
 import ./lib/navigate
 import ./lib/process
 import ./lib/native.go
+import ./lib/dialogs
+import ./lib/i18n
 
 // ── explorador ───────────────────────────────────────────────────────────
 
@@ -135,14 +137,14 @@ proc openRoot(state: model.State, folder: Str): model.State {
 	mut next := state
 	target := workspace.normalize(folder)
 	if hive.file.list(target) is Result.Error(why) {
-		next.status = "não foi possível abrir {target}: {why.message}"
+		next.status = render.tx(state, "não foi possível abrir") + " {target}: {why.message}"
 		return next
 	}
 	Str[dyn] closed = []
 	next.root = target
 	next.expanded = closed
 	next.selected = ""
-	next.status = "pasta {workspace.baseName(target)}"
+	next.status = render.tx(state, "pasta") + " {workspace.baseName(target)}"
 	return gitRefresh(reload(next))
 }
 
@@ -221,9 +223,9 @@ proc openDoc(state: model.State, path: Str): model.State {
 		append(docs, model.Doc(path, workspace.baseName(path), text, text, eol, highlightFor(path, text), mode))
 		next.docs = docs
 		next.active = len(docs) - 1
-		next.status = "aberto {workspace.baseName(path)}"
+		next.status = render.tx(state, "aberto") + " {workspace.baseName(path)}"
 	} else if read is Result.Error(why) {
-		next.status = "não foi possível ler {path}: {why.message}"
+		next.status = render.tx(state, "não foi possível ler") + " {path}: {why.message}"
 	}
 	return next
 }
@@ -258,7 +260,7 @@ proc saveAll(state: model.State): model.State {
 	}
 	next.docs = docs
 	if count > 0 {
-		next.status = "{count} arquivo(s) salvo(s)"
+		next.status = "{count} " + render.tx(state, "arquivo(s) salvo(s)")
 	}
 	return next
 }
@@ -271,7 +273,7 @@ proc create(state: model.State, name: Str, folder: Bool): model.State {
 	base := targetFolder(state)
 	path := workspace.joinPath(base, name)
 	if hive.file.exists(path) {
-		next.status = "{name} já existe"
+		next.status = "{name} " + render.tx(state, "já existe")
 		return next
 	}
 	if folder {
@@ -326,7 +328,7 @@ proc peekAt(state: model.State, file: Str, line: Int): model.State {
 			next = openDoc(state, file)
 			next.peekText = replaceAll(text, "\r", "")
 		} else if read is Result.Error(why) {
-			next.status = "não foi possível ler {file}: {why.message}"
+			next.status = render.tx(state, "não foi possível ler") + " {file}: {why.message}"
 			return next
 		}
 	}
@@ -420,14 +422,14 @@ proc toggleSetting(state: model.State, name: Str): model.State {
 	return next
 }
 
-func summary(command: Str, ok: Bool, problems: Int): Str {
+func summary(state: model.State, command: Str, ok: Bool, problems: Int): Str {
 	if ok {
 		return "{command}: ok"
 	}
 	if problems > 0 {
-		return "{command}: {problems} problema(s)"
+		return "{command}: {problems} " + render.tx(state, "problema(s)")
 	}
-	return "{command}: falhou"
+	return "{command}: " + render.tx(state, "falhou")
 }
 
 func clampInt(value: Int, low: Int, high: Int): Int {
@@ -558,7 +560,7 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 				next.git.message = ""
 			}
 		} else {
-			next.status = "git {command} falhou — veja SAÍDA"
+			next.status = "git {command} " + render.tx(state, "falhou — veja SAÍDA")
 			next.pane = model.Pane.OutputPane()
 			next.panelOpen = true
 		}
@@ -570,7 +572,7 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 			if len(title) > 40 {
 				title = complete.take(title, 40) + "…"
 			}
-			next.commit = model.CommitTab(commit.hash, commit.short + " " + title, render.commitPage(commit))
+			next.commit = model.CommitTab(commit.hash, commit.short + " " + title, render.commitPage(commit, state.words))
 			next.editorView = model.EditorView.CommitPage()
 			next.status = "commit {commit.short}"
 		} else if shown is Result.Error(why) {
@@ -578,13 +580,69 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 		}
 	} else if message is model.Msg.GitShowWork(path) {
 		commit := git.working(state.git, path)
-		next.commit = model.CommitTab("work:" + path, "± " + workspace.baseName(path), render.commitPage(commit))
+		next.commit = model.CommitTab("work:" + path, "± " + workspace.baseName(path), render.commitPage(commit, state.words))
 		next.editorView = model.EditorView.CommitPage()
 	} else if message is model.Msg.FocusCommit {
 		next.editorView = model.EditorView.CommitPage()
 	} else if message is model.Msg.CloseCommit {
 		next.commit = model.CommitTab("", "", "")
 		next.editorView = model.EditorView.DocView()
+	} else if message is model.Msg.PickFolder {
+		mut start := state.root
+		if state.git.repo {
+			start = state.git.top
+		}
+		async dialogs.pickAsync(hive.syslink.self(from), "folder", start, render.tx(state, "Abrir pasta"))
+	} else if message is model.Msg.PickFile {
+		mut start := state.root
+		if state.git.repo {
+			start = state.git.top
+		}
+		async dialogs.pickAsync(hive.syslink.self(from), "file", start, render.tx(state, "Abrir arquivo…"))
+	} else if message is model.Msg.Picked(mode, path) {
+		if mode == "file" {
+			return Result.Ok(openDoc(state, path))
+		}
+		// Uma pasta nova: as abas limpas da anterior fecham, as sujas ficam.
+		mut model.Doc[dyn] kept = []
+		for each doc in state.docs {
+			if model.dirty(doc) {
+				append(kept, doc)
+			}
+		}
+		next.docs = kept
+		next.active = len(kept) - 1
+		next.entrypoint = ""
+		next.commit = model.CommitTab("", "", "")
+		next.editorView = model.EditorView.DocView()
+		next.sideOpen = true
+		next.side = model.SideView.ExplorerSide()
+		return Result.Ok(openRoot(next, path))
+	} else if message is model.Msg.PickFailed(mode, reason) {
+		next.status = render.tx(state, "Nenhum seletor de pastas disponível — digite o caminho.")
+		if mode == "folder" {
+			next.prompt = model.Prompt.OpenFolderPrompt()
+			next.promptText = state.root
+			next.sideOpen = true
+			next.side = model.SideView.ExplorerSide()
+			return Result.Ok(withFocus(next, "prompt"))
+		}
+	} else if message is model.Msg.SetLanguage(code) {
+		prefs.language = code
+		next = applySettings(state, prefs)
+		next.words = i18n.words(code)
+		next.status = i18n.tr(next.words, "idioma") + ": " + code
+	} else if message is model.Msg.ShowAbout {
+		next.about = true
+	} else if message is model.Msg.CloseAbout {
+		next.about = false
+	} else if message is model.Msg.OpenDocs {
+		async dialogs.openUrl("https://github.com/R0DR160HM/hive-lang")
+	} else if message is model.Msg.Quit {
+		if state.term.session != 0 {
+			_stopped := native.stop(state.term.session)
+		}
+		async quitSoon()
 	} else if message is model.Msg.GotoDefinition(caret) {
 		if render.activeDoc(state) is Result.Ok(doc) {
 			located := navigate.locate(doc.path, doc.text, caret)
@@ -595,7 +653,7 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 				}
 				jumped.caret = navigate.offsetOf(activeText(jumped), target.line, target.column)
 				jumped.textSerial = jumped.textSerial + 1
-				jumped.status = "definição: {workspace.baseName(target.file)}:{target.line}"
+				jumped.status = render.tx(state, "definição") + ": {workspace.baseName(target.file)}:{target.line}"
 				return Result.Ok(clearSuggestions(jumped))
 			} else if located is Result.Error(why) {
 				next.status = why
@@ -699,7 +757,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 			outcome := saveDoc(docs[index])
 			if outcome is Result.Ok(doc) {
 				docs[index] = doc
-				next.status = "salvo {doc.name}"
+				next.status = render.tx(state, "salvo") + " {doc.name}"
 			} else if outcome is Result.Error(why) {
 				next.status = why
 			}
@@ -711,7 +769,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 	} else if message is model.Msg.PinEntry {
 		if render.activeDoc(state) is Result.Ok(doc) {
 			next.entrypoint = doc.path
-			next.status = "entrada: {doc.name}"
+			next.status = render.tx(state, "entrada") + ": {doc.name}"
 		}
 	} else if message is model.Msg.SetMode(mode) {
 		index := state.active
@@ -749,7 +807,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 		next.running = ""
 		next.output = state.output + output
 		next.diagnostics = found
-		next.status = summary(command, ok, len(found))
+		next.status = summary(state, command, ok, len(found))
 		if len(found) > 0 {
 			next.pane = model.Pane.ProblemsPane()
 			next.panelOpen = true
@@ -780,7 +838,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 	} else if message is model.Msg.SetTheme(name) {
 		prefs.theme = name
 		next = applySettings(state, prefs)
-		next.status = "tema: {name}"
+		next.status = render.tx(state, "tema") + ": {name}"
 	} else if message is model.Msg.ToggleSetting(name) {
 		return toggleSetting(state, name)
 	} else if message is model.Msg.SetFontSize(size) {
@@ -804,7 +862,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 		if combo != "Escape" && state.recording != "" {
 			prefs.keymap = keys.assign(prefs.keymap, state.recording, combo)
 			next = applySettings(next, prefs)
-			next.status = "atalho gravado: {combo}"
+			next.status = render.tx(state, "atalho gravado") + ": {combo}"
 		}
 	} else if message is model.Msg.ResetKey(action) {
 		prefs.keymap = keys.reset(prefs.keymap, action)
@@ -812,7 +870,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 	} else if message is model.Msg.ResetKeys {
 		prefs.keymap = ""
 		next = applySettings(state, prefs)
-		next.status = "atalhos restaurados"
+		next.status = render.tx(state, "atalhos restaurados")
 	} else if message is model.Msg.Peek(file, line) {
 		return peekAt(state, file, line)
 	} else if message is model.Msg.ClosePeek {
@@ -910,6 +968,28 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 		return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
 	} else if action == "definition" {
 		return Result.Ok(model.Msg.GotoDefinition(caret))
+	} else if action == "openFolder" {
+		return Result.Ok(model.Msg.PickFolder())
+	} else if action == "openFile" {
+		return Result.Ok(model.Msg.PickFile())
+	} else if action == "quit" {
+		return Result.Ok(model.Msg.Quit())
+	} else if action == "about" {
+		return Result.Ok(model.Msg.ShowAbout())
+	} else if action == "docs" {
+		return Result.Ok(model.Msg.OpenDocs())
+	} else if action == "pin" {
+		return Result.Ok(model.Msg.PinEntry())
+	} else if action == "problems" {
+		return Result.Ok(model.Msg.ShowPane(model.Pane.ProblemsPane()))
+	} else if action == "output" {
+		return Result.Ok(model.Msg.ShowPane(model.Pane.OutputPane()))
+	} else if action == "colorTheme" {
+		return Result.Ok(model.Msg.OpenSettings())
+	} else if action == "newTerminal" || action == "termRestart" {
+		return Result.Ok(model.Msg.TermRestart())
+	} else if action == "termClear" {
+		return Result.Ok(model.Msg.TermClear())
 	}
 	return Result.Error(false)
 }
@@ -917,6 +997,8 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 func escapeMsg(state: model.State): Result<model.Msg, Bool> {
 	if state.recording != "" {
 		return Result.Ok(model.Msg.CancelRecording())
+	} else if state.about {
+		return Result.Ok(model.Msg.CloseAbout())
 	} else if state.git.confirm != "" {
 		return Result.Ok(model.Msg.GitCancelConfirm())
 	} else if state.peekFile != "" {
@@ -963,6 +1045,10 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.ShowSide(model.SideView.ExplorerSide()))
 	} else if a == "definition" {
 		return Result.Ok(model.Msg.GotoDefinition(event.caret))
+	} else if a == "action" {
+		return actionMsg(state, arg, event.caret)
+	} else if a == "closeAbout" {
+		return Result.Ok(model.Msg.CloseAbout())
 	} else if a == "panelMax" {
 		return Result.Ok(model.Msg.TogglePanelMax())
 	} else if a == "termSubmit" {
@@ -1066,6 +1152,8 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.TermTyped(event.text))
 	} else if a == "gitMessage" {
 		return Result.Ok(model.Msg.GitMessageTyped(event.text))
+	} else if a == "language" {
+		return Result.Ok(model.Msg.SetLanguage(event.text))
 	} else if a == "panelHeight" {
 		return Result.Ok(model.Msg.SetPanelHeight(numberOr(event.text, 260)))
 	}
@@ -1131,6 +1219,12 @@ proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope):
 		hive.syslink.answer(from, model.Cmd.ClientsAre(state.clients))
 	}
 	return state
+}
+
+// Sai do programa pouco depois, dando tempo para a página fechar a janela.
+proc quitSoon(): void {
+	hive.task.sleep(300)
+	hive.term.exit(0)
 }
 
 // Relê o git de tempos em tempos, para mudanças feitas fora do Hive Studio.
@@ -1344,7 +1438,7 @@ test "git marca arquivo novo e editado, e commitado volta ao normal" {
 	shown := git.show(state.git, "HEAD")
 	if shown is Result.Ok(commit) {
 		assert commit.subject == "um"
-		html := render.commitPage(commit)
+		html := render.commitPage(commit, state.words)
 		assert indexOf(html, "<tr class=\"add\">") is Result.Ok(_)
 		assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
 	} else {
@@ -1395,4 +1489,22 @@ test "o terminal roda um comando e devolve a saída" {
 	} else {
 		assert false
 	}
+}
+
+test "a interface muda de idioma na hora" {
+	folder := scratch()
+	mut state := fresh(folder)
+	pt := render.titleBar(state)
+	assert indexOf(pt, ">Arquivo<") is Result.Ok(_)
+	assert indexOf(pt, ">Executar<") is Result.Ok(_)
+	state.settings.language = "en"
+	state.words = i18n.words("en")
+	en := render.titleBar(state)
+	assert indexOf(en, ">File<") is Result.Ok(_)
+	assert indexOf(en, ">Open Folder…<") is Result.Ok(_)
+	state.settingsOpen = true
+	state.editorView = model.EditorView.SettingsView()
+	assert indexOf(render.settingsPage(state), "Keyboard Shortcuts") is Result.Ok(_)
+	state.words = i18n.words("es")
+	assert indexOf(render.titleBar(state), ">Archivo<") is Result.Ok(_)
 }

@@ -2,6 +2,7 @@
 // viaja entre a página e o programa.
 
 import ./settings
+import ./i18n
 
 // Um item do explorador: arquivo ou pasta.
 type Entry {
@@ -195,6 +196,15 @@ type Msg {
 	GitPull
 	GitInit
 	GitDone          { command: Str, output: Str, ok: Bool }
+	PickFolder
+	PickFile
+	Picked           { mode: Str, path: Str }
+	PickFailed       { mode: Str, reason: Str }
+	SetLanguage      { code: Str }
+	ShowAbout
+	CloseAbout
+	OpenDocs
+	Quit
 	GitShow          { hash: Str }
 	GitShowWork      { path: Str }
 	FocusCommit
@@ -238,6 +248,8 @@ type State {
 	focus:         Str
 	focusSerial:   Int
 	commit:        CommitTab
+	words:         hive.map.Map<Str, Str>
+	about:         Bool
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -341,7 +353,9 @@ func initial(root: Str, prefs: settings.Settings): State {
 		term: emptyTerminal(),
 		focus: "",
 		focusSerial: 0,
-		commit: CommitTab("", "", "")
+		commit: CommitTab("", "", ""),
+		words: i18n.words(prefs.language),
+		about: false
 	)
 }
 

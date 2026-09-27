@@ -18,6 +18,8 @@ func actions(): Action[dyn] {
 	return [
 		Action("newFile", "Novo arquivo", "Ctrl+N"),
 		Action("newFolder", "Nova pasta", "Ctrl+Shift+N"),
+		Action("openFile", "Abrir arquivo…", "Ctrl+O"),
+		Action("openFolder", "Abrir pasta…", "Ctrl+Alt+O"),
 		Action("save", "Salvar", "Ctrl+S"),
 		Action("saveAll", "Salvar tudo", "Ctrl+Shift+S"),
 		Action("closeTab", "Fechar aba", "Ctrl+W"),
@@ -37,7 +39,8 @@ func actions(): Action[dyn] {
 		Action("check", "Check", "F8"),
 		Action("run", "Run", "F5"),
 		Action("test", "Test", "Ctrl+Shift+T"),
-		Action("build", "Build", "Ctrl+Shift+B")
+		Action("build", "Build", "Ctrl+Shift+B"),
+		Action("quit", "Sair", "Ctrl+Q")
 	]
 }
 

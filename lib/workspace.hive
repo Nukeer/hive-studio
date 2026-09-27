@@ -85,7 +85,7 @@ func parentOf(path: Str): Str {
 }
 
 func isHidden(name: Str): Bool {
-	return name is ".{rest}" || name is "{stem}.hive-build" || name is "{stem}.exe"
+	return name is ".{rest}" || name is "{stem}.hive-build" || name is "{stem}.exe" || name is "{stem}.exe~"
 }
 
 func isHive(path: Str): Bool {

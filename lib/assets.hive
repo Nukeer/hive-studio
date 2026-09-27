@@ -1,5 +1,6 @@
-// Gerado por tools/embed.hive a partir de assets/shell.html. Não edite à mão.
+// Gerado por tools/embed.hive a partir de assets/. Não edite à mão.
 
+// assets/shell.html
 func shell(): Str {
 	return `
 		<!doctype html>
@@ -7,6 +8,7 @@ func shell(): Str {
 		<head>
 		<meta charset="utf-8">
 		<title>Hive Studio</title>
+		<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z' fill='%23f5a623'/%3E%3Cpath d='M16 10 21.2 13v6L16 22l-5.2-3v-6z' fill='%231b1d23' opacity='.82'/%3E%3C/svg%3E">
 		<style id="theme"></style>
 		<style>
 		:root\{--mono:"Cascadia Code","Cascadia Mono",Consolas,"JetBrains Mono","Fira Code",monospace}
@@ -21,11 +23,32 @@ func shell(): Str {
 		::-webkit-scrollbar-corner\{background:transparent}
 		button,input,select\{font:inherit}
 		#app\{display:flex;flex-direction:column;height:100vh}
-		#title\{display:flex;align-items:center;gap:10px;padding:0 10px;height:40px;background:var(--titlebar);border-bottom:1px solid var(--border);flex:none}
-		#title .logo\{color:var(--accent);font-size:16px}
-		#title .name\{font-weight:600}
-		#title .muted\{color:var(--muted);font-size:12px}
+		#title\{display:flex;align-items:center;gap:4px;padding:0 8px 0 6px;height:34px;background:var(--titlebar);border-bottom:1px solid var(--border);flex:none;position:relative;z-index:60}
+		#title .logo\{width:18px;height:18px;margin:0 6px 0 2px;flex:none}
+		#title .muted\{color:var(--muted);font-size:12px;white-space:nowrap}
 		#title .grow\{flex:1}
+		#title .caption\{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw}
+		.menubar\{display:flex;align-items:center;height:100%}
+		.menu\{position:relative;height:100%;display:flex;align-items:center}
+		.mlabel\{padding:3px 9px;border-radius:5px;cursor:default;font-size:13px;color:var(--text);user-select:none}
+		.menu:hover .mlabel,.menu.open .mlabel\{background:var(--selection)}
+		.mdrop\{display:none;position:absolute;top:100%;left:0;min-width:280px;background:var(--side);border:1px solid var(--border);border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.38);padding:4px;z-index:100}
+		.menu.open .mdrop\{display:block}
+		.mi\{display:flex;justify-content:space-between;gap:28px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap;font-size:13px}
+		.mi:hover\{background:var(--accent);color:var(--status-fg)}
+		.mi.disabled\{opacity:.42;pointer-events:none}
+		.mk\{color:var(--muted);font-size:12px}
+		.mi:hover .mk\{color:inherit}
+		.msep\{height:1px;background:var(--border);margin:4px 6px}
+		.tools\{display:flex;gap:2px}
+		.tb\{background:transparent;border:1px solid transparent;color:var(--text);border-radius:4px;padding:2px 10px;cursor:pointer;font-size:12px;font-family:inherit}
+		.tb:hover:not(:disabled)\{background:var(--selection)}
+		.tb:disabled\{opacity:.4;cursor:default}
+		.tb.run\{color:var(--good)}
+		#welcome .big svg\{width:76px;height:76px}
+		.msg .big svg\{width:56px;height:56px}
+		.about-name\{font-size:18px;font-weight:600;margin:8px 0 4px}
+		.about-actions\{margin-top:16px}
 		#body\{flex:1;display:flex;min-height:0}
 		#activity\{width:48px;flex:none;background:var(--activity);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:4px;border-right:1px solid var(--border)}
 		#activity .ai\{width:48px;height:44px;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--muted);cursor:pointer;border-left:2px solid transparent}
@@ -283,7 +306,50 @@ func shell(): Str {
 			var panel = document.getElementById("panel");
 			var grip = document.getElementById("grip");
 			var ws = null, cache = \{}, serial = -1, keys = [], popupOpen = false, recording = false, charWidth = 0;
-			var focusSerial = 0, dragging = null;
+			var focusSerial = 0, dragging = null, openMenu = null;
+		
+			// ── menus: abrir e fechar é só da página ──
+			function menuIndex(menu) \{
+				return Array.prototype.indexOf.call(document.querySelectorAll("#title .menu"), menu);
+			}
+			function closeMenus() \{
+				openMenu = null;
+				var open = document.querySelectorAll("#title .menu.open");
+				for (var i = 0; i < open.length; i++) \{ open[i].classList.remove("open"); }
+			}
+			function openMenuOf(menu) \{
+				closeMenus();
+				menu.classList.add("open");
+				openMenu = menuIndex(menu);
+			}
+			document.addEventListener("mousedown", function (e) \{
+				var label = e.target.closest(".mlabel");
+				if (label) \{
+					e.preventDefault();
+					var menu = label.parentNode;
+					if (menu.classList.contains("open")) \{ closeMenus(); } else \{ openMenuOf(menu); }
+					return;
+				}
+				if (!e.target.closest(".mdrop")) \{ closeMenus(); }
+			});
+			document.addEventListener("mouseover", function (e) \{
+				if (openMenu === null) \{ return; }
+				var label = e.target.closest(".mlabel");
+				if (label && !label.parentNode.classList.contains("open")) \{ openMenuOf(label.parentNode); }
+			});
+		
+			// Itens de menu que a página resolve sozinha, no editor.
+			function runClient(command) \{
+				ta.focus();
+				if (command === "paste") \{
+					if (navigator.clipboard && navigator.clipboard.readText) \{
+						navigator.clipboard.readText().then(function (text) \{ insert(text); });
+					}
+					return;
+				}
+				if (command === "selectAll") \{ ta.select(); return; }
+				document.execCommand(command);
+			}
 		
 			function send(event) \{
 				if (ws && ws.readyState === 1) \{ ws.send(JSON.stringify(event)); }
@@ -324,6 +390,10 @@ func shell(): Str {
 					(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "");
 				if (!dragging) \{ panel.style.height = frame.panelHeight + "px"; }
 				for (var i = 0; i < frame.regions.length; i++) \{ region(frame.regions[i].id, frame.regions[i].html); }
+				if (openMenu !== null) \{
+					var menus = document.querySelectorAll("#title .menu");
+					if (menus[openMenu]) \{ menus[openMenu].classList.add("open"); }
+				}
 				keys = frame.keys; recording = frame.recording; popupOpen = frame.popup;
 				popup.classList.toggle("open", popupOpen);
 				if (frame.serial !== serial) \{
@@ -552,7 +622,10 @@ func shell(): Str {
 					insert("\n" + indent);
 					return;
 				}
-				if (e.key === "Escape") \{ send(\{ kind: "act", act: "escape" }); return; }
+				if (e.key === "Escape") \{
+					if (openMenu !== null) \{ closeMenus(); return; }
+					send(\{ kind: "act", act: "escape" }); return;
+				}
 				var target = e.target;
 				if (e.key === "Enter" && target.dataset && target.dataset.submit) \{
 					e.preventDefault(); send(\{ kind: "act", act: target.dataset.submit, text: target.value });
@@ -562,6 +635,11 @@ func shell(): Str {
 			document.addEventListener("click", function (e) \{
 				var link = e.target.closest("a");
 				if (link && link.closest("#preview")) \{ e.preventDefault(); }
+				var client = e.target.closest("[data-client]");
+				if (client) \{ closeMenus(); runClient(client.dataset.client); return; }
+				if (e.target.closest(".mi")) \{ closeMenus(); }
+				var quitting = e.target.closest('[data-arg="quit"]');
+				if (quitting) \{ setTimeout(function () \{ window.close(); }, 250); }
 				var jump = e.target.closest("[data-scrollto]");
 				if (jump) \{
 					var block = document.getElementById(jump.dataset.scrollto);
@@ -600,11 +678,95 @@ func shell(): Str {
 				if (data.hover) \{ answerHover(data); } else \{ apply(data); }
 			};
 			ws.onopen = function () \{ send(\{ kind: "hello" }); };
-			ws.onclose = function () \{ document.body.classList.add("gone"); };
+			// O programa saiu (Sair, ou foi encerrado): a janela vai junto.
+			ws.onclose = function () \{ document.body.classList.add("gone"); window.close(); };
 		})();
 		</script>
 		</body>
 		</html>
+		
+	`
+}
+
+// assets/pick.ps1
+func pickScript(): Str {
+	return `
+		# Seletor de pasta/arquivo do Windows (o mesmo diálogo do Explorer), usado
+		# pelo Hive Studio. Escreve o caminho escolhido, ou nada se cancelado.
+		#   pick.ps1 -Mode folder|file -Start <pasta inicial> -Title <título>
+		param([string]$Mode = "folder", [string]$Start = "", [string]$Title = "")
+		$ErrorActionPreference = "Stop"
+		Add-Type -TypeDefinition @'
+		using System;
+		using System.Runtime.InteropServices;
+		
+		public static class HivePicker \{
+		    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
+		    private class FileOpenDialog \{}
+		
+		    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+		    private interface IFileOpenDialog \{
+		        [PreserveSig] int Show(IntPtr parent);
+		        void SetFileTypes(uint count, IntPtr specs);
+		        void SetFileTypeIndex(uint index);
+		        void GetFileTypeIndex(out uint index);
+		        void Advise(IntPtr sink, out uint cookie);
+		        void Unadvise(uint cookie);
+		        void SetOptions(uint options);
+		        void GetOptions(out uint options);
+		        void SetDefaultFolder(IShellItem item);
+		        void SetFolder(IShellItem item);
+		        void GetFolder(out IShellItem item);
+		        void GetCurrentSelection(out IShellItem item);
+		        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+		        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+		        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+		        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+		        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+		        void GetResult(out IShellItem item);
+		    }
+		
+		    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+		    private interface IShellItem \{
+		        void BindToHandler(IntPtr bc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+		        void GetParent(out IShellItem parent);
+		        void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+		        void GetAttributes(uint mask, out uint attributes);
+		        void Compare(IShellItem other, uint hint, out int order);
+		    }
+		
+		    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+		    private static extern void SHCreateItemFromParsingName(string path, IntPtr bc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItem item);
+		
+		    [DllImport("user32.dll")]
+		    private static extern IntPtr GetForegroundWindow();
+		
+		    public static string Pick(bool folder, string start, string title) \{
+		        IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialog();
+		        uint options;
+		        dialog.GetOptions(out options);
+		        options |= 0x40;                 // FOS_FORCEFILESYSTEM
+		        if (folder) \{ options |= 0x20; } // FOS_PICKFOLDERS
+		        dialog.SetOptions(options);
+		        if (!String.IsNullOrEmpty(title)) \{ dialog.SetTitle(title); }
+		        if (!String.IsNullOrEmpty(start)) \{
+		            try \{
+		                IShellItem initial;
+		                SHCreateItemFromParsingName(start, IntPtr.Zero, typeof(IShellItem).GUID, out initial);
+		                dialog.SetFolder(initial);
+		            } catch (Exception) \{}
+		        }
+		        if (dialog.Show(GetForegroundWindow()) != 0) \{ return ""; }
+		        IShellItem result;
+		        dialog.GetResult(out result);
+		        string path;
+		        result.GetDisplayName(0x80058000, out path); // SIGDN_FILESYSPATH
+		        return path;
+		    }
+		}
+		'@
+		[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+		Write-Output ([HivePicker]::Pick($Mode -eq "folder", $Start, $Title))
 		
 	`
 }

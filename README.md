@@ -12,6 +12,15 @@ hivec test studio.hive             # testes, com cobertura
 
 ## O que tem
 
+- **Barra de menus** estilo VS Code: **Arquivo** (novo, abrir arquivo/pasta com
+  o seletor nativo do Windows, salvar, configurações, fechar, sair), **Editar**
+  (desfazer, refazer, recortar, copiar, colar, selecionar tudo, sugestões, ir
+  para a definição), **Ver** (barras e painéis, tema), **Executar** (Check, Run,
+  Test, Build, fixar entrada), **Terminal** e **Ajuda** (documentação, atalhos,
+  sobre). Cada item mostra o atalho configurado.
+- **Idioma da interface**: Português (Brasil), English ou Español, em
+  Configurações → Aparência; muda na hora.
+
 - **Editor com realce de sintaxe Hive** (palavras-chave, tipos, textos,
   números, comentários, chamadas, átomos, `hive`), numeração de linhas, fonte
   monoespaçada, `Tab` indenta, `Enter` mantém a indentação (e abre um nível
@@ -65,7 +74,8 @@ hivec test studio.hive             # testes, com cobertura
 | Check / Run | `F8` / `F5` | Preview do Markdown | `Ctrl+Shift+V` |
 | Test / Build | `Ctrl+Shift+T` / `Ctrl+Shift+B` | Terminal | ``Ctrl+Shift+` `` |
 | Ir para a definição | `F12` / `Ctrl+clique` | Git | `Ctrl+Shift+G` |
-| Maximizar painel | `Ctrl+Shift+M` | | |
+| Maximizar painel | `Ctrl+Shift+M` | Abrir arquivo / pasta | `Ctrl+O` / `Ctrl+Alt+O` |
+| Sair | `Ctrl+Q` | | |
 
 `Ctrl+`` ` é a tecla à esquerda do `1`, em qualquer layout (no ABNT2 é a do `'`).
 
@@ -139,6 +149,11 @@ git config core.hooksPath .githooks
 - `commit-msg`: recusa mensagens com `Co-Authored-By`.
 
 ## Limites conhecidos
+
+- O ícone da janela e da barra de tarefas vem da página (o hexágono do Hive).
+  O `hivec build` também embute `assets/icon.png` no `.exe`, mas o gerador de
+  ícone do hivec 0.2.8 não compila com Go 32 bits (`windows/386`); por isso o
+  desenho está em `assets/logo.png`. Com Go 64 bits, renomeie para `icon.png`.
 
 - O terminal não é um PTY: programas de tela cheia (vim, less, htop) e prompts
   que leem direto do console não funcionam; `Ctrl+C` reinicia o shell em vez de
