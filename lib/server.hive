@@ -1,0 +1,163 @@
+// A ponte entre o programa e a janela: um servidor HTTP entrega a página, um
+// WebSocket leva eventos para o serviço de estado e traz frames de volta, e um
+// navegador Chromium em modo aplicativo (perfil próprio) é a janela.
+//
+// Tudo fica em 127.0.0.1 e exige o token sorteado a cada execução.
+
+import ./model
+import ./assets
+
+func hasToken(url: Str, token: Str): Bool {
+	return indexOf(url, "token=" + token) is Result.Ok(_)
+}
+
+proc page(token: Str, wsPort: Int, request: hive.net.HttpRequest): hive.net.HttpResponse {
+	if !hasToken(request.url, token) {
+		return hive.net.HttpResponse(403, [], "forbidden")
+	}
+	html := replaceAll(assets.shell(), "__WSPORT__", "{wsPort}")
+	return hive.net.HttpResponse(200, [["Content-Type", "text/html; charset=utf-8"], ["Cache-Control", "no-store"]], html)
+}
+
+// Manda um frame novo sempre que algo mudou sem a página pedir — um build que
+// terminou, por exemplo. Para quando a conexão cai.
+proc pusher(db: hive.syslink.Address, conn: hive.net.WsConnection): void {
+	mut last := -1
+	for ;; {
+		asked := db(model.Cmd.Pulse())
+		if asked is Result.Ok(reply) {
+			if reply is model.Cmd.PulseIs(n) {
+				if n != last {
+					last = n
+					rendered := db(model.Cmd.Render())
+					if rendered is Result.Ok(answer) {
+						if answer is model.Cmd.Reply(frame) {
+							if hive.net.wsSend(conn, frame) is Result.Error(_) {
+								return
+							}
+						}
+					}
+				}
+			}
+		} else {
+			return
+		}
+		hive.task.sleep(200)
+	}
+}
+
+// Fecha o programa se, pouco depois de uma janela sair, nenhuma outra voltou.
+proc closeIfIdle(db: hive.syslink.Address): void {
+	hive.task.sleep(2500)
+	asked := db(model.Cmd.Clients())
+	if asked is Result.Ok(reply) {
+		if reply is model.Cmd.ClientsAre(n) {
+			if n <= 0 {
+				hive.term.exit(0)
+			}
+		}
+	}
+}
+
+proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): void {
+	if !hasToken(hive.net.wsRequest(conn).url, token) {
+		hive.net.wsClose(conn)
+		return
+	}
+	async db(model.Cmd.Post(model.Msg.Connected()))
+	async pusher(db, conn)
+	for ;; {
+		received := hive.net.wsReceive(conn)
+		if received is Result.Ok(text) {
+			answered := db(model.Cmd.Ui(text))
+			if answered is Result.Ok(reply) {
+				if reply is model.Cmd.Reply(frame) {
+					if hive.net.wsSend(conn, frame) is Result.Error(_) {
+						break
+					}
+				}
+			}
+		} else {
+			break
+		}
+	}
+	async db(model.Cmd.Post(model.Msg.Disconnected()))
+	async closeIfIdle(db)
+}
+
+func envPath(name: Str): Str {
+	if hive.env.get(name) is Result.Ok(value) {
+		return replaceAll(value, "\\", "/")
+	}
+	return ""
+}
+
+func isWindows(): Bool {
+	return envPath("OS") == "Windows_NT"
+}
+
+// Navegadores Chromium conhecidos, no lugar onde cada sistema os instala.
+func candidates(preferred: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	if preferred != "" {
+		append(found, preferred)
+	}
+	if isWindows() {
+		x86 := envPath("ProgramFiles(x86)")
+		programs := envPath("ProgramFiles")
+		local := envPath("LOCALAPPDATA")
+		append(found, x86 + "/Microsoft/Edge/Application/msedge.exe")
+		append(found, programs + "/Microsoft/Edge/Application/msedge.exe")
+		append(found, programs + "/Google/Chrome/Application/chrome.exe")
+		append(found, x86 + "/Google/Chrome/Application/chrome.exe")
+		append(found, local + "/Google/Chrome/Application/chrome.exe")
+		append(found, programs + "/BraveSoftware/Brave-Browser/Application/brave.exe")
+	} else {
+		append(found, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+		append(found, "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+		append(found, "/Applications/Chromium.app/Contents/MacOS/Chromium")
+		append(found, "/usr/bin/google-chrome")
+		append(found, "/usr/bin/google-chrome-stable")
+		append(found, "/usr/bin/chromium")
+		append(found, "/usr/bin/chromium-browser")
+		append(found, "/usr/bin/microsoft-edge")
+		append(found, "/snap/bin/chromium")
+		append(found, "/usr/bin/brave-browser")
+	}
+	return found
+}
+
+proc openWith(browser: Str, arguments: Str[]): void {
+	_ran := hive.term.exec(browser, arguments, "")
+}
+
+// Abre a janela num Chromium conhecido. `""` quando não há nenhum.
+proc launch(url: Str, profile: Str, preferred: Str): Str {
+	for each browser in candidates(preferred) {
+		if hive.file.exists(browser) {
+			arguments := ["--app=" + url, "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "--window-size=1440,900"]
+			async openWith(browser, arguments)
+			return browser
+		}
+	}
+	return ""
+}
+
+// Uma porta livre: tenta algumas e fica com a primeira que ninguém atende.
+proc freePort(): Int {
+	for attempt := 0; attempt < 20; attempt++ {
+		candidate := 41000 + ((hive.time.now() + hive.time.millisecond() * 7 + attempt * 131) % 900) * 2
+		first := hive.net.socketConnect("127.0.0.1", candidate)
+		second := hive.net.socketConnect("127.0.0.1", candidate + 1)
+		if first is Result.Error(_) && second is Result.Error(_) {
+			return candidate
+		}
+		if first is Result.Ok(conn) {
+			hive.net.socketClose(conn)
+		}
+		if second is Result.Ok(conn) {
+			hive.net.socketClose(conn)
+		}
+	}
+	return 41777
+}

@@ -1,0 +1,30 @@
+// Chama o compilador fora da janela e devolve o resultado como mensagem.
+
+import ./model
+
+// `HIVEC` no ambiente (ou num `.env` ao lado) vence a configuração.
+func compilerPath(configured: Str): Str {
+	if hive.env.get("HIVEC") is Result.Ok(path) {
+		if path != "" {
+			return path
+		}
+	}
+	if configured != "" {
+		return configured
+	}
+	return "hivec"
+}
+
+// Roda numa thread própria: a janela continua respondendo enquanto isso.
+proc invoke(window: hive.syslink.Address, compiler: Str, command: Str, entrypoint: Str): void {
+	result := hive.term.exec(compilerPath(compiler), [command, entrypoint], "")
+	if result is Result.Ok(output) {
+		async window(model.Cmd.Post(model.Msg.Finished(command, output, true)))
+	} else if result is Result.Error(why) {
+		mut output := why.output
+		if why.code == -1 {
+			output = "não foi possível iniciar `{why.command}`: {why.message}\nInstale o Hive ou ajuste o compilador nas Configurações."
+		}
+		async window(model.Cmd.Post(model.Msg.Finished(command, output, false)))
+	}
+}

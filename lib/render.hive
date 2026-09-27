@@ -1,0 +1,702 @@
+// Estado → página. Cada região da janela é um pedaço de HTML; a página troca
+// só as regiões que mudaram. Tudo aqui é `func`: desenhar nunca altera o estado.
+//
+// Um clique volta como `data-act` (+ `data-arg`), um campo como `data-input`.
+
+import ./model
+import ./analysis
+import ./workspace
+import ./theme
+import ./settings
+import ./highlight
+import ./markdown
+import ./keys
+
+func esc(text: Str): Str {
+	return highlight.escape(text)
+}
+
+func attr(name: Str, value: Str): Str {
+	return " " + name + "=\"" + esc(value) + "\""
+}
+
+func act(action: Str, arg: Str): Str {
+	if arg == "" {
+		return attr("data-act", action)
+	}
+	return attr("data-act", action) + attr("data-arg", arg)
+}
+
+func activeDoc(state: model.State): Result<model.Doc, Bool> {
+	index := state.active
+	if state.docs bounds index {
+		return Result.Ok(state.docs[index])
+	}
+	return Result.Error(false)
+}
+
+func activePath(state: model.State): Str {
+	if activeDoc(state) is Result.Ok(doc) {
+		return doc.path
+	}
+	return ""
+}
+
+func showingSettings(state: model.State): Bool {
+	return state.settingsOpen && state.editorView == model.EditorView.SettingsView()
+}
+
+// O arquivo que Check/Run/Test/Build recebem: o fixado, senão o ativo.
+func targetOf(state: model.State): Str {
+	if state.entrypoint != "" {
+		return state.entrypoint
+	}
+	return activePath(state)
+}
+
+func layoutOf(state: model.State): Str {
+	if showingSettings(state) {
+		return "settings"
+	}
+	if activeDoc(state) is Result.Ok(doc) {
+		if model.isMarkdown(doc.path) {
+			return doc.mode
+		}
+		return "edit"
+	}
+	return "welcome"
+}
+
+func keyHint(state: model.State, action: Str): Str {
+	combo := keys.keysFor(state.settings.keymap, action)
+	if combo == "" {
+		return ""
+	}
+	return " (" + combo + ")"
+}
+
+// ── barra de título ──────────────────────────────────────────────────────
+
+func toolButton(state: model.State, label: Str, command: Str, cls: Str, ready: Bool): Str {
+	mut disabled := ""
+	if !ready {
+		disabled = " disabled"
+	}
+	return "<button class=\"btn " + cls + "\"" + act("invoke", command) + attr("title", label + keyHint(state, command)) + disabled + ">" + label + "</button>"
+}
+
+func titleBar(state: model.State): Str {
+	idle := state.running == ""
+	ready := idle && targetOf(state) != ""
+	mut busy := ""
+	if !idle {
+		busy = "<span class=\"muted\">⟳ " + esc(state.running) + "…</span>"
+	}
+	return "<span class=\"logo\">⬡</span><span class=\"name\">Hive Studio</span>" +
+		"<span class=\"muted\">— " + esc(workspace.baseName(state.root)) + "</span>" +
+		"<span class=\"grow\"></span>" + busy +
+		toolButton(state, "Check", "check", "", ready) +
+		toolButton(state, "▶ Run", "run", "run", ready) +
+		toolButton(state, "Test", "test", "", ready) +
+		toolButton(state, "Build", "build", "", ready)
+}
+
+// ── barra de atividades ──────────────────────────────────────────────────
+
+func activityItem(state: model.State, glyph: Str, tip: Str, side: model.SideView, arg: Str, action: Str): Str {
+	mut cls := "ai"
+	if state.sideOpen && state.side == side {
+		cls = "ai on"
+	}
+	return "<div class=\"" + cls + "\"" + act("side", arg) + attr("title", tip + keyHint(state, action)) + ">" + glyph + "</div>"
+}
+
+func activityBar(state: model.State): Str {
+	mut settingsCls := "ai"
+	if showingSettings(state) {
+		settingsCls = "ai on"
+	}
+	return activityItem(state, "❐", "Explorador", model.SideView.ExplorerSide(), "explorer", "explorer") +
+		activityItem(state, "☰", "Estrutura", model.SideView.OutlineSide(), "outline", "outline") +
+		"<div class=\"grow\"></div>" +
+		"<div class=\"" + settingsCls + "\"" + act("settings", "") + attr("title", "Configurações" + keyHint(state, "settings")) + ">⚙</div>"
+}
+
+// ── explorador ───────────────────────────────────────────────────────────
+
+func headerAction(glyph: Str, tip: Str, action: Str, arg: Str): Str {
+	return "<span class=\"act\"" + act(action, arg) + attr("title", tip) + ">" + glyph + "</span>"
+}
+
+func promptPlaceholder(prompt: model.Prompt): Str {
+	if prompt is model.Prompt.NewFilePrompt {
+		return "nome do arquivo (ex.: main.hive)"
+	} else if prompt is model.Prompt.NewFolderPrompt {
+		return "nome da pasta"
+	} else if prompt is model.Prompt.OpenFolderPrompt {
+		return "caminho da pasta"
+	} else if prompt is model.Prompt.NoPrompt {
+		return ""
+	}
+}
+
+func promptRow(state: model.State): Str {
+	if state.prompt is model.Prompt.NoPrompt {
+		return ""
+	}
+	return "<div class=\"prompt\"><input class=\"field\" data-input=\"prompt\" data-submit=\"promptSubmit\" data-autofocus" +
+		attr("placeholder", promptPlaceholder(state.prompt)) + attr("value", state.promptText) + ">" +
+		headerAction("✓", "Confirmar (Enter)", "promptSubmit", "") +
+		headerAction("✕", "Cancelar (Esc)", "promptCancel", "") + "</div>"
+}
+
+func isOpenDoc(state: model.State, path: Str): Bool {
+	for each doc in state.docs {
+		if doc.path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func dirtyPath(state: model.State, path: Str): Bool {
+	for each doc in state.docs {
+		if doc.path == path {
+			return model.dirty(doc)
+		}
+	}
+	return false
+}
+
+func treeRow(state: model.State, row: model.TreeRow): Str {
+	entry := row.entry
+	current := entry.path == activePath(state) && !showingSettings(state)
+	mut cls := "row"
+	if current {
+		cls = "row on"
+	}
+	if entry.path == state.selected {
+		cls = cls + " focus"
+	}
+	indent := attr("style", "padding-left:{8 + row.depth * 14}px")
+	if entry.folder {
+		mut chevron := "›"
+		if row.open {
+			chevron = "⌄"
+		}
+		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + indent + ">" +
+			"<span class=\"chev\">" + chevron + "</span><span class=\"nm\">" + esc(entry.name) + "</span></div>"
+	}
+	icon := theme.iconFor(entry.name)
+	mut marker := ""
+	if dirtyPath(state, entry.path) {
+		marker = "<span class=\"dirty\">●</span>"
+	}
+	return "<div class=\"" + cls + "\"" + act("open", entry.path) + indent + ">" +
+		"<span class=\"chev\"></span><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+		"<span class=\"nm\">" + esc(entry.name) + "</span>" + marker + "</div>"
+}
+
+func explorer(state: model.State): Str {
+	mut Str[dyn] rows = []
+	for each row in state.tree {
+		append(rows, treeRow(state, row))
+	}
+	if len(state.tree) == 0 {
+		append(rows, "<div class=\"empty\">Pasta vazia.</div>")
+	}
+	return "<div class=\"hdr\">EXPLORADOR<span class=\"grow\"></span>" +
+		headerAction("＋", "Novo arquivo" + keyHint(state, "newFile"), "prompt", "newFile") +
+		headerAction("⊞", "Nova pasta" + keyHint(state, "newFolder"), "prompt", "newFolder") +
+		headerAction("⟳", "Atualizar", "refresh", "") +
+		headerAction("⊟", "Recolher tudo", "collapse", "") +
+		headerAction("↑", "Pasta acima", "up", "") +
+		headerAction("…", "Abrir pasta", "prompt", "openFolder") + "</div>" +
+		"<div class=\"root\"" + attr("title", state.root) + ">⌄ " + esc(workspace.baseName(state.root)) + "</div>" +
+		promptRow(state) + join(rows, "")
+}
+
+func symbolGlyph(kind: Str): theme.FileIcon {
+	if kind == "func" {
+		return theme.FileIcon("ƒ", "#b180d7")
+	} else if kind == "proc" {
+		return theme.FileIcon("◉", "#75beff")
+	} else if kind == "type" {
+		return theme.FileIcon("T", "#ee9d28")
+	} else if kind == "query" {
+		return theme.FileIcon("Q", "#f55385")
+	} else if kind == "test" {
+		return theme.FileIcon("✓", "#89d185")
+	}
+	return theme.FileIcon("↳", "#8a8a8a")
+}
+
+func outlinePanel(state: model.State): Str {
+	mut Str[dyn] rows = ["<div class=\"hdr\">ESTRUTURA</div>"]
+	if activeDoc(state) is Result.Ok(doc) {
+		symbols := analysis.outline(doc.text)
+		for each symbol in symbols {
+			glyph := symbolGlyph(symbol.kind)
+			append(rows, "<div class=\"sym\"" + act("peek", doc.path) + attr("data-text", "{symbol.line}") + ">" +
+				"<span class=\"k\"" + attr("style", "color:" + glyph.color) + ">" + glyph.glyph + "</span>" +
+				"<span>" + esc(symbol.name) + "</span><span class=\"ln\">{symbol.line}</span></div>")
+		}
+		if len(symbols) == 0 {
+			append(rows, "<div class=\"empty\">Nenhuma declaração.</div>")
+		}
+	} else {
+		append(rows, "<div class=\"empty\">Nenhum arquivo aberto.</div>")
+	}
+	return join(rows, "")
+}
+
+func sidePanel(state: model.State): Str {
+	if state.side is model.SideView.OutlineSide {
+		return outlinePanel(state)
+	}
+	return explorer(state)
+}
+
+// ── abas e breadcrumb ────────────────────────────────────────────────────
+
+func tab(state: model.State, index: Int, doc: model.Doc): Str {
+	mut cls := "tab"
+	if index == state.active && !showingSettings(state) {
+		cls = "tab on"
+	}
+	mut closer := "<span class=\"x\"" + act("close", "{index}") + attr("title", "Fechar" + keyHint(state, "closeTab")) + ">×</span>"
+	if model.dirty(doc) {
+		closer = "<span class=\"x dirty\"" + act("close", "{index}") + attr("title", "Não salvo — fechar") + ">●</span>"
+	}
+	icon := theme.iconFor(doc.name)
+	return "<div class=\"" + cls + "\"" + act("focus", "{index}") + attr("title", doc.path) + ">" +
+		"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+		"<span>" + esc(doc.name) + "</span>" + closer + "</div>"
+}
+
+func tabStrip(state: model.State): Str {
+	mut Str[dyn] items = []
+	for i := 0; i < len(state.docs); i++ {
+		append(items, tab(state, i, state.docs[i]))
+	}
+	if state.settingsOpen {
+		mut cls := "tab"
+		if showingSettings(state) {
+			cls = "tab on"
+		}
+		append(items, "<div class=\"" + cls + "\"" + act("settings", "") + "><span class=\"ic\">⚙</span><span>Configurações</span>" +
+			"<span class=\"x\"" + act("closeSettings", "") + ">×</span></div>")
+	}
+	return join(items, "")
+}
+
+func modeSwitch(doc: model.Doc): Str {
+	mut Str[dyn] items = []
+	for each option in [["edit", "Editor"], ["split", "Dividir"], ["preview", "Preview"]] {
+		mut cls := ""
+		if option[0] == doc.mode {
+			cls = " class=\"on\""
+		}
+		append(items, "<span" + cls + act("mode", option[0]) + ">" + option[1] + "</span>")
+	}
+	return "<div class=\"seg\">" + join(items, "") + "</div>"
+}
+
+func breadcrumb(state: model.State): Str {
+	if showingSettings(state) {
+		return "<span>Configurações  ›  Usuário</span>"
+	}
+	if activeDoc(state) is Result.Ok(doc) {
+		mut Str[dyn] parts = []
+		for each crumb in workspace.crumbs(state.root, doc.path) {
+			append(parts, esc(crumb))
+		}
+		mut extra := ""
+		if doc.path == state.entrypoint {
+			extra = "<span>📌 entrada</span>"
+		}
+		mut switch := ""
+		if model.isMarkdown(doc.path) {
+			switch = modeSwitch(doc)
+		}
+		return "<span>" + join(parts, "  ›  ") + "</span>" + extra + "<span class=\"grow\"></span>" + switch
+	}
+	return ""
+}
+
+// ── editor ───────────────────────────────────────────────────────────────
+
+func gutter(text: Str): Str {
+	lines := analysis.countLines(text)
+	mut Str[dyn] numbers = []
+	for n := 1; n <= lines; n++ {
+		append(numbers, "{n}")
+	}
+	return join(numbers, "\n") + "\n\n\n"
+}
+
+func highlighted(state: model.State): Str {
+	if activeDoc(state) is Result.Ok(doc) {
+		return doc.html + "\n\n\n"
+	}
+	return ""
+}
+
+func preview(state: model.State): Str {
+	if activeDoc(state) is Result.Ok(doc) {
+		if model.isMarkdown(doc.path) && doc.mode != "edit" {
+			return "<div class=\"md\">" + markdown.render(doc.text) + "</div>"
+		}
+	}
+	return ""
+}
+
+func kindGlyph(kind: Str): theme.FileIcon {
+	if kind == "keyword" {
+		return theme.FileIcon("⌘", "#c586c0")
+	} else if kind == "module" {
+		return theme.FileIcon("\{}", "#e5c07b")
+	} else if kind == "word" {
+		return theme.FileIcon("ab", "#8a8a8a")
+	}
+	return symbolGlyph(kind)
+}
+
+func popup(state: model.State): Str {
+	mut Str[dyn] items = []
+	for i := 0; i < len(state.suggestions); i++ {
+		s := state.suggestions[i]
+		mut cls := "sg"
+		if i == state.suggestIndex {
+			cls = "sg on"
+		}
+		glyph := kindGlyph(s.kind)
+		append(items, "<div class=\"" + cls + "\"" + act("accept", "{i}") + ">" +
+			"<span class=\"k\"" + attr("style", "color:" + glyph.color) + ">" + esc(glyph.glyph) + "</span>" +
+			"<span class=\"w\">" + esc(s.word) + "</span><span class=\"d\">" + esc(s.detail) + "</span></div>")
+	}
+	return join(items, "")
+}
+
+func welcome(state: model.State): Str {
+	mut Str[dyn] rows = []
+	for each id in ["newFile", "save", "run", "togglePanel", "toggleSidebar", "suggest", "settings"] {
+		for each a in keys.actions() {
+			if a.id == id {
+				combo := keys.keysFor(state.settings.keymap, id)
+				if combo != "" {
+					append(rows, "<tr><td>" + esc(a.label) + "</td><td><kbd>" + esc(combo) + "</kbd></td></tr>")
+				}
+			}
+		}
+	}
+	return "<div class=\"big\">⬡</div><h1>Hive Studio</h1><div>Abra um arquivo no explorador para começar.</div>" +
+		"<table>" + join(rows, "") + "</table>"
+}
+
+// ── configurações ────────────────────────────────────────────────────────
+
+func option(value: Str, current: Str): Str {
+	mut selected := ""
+	if value == current {
+		selected = " selected"
+	}
+	return "<option" + attr("value", value) + selected + ">" + esc(value) + "</option>"
+}
+
+func select(input: Str, values: Str[], current: Str): Str {
+	mut Str[dyn] options = []
+	for each v in values {
+		append(options, option(v, current))
+	}
+	return "<select class=\"field\"" + attr("data-input", input) + ">" + join(options, "") + "</select>"
+}
+
+func check(name: Str, label: Str, on: Bool): Str {
+	mut checked := ""
+	if on {
+		checked = " checked"
+	}
+	return "<label class=\"check\"" + act("setting", name) + "><input type=\"checkbox\"" + checked + "> " + esc(label) + "</label>"
+}
+
+func item(label: Str, description: Str, control: Str): Str {
+	return "<div class=\"item\"><div class=\"lbl\">" + esc(label) + "</div><div class=\"dsc\">" + esc(description) + "</div>" + control + "</div>"
+}
+
+func swatch(color: Str): Str {
+	return "<i" + attr("style", "background:" + color) + "></i>"
+}
+
+func themeCard(current: Str, t: theme.Theme): Str {
+	mut cls := "card"
+	if t.name == current {
+		cls = "card on"
+	}
+	return "<div class=\"" + cls + "\"" + act("theme", t.name) + attr("style", "background:" + t.editor + ";color:" + t.text) + ">" +
+		"<div class=\"sw\">" + swatch(t.side) + swatch(t.selection) + swatch(t.accent) + swatch(t.statusBg) + "</div>" +
+		"<div>" + esc(t.name) + "</div>" +
+		"<div class=\"code\"><span" + attr("style", "color:" + t.synKeyword) + ">proc</span> " +
+		"<span" + attr("style", "color:" + t.synCall) + ">main</span>(): " +
+		"<span" + attr("style", "color:" + t.synKeyword) + ">void</span></div>" +
+		"<div class=\"code\"><span" + attr("style", "color:" + t.synComment) + ">// olá</span> " +
+		"<span" + attr("style", "color:" + t.synString) + ">\"hive\"</span></div></div>"
+}
+
+func keyRow(state: model.State, a: keys.Action): Str {
+	combo := keys.keysFor(state.settings.keymap, a.id)
+	mut shown := "<kbd>" + esc(combo) + "</kbd>"
+	if combo == "" {
+		shown = "<span class=\"empty\">—</span>"
+	}
+	mut custom := ""
+	mut resetButton := ""
+	if !keys.isDefault(a.id, combo) {
+		custom = "<span class=\"custom\">personalizado</span>"
+		resetButton = " <button class=\"btn\"" + act("resetKey", a.id) + ">Padrão</button>"
+	}
+	mut cls := ""
+	if state.recording == a.id {
+		cls = " class=\"rec\""
+		shown = "<span class=\"empty\">pressione as teclas…</span>"
+	}
+	return "<tr" + cls + "><td>" + esc(a.label) + custom + "</td><td>" + shown + "</td>" +
+		"<td style=\"text-align:right\"><button class=\"btn\"" + act("record", a.id) + ">Gravar</button>" + resetButton + "</td></tr>"
+}
+
+func settingsPage(state: model.State): Str {
+	prefs := state.settings
+	mut Str[dyn] cards = []
+	for each t in theme.themes() {
+		append(cards, themeCard(prefs.theme, t))
+	}
+	mut Str[dyn] keyRows = []
+	for each a in keys.actions() {
+		append(keyRows, keyRow(state, a))
+	}
+	return "<div class=\"set\"><h1>Configurações</h1><div class=\"sub\">Salvas em " + esc(settings.path()) + "</div>" +
+		"<h2>Aparência</h2>" +
+		item("Tema de cor", "Muda a janela inteira: painéis, barras de rolagem e cores do código.",
+			select("theme", theme.names(), prefs.theme) + "<div class=\"cards\">" + join(cards, "") + "</div>") +
+		item("Tamanho da fonte", "Do editor, em pixels.",
+			select("fontSize", ["11", "12", "13", "14", "15", "16", "18", "20", "22"], "{prefs.fontSize}")) +
+		"<h2>Editor</h2>" +
+		item("Números de linha", "", check("lineNumbers", "Mostrar números de linha", prefs.lineNumbers)) +
+		item("Autocomplete", "Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita.",
+			check("autocomplete", "Sugerir enquanto digito", prefs.autocomplete)) +
+		item("Largura do tab", "Quantos espaços um tab ocupa na tela.", select("tabSize", ["2", "4", "8"], "{prefs.tabSize}")) +
+		"<h2>Explorador</h2>" +
+		item("Arquivos ocultos", "", check("showHidden", "Mostrar arquivos ocultos e artefatos de build", prefs.showHidden)) +
+		"<h2>Execução</h2>" +
+		item("Salvar antes de rodar", "", check("saveBeforeRun", "Salvar arquivos antes de Check, Run, Test e Build", prefs.saveBeforeRun)) +
+		item("Compilador", "Caminho do hivec. A variável HIVEC, se existir, tem prioridade.",
+			"<input class=\"field\" style=\"width:420px\" data-input=\"compiler\" placeholder=\"hivec\"" + attr("value", prefs.compiler) + ">") +
+		item("Navegador da janela", "Executável Chromium (Edge, Chrome, Brave) usado para a janela. Vazio = automático. Vale na próxima abertura.",
+			"<input class=\"field\" style=\"width:420px\" data-input=\"browser\" placeholder=\"automático\"" + attr("value", prefs.browser) + ">") +
+		"<h2>Atalhos de teclado</h2>" +
+		"<div class=\"item\"><div class=\"dsc\">Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.</div>" +
+		"<button class=\"btn\"" + act("resetKeys", "") + ">Restaurar todos os padrões</button></div>" +
+		"<table class=\"keys\"><tr><th>Ação</th><th>Atalho</th><th></th></tr>" + join(keyRows, "") + "</table></div>"
+}
+
+// ── painel inferior ──────────────────────────────────────────────────────
+
+func paneTab(label: Str, arg: Str, on: Bool): Str {
+	mut cls := "ptab"
+	if on {
+		cls = "ptab on"
+	}
+	return "<span class=\"" + cls + "\"" + act("pane", arg) + ">" + label + "</span>"
+}
+
+func panel(state: model.State): Str {
+	problems := state.pane is model.Pane.ProblemsPane
+	mut body := esc(state.output)
+	if problems {
+		mut Str[dyn] rows = []
+		for each d in state.diagnostics {
+			append(rows, "<div class=\"prob\"" + act("peek", d.file) + attr("data-text", "{d.line}") + ">" +
+				"<span class=\"ic\">⊗</span><span>" + esc(d.message) + "</span>" +
+				"<span class=\"where\">" + esc(workspace.baseName(d.file)) + " [" + "{d.line}" + "]</span></div>")
+		}
+		body = join(rows, "")
+		if len(state.diagnostics) == 0 {
+			body = "<div class=\"empty\">Nenhum problema foi detectado.</div>"
+		}
+	}
+	return "<div class=\"head\">" +
+		paneTab("PROBLEMAS  {len(state.diagnostics)}", "problems", problems) +
+		paneTab("SAÍDA", "output", !problems) +
+		"<span class=\"grow\"></span>" +
+		headerAction("⌫", "Limpar", "clear", "") +
+		headerAction("✕", "Fechar painel" + keyHint(state, "togglePanel"), "togglePanel", "") +
+		"</div><div class=\"body\">" + body + "</div>"
+}
+
+// ── barra de status ──────────────────────────────────────────────────────
+
+func statusItem(label: Str, action: Str, arg: Str, tip: Str): Str {
+	if action == "" {
+		return "<span class=\"si\">" + label + "</span>"
+	}
+	return "<span class=\"si click\"" + act(action, arg) + attr("title", tip) + ">" + label + "</span>"
+}
+
+func caretPosition(text: Str, caret: Int): Str {
+	chars := split(text, "")
+	mut line := 1
+	mut column := 1
+	for i := 0; i < caret; i++ {
+		if chars bounds i {
+			if chars[i] == "\n" {
+				line++
+				column = 1
+			} else {
+				column++
+			}
+		}
+	}
+	return "Ln {line}, Col {column}"
+}
+
+func statusBar(state: model.State): Str {
+	t := theme.byName(state.settings.theme)
+	mut Str[dyn] items = [
+		statusItem("⬡ Hive", "", "", ""),
+		statusItem("⊗ {len(state.diagnostics)}", "pane", "problems", "Problemas"),
+		statusItem(esc(state.status), "", "", ""),
+		"<span class=\"grow\"></span>"
+	]
+	if activeDoc(state) is Result.Ok(doc) {
+		if !showingSettings(state) {
+			append(items, statusItem(caretPosition(doc.text, state.caret), "", "", ""))
+			append(items, statusItem("Tab: {state.settings.tabSize}", "", "", ""))
+			mut language := "Texto"
+			if doc.path is "{stem}.hive" {
+				language = "Hive"
+			} else if model.isMarkdown(doc.path) {
+				language = "Markdown"
+			} else if doc.path is "{stem}.go" {
+				language = "Go"
+			}
+			append(items, statusItem(language, "", "", ""))
+			if doc.path != state.entrypoint {
+				append(items, statusItem("📌 Fixar como entrada", "pin", "", "Check/Run/Test/Build passam a usar este arquivo"))
+			}
+		}
+	}
+	if state.entrypoint != "" {
+		append(items, statusItem("▶ " + esc(workspace.baseName(state.entrypoint)), "", "", ""))
+	}
+	append(items, statusItem("◐ " + esc(t.name), "settings", "", "Trocar tema"))
+	append(items, statusItem("▭", "togglePanel", "", "Painel" + keyHint(state, "togglePanel")))
+	return join(items, "")
+}
+
+// ── janelas por cima ─────────────────────────────────────────────────────
+
+func overlay(state: model.State): Str {
+	if state.recording != "" {
+		mut label := state.recording
+		for each a in keys.actions() {
+			if a.id == state.recording {
+				label = a.label
+			}
+		}
+		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">" + esc(label) + "</div>" +
+			"<div class=\"empty\">Pressione a nova combinação de teclas. Esc cancela.</div></div></div>"
+	}
+	if state.peekFile == "" {
+		return ""
+	}
+	mut Str[dyn] lines = []
+	for each line in analysis.excerpt(state.peekText, state.peekLine, 7) {
+		mut cls := "ln"
+		mut body := line
+		if line is "> {rest}" {
+			cls = "ln hit"
+			body = rest
+		} else if line is "  {rest}" {
+			body = rest
+		}
+		if body is "{number is ( *\d+)}  {source}" {
+			append(lines, "<span class=\"" + cls + "\"><span class=\"no\">" + number + "</span>" + highlight.highlight(source) + "</span>")
+		} else {
+			append(lines, "<span class=\"" + cls + "\">" + esc(body) + "</span>")
+		}
+	}
+	return "<div class=\"dialog\"><div class=\"dh\"><b>" + esc(workspace.baseName(state.peekFile)) + ":{state.peekLine}</b>" +
+		"<span class=\"grow\"></span><button class=\"btn\"" + act("closePeek", "") + ">Fechar</button></div>" +
+		"<pre>" + join(lines, "") + "</pre></div>"
+}
+
+// ── tudo junto ───────────────────────────────────────────────────────────
+
+func region(id: Str, html: Str): model.Region {
+	return model.Region(id, html)
+}
+
+func frame(state: model.State): model.Frame {
+	prefs := state.settings
+	layout := layoutOf(state)
+	mut text := ""
+	mut editing := ""
+	mut hl := ""
+	if activeDoc(state) is Result.Ok(doc) {
+		text = doc.text
+		editing = gutter(doc.text)
+		hl = highlighted(state)
+	}
+	mut settingsHtml := ""
+	if layout == "settings" {
+		settingsHtml = settingsPage(state)
+	}
+	mut welcomeHtml := ""
+	if layout == "welcome" {
+		welcomeHtml = welcome(state)
+	}
+	mut title := "Hive Studio"
+	if activeDoc(state) is Result.Ok(doc) {
+		mut mark := ""
+		if model.dirty(doc) {
+			mark = "● "
+		}
+		title = mark + doc.name + " — " + workspace.baseName(state.root) + " — Hive Studio"
+	}
+	regions := [
+		region("title", titleBar(state)),
+		region("activity", activityBar(state)),
+		region("side", sidePanel(state)),
+		region("tabs", tabStrip(state)),
+		region("crumbs", breadcrumb(state)),
+		region("gutter", editing),
+		region("hl", hl),
+		region("preview", preview(state)),
+		region("settings", settingsHtml),
+		region("welcome", welcomeHtml),
+		region("popup", popup(state)),
+		region("panel", panel(state)),
+		region("status", statusBar(state)),
+		region("overlay", overlay(state))
+	]
+	model.Region[dyn] all = regions
+	return model.Frame(
+		regions: all,
+		css: theme.css(theme.byName(prefs.theme), prefs.fontSize, prefs.tabSize),
+		text: text,
+		serial: state.textSerial,
+		caret: state.caret,
+		keys: keys.combos(prefs.keymap),
+		layout: layout,
+		side: state.sideOpen,
+		panel: state.panelOpen,
+		popup: len(state.suggestions) > 0 && (layout == "edit" || layout == "split"),
+		numbers: prefs.lineNumbers,
+		recording: state.recording != "",
+		title: title
+	)
+}
+
+func encodeFrame(state: model.State): Str {
+	return encode(frame(state), hive.json.codec())
+}
