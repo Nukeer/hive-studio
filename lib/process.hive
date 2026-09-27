@@ -1,0 +1,50 @@
+// Rodar outro programa sem abrir janela de console — o `hive.term.exec` abre
+// uma a cada chamada quando o Hive Studio roda compilado no Windows.
+
+import ./native.go
+
+type Output {
+	code: Int
+	text: Str
+}
+
+func codeOf(text: Str): Int {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		return n
+	}
+	return -1
+}
+
+// `code` é o código de saída (-1 quando nem deu para começar) e `text` tudo o
+// que o programa escreveu, saída e erro juntos.
+func run(command: Str, arguments: Str[], directory: Str): Output {
+	mut Str[dyn] args = []
+	for each a in arguments {
+		append(args, a)
+	}
+	result := native.run(command, args, directory)
+	if result is Result.Ok(raw) {
+		if raw is "{code}\n{text}" {
+			return Output(codeOf(code), text)
+		}
+		return Output(codeOf(raw), "")
+	} else if result is Result.Error(why) {
+		return Output(-1, why)
+	}
+}
+
+// A primeira linha da saída, sem espaços nem quebras nas pontas.
+func firstLine(text: Str): Str {
+	for each line in split(replaceAll(text, "\r", ""), "\n") {
+		return line
+	}
+	return ""
+}
+
+test "run devolve código e saída" {
+	ok := run("git", ["--version"], "")
+	assert ok.code == 0
+	assert indexOf(ok.text, "git version") is Result.Ok(_)
+	missing := run("programa-que-nao-existe-hive", ["x"], "")
+	assert missing.code == -1
+}
