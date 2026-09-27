@@ -13,6 +13,9 @@ import ./markdown
 import ./keys
 import ./git
 import ./i18n
+import ./search
+import ./complete
+import ./version
 
 // O texto da interface no idioma escolhido.
 func tx(state: model.State, text: Str): Str {
@@ -170,11 +173,16 @@ func menuBar(state: model.State): Str {
 			separator(),
 			menuClient(state, "Selecionar tudo", "selectAll", "Ctrl+A"),
 			separator(),
+			menuItem(state, "Buscar no arquivo", "find", hasDoc),
+			menuItem(state, "Buscar no projeto", "searchProject", true),
+			menuItem(state, "Ir para arquivo…", "quickOpen", true),
+			separator(),
 			menuItem(state, "Sugestões (autocomplete)", "suggest", hasDoc),
 			menuItem(state, "Ir para a definição", "definition", hasDoc)
 		]) +
 		menu(state, "Ver", [
 			menuItem(state, "Explorador", "explorer", true),
+			menuItem(state, "Buscar", "searchProject", true),
 			menuItem(state, "Controle de código", "git", true),
 			menuItem(state, "Estrutura", "outline", true),
 			separator(),
@@ -249,15 +257,179 @@ func activityBar(state: model.State): Str {
 		settingsCls = "ai on"
 	}
 	changes := len(state.git.files)
-	mut gitGlyph := "⑂"
+	mut gitGlyph := gitIcon()
 	if changes > 0 {
-		gitGlyph = "⑂<span class=\"count\">{changes}</span>"
+		gitGlyph = gitIcon() + "<span class=\"count\">{changes}</span>"
 	}
-	return activityItem(state, "❐", tx(state, "Explorador"), model.SideView.ExplorerSide(), "explorer", "explorer") +
+	return activityItem(state, filesIcon(), tx(state, "Explorador"), model.SideView.ExplorerSide(), "explorer", "explorer") +
+		activityItem(state, searchIcon(), tx(state, "Buscar"), model.SideView.SearchSide(), "search", "searchProject") +
 		activityItem(state, gitGlyph, tx(state, "Controle de código"), model.SideView.GitSide(), "git", "git") +
-		activityItem(state, "☰", tx(state, "Estrutura"), model.SideView.OutlineSide(), "outline", "outline") +
+		activityItem(state, outlineIcon(), tx(state, "Estrutura"), model.SideView.OutlineSide(), "outline", "outline") +
 		"<div class=\"grow\"></div>" +
-		"<div class=\"" + settingsCls + "\"" + act("settings", "") + attr("title", tx(state, "Configurações") + keyHint(state, "settings")) + ">⚙</div>"
+		"<div class=\"" + settingsCls + "\"" + act("settings", "") + attr("title", tx(state, "Configurações") + keyHint(state, "settings")) + ">" + gearIcon() + "</div>"
+}
+
+// ── ícones da barra de atividades ────────────────────────────────────────
+
+func svg(body: Str): Str {
+	return "<svg class=\"aicon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">" + body + "</svg>"
+}
+
+// Arquivos empilhados: o explorador.
+func filesIcon(): Str {
+	return svg("<path d=\"M14.5 3H7.8A1.8 1.8 0 0 0 6 4.8V17\"/><path d=\"M10.8 6.5h6.4l3.3 3.3v9.4a1.8 1.8 0 0 1-1.8 1.8h-7.9a1.8 1.8 0 0 1-1.8-1.8V8.3a1.8 1.8 0 0 1 1.8-1.8z\"/><path d=\"M17 6.5v3.5h3.5\"/>")
+}
+
+// Lupa: buscar no projeto.
+func searchIcon(): Str {
+	return svg("<circle cx=\"10.5\" cy=\"10.5\" r=\"6.2\"/><path d=\"M15.2 15.2 20.5 20.5\"/>")
+}
+
+// O logo do git.
+func gitIcon(): Str {
+	return "<svg class=\"aicon\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M23.546 10.93 13.067.452a1.55 1.55 0 0 0-2.188 0L8.708 2.627l2.76 2.76a1.838 1.838 0 0 1 2.327 2.341l2.658 2.66a1.838 1.838 0 1 1-1.102 1.035l-2.49-2.48v6.525a1.84 1.84 0 1 1-1.51-.054V8.835a1.84 1.84 0 0 1-.998-2.41L7.636 3.7.45 10.881a1.55 1.55 0 0 0 0 2.189l10.48 10.477a1.55 1.55 0 0 0 2.186 0l10.43-10.43a1.55 1.55 0 0 0 0-2.187\"/></svg>"
+}
+
+// Lista com marcadores: a estrutura do arquivo.
+func outlineIcon(): Str {
+	return svg("<path d=\"M9 6.5h11M9 12h11M9 17.5h11\"/><circle cx=\"4.8\" cy=\"6.5\" r=\"1.1\"/><circle cx=\"4.8\" cy=\"12\" r=\"1.1\"/><circle cx=\"4.8\" cy=\"17.5\" r=\"1.1\"/>")
+}
+
+// Engrenagem: configurações.
+func gearIcon(): Str {
+	return svg("<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z\"/>")
+}
+
+// ── buscar no arquivo (Ctrl+F) ───────────────────────────────────────────
+
+// As ocorrências do texto da caixa de busca no documento aberto.
+func findMatches(state: model.State): Int[dyn] {
+	if state.find.open {
+		if activeDoc(state) is Result.Ok(doc) {
+			return search.occurrences(doc.text, state.find.text, state.find.caseSensitive, 5000)
+		}
+	}
+	Int[dyn] none = []
+	return none
+}
+
+func findBox(state: model.State): Str {
+	if !state.find.open || !showsDoc(state) {
+		return ""
+	}
+	matches := findMatches(state)
+	mut count := tx(state, "Nenhum resultado")
+	if len(matches) > 0 {
+		count = "{state.find.index + 1} " + tx(state, "de") + " {len(matches)}"
+	} else if state.find.text == "" {
+		count = ""
+	}
+	mut caseCls := "act toggle"
+	if state.find.caseSensitive {
+		caseCls = "act toggle on"
+	}
+	return "<div class=\"findbox\"><input class=\"field\" data-input=\"find\" data-submit=\"findNext\" data-find=\"1\" spellcheck=\"false\"" +
+		attr("placeholder", tx(state, "Buscar")) + attr("value", state.find.text) + ">" +
+		"<span class=\"" + caseCls + "\"" + act("findCase", "") + attr("title", tx(state, "Diferenciar maiúsculas")) + ">Aa</span>" +
+		"<span class=\"count\">" + esc(count) + "</span>" +
+		headerAction("↑", tx(state, "Anterior (Shift+Enter)"), "findPrev", "") +
+		headerAction("↓", tx(state, "Próximo (Enter)"), "findNext", "") +
+		headerAction("✕", tx(state, "Fechar (Esc)"), "findClose", "") + "</div>"
+}
+
+// ── buscar no projeto (Ctrl+Shift+F) ─────────────────────────────────────
+
+func highlightHit(state: model.State, hit: model.Hit): Str {
+	size := len(state.search.text)
+	before := complete.take(hit.text, hit.column)
+	match := complete.take(complete.skip(hit.text, hit.column), size)
+	after := complete.skip(hit.text, hit.column + size)
+	mut lead := analysis.trimLeft(before)
+	if len(lead) > 40 {
+		lead = "…" + complete.skip(lead, len(lead) - 40)
+	}
+	return esc(lead) + "<mark>" + esc(match) + "</mark>" + esc(after)
+}
+
+func searchPanel(state: model.State): Str {
+	panel := state.search
+	mut caseCls := "act toggle"
+	if panel.caseSensitive {
+		caseCls = "act toggle on"
+	}
+	mut Str[dyn] rows = []
+	mut current := ""
+	for each hit in panel.hits {
+		if hit.path != current {
+			current = hit.path
+			icon := theme.iconFor(workspace.baseName(hit.path))
+			parts := split(hit.path, "/")
+			mut folder := ""
+			last := len(parts) - 2
+			if parts bounds 0 && parts bounds last {
+				folder = join(parts[0:last], "/")
+			}
+			append(rows, "<div class=\"row sfile\"" + act("open", workspace.joinPath(state.root, hit.path)) + attr("title", hit.path) + ">" +
+				"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+				"<span class=\"nm\">" + esc(workspace.baseName(hit.path)) + "</span><span class=\"dir\">" + esc(folder) + "</span></div>")
+		}
+		append(rows, "<div class=\"shit\"" + act("openAt", workspace.joinPath(state.root, hit.path)) + attr("data-text", "{hit.line}:{hit.column}") + ">" +
+			"<span class=\"ln\">{hit.line}</span><span class=\"tx\">" + highlightHit(state, hit) + "</span></div>")
+	}
+	mut summary := ""
+	if panel.done {
+		if len(panel.hits) == 0 {
+			summary = "<div class=\"empty\">" + tx(state, "Nenhum resultado") + "</div>"
+		} else {
+			summary = "<div class=\"empty\">{len(panel.hits)} " + tx(state, "resultado(s) em") + " {panel.files} " + tx(state, "arquivo(s)") + "</div>"
+		}
+		if panel.truncated {
+			summary = summary + "<div class=\"empty\">" + tx(state, "Resultados demais — mostrando os primeiros.") + "</div>"
+		}
+	}
+	return "<div class=\"hdr\">" + tx(state, "BUSCAR") + "</div>" +
+		"<div class=\"prompt searchbox\"><input class=\"field\" data-input=\"searchText\" data-submit=\"searchRun\" spellcheck=\"false\"" +
+		attr("placeholder", tx(state, "Buscar no projeto (Enter)")) + attr("value", panel.text) + ">" +
+		"<span class=\"" + caseCls + "\"" + act("searchCase", "") + attr("title", tx(state, "Diferenciar maiúsculas")) + ">Aa</span></div>" +
+		summary + join(rows, "")
+}
+
+// ── abrir arquivo pelo nome (Ctrl+P) ─────────────────────────────────────
+
+func paletteMatches(state: model.State): Str[dyn] {
+	return search.quickOpen(state.palette.files, state.palette.text, 60)
+}
+
+func palette(state: model.State): Str {
+	if !state.palette.open {
+		return ""
+	}
+	found := paletteMatches(state)
+	mut Str[dyn] items = []
+	for i := 0; i < len(found); i++ {
+		rel := found[i]
+		name := workspace.baseName(rel)
+		icon := theme.iconFor(name)
+		mut folder := ""
+		parts := split(rel, "/")
+		last := len(parts) - 2
+		if parts bounds 0 && parts bounds last {
+			folder = join(parts[0:last], "/")
+		}
+		mut cls := "pi"
+		if i == state.palette.index {
+			cls = "pi on"
+		}
+		append(items, "<div class=\"" + cls + "\"" + act("paletteAccept", "{i}") + ">" +
+			"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+			"<span class=\"nm\">" + esc(name) + "</span><span class=\"dir\">" + esc(folder) + "</span></div>")
+	}
+	if len(found) == 0 {
+		append(items, "<div class=\"empty\">" + tx(state, "Nenhum arquivo encontrado") + "</div>")
+	}
+	return "<div class=\"palette\"><input class=\"field\" data-input=\"palette\" data-submit=\"paletteAccept\" data-palette=\"1\" spellcheck=\"false\" autocomplete=\"off\"" +
+		attr("placeholder", tx(state, "Buscar arquivo pelo nome")) + attr("value", state.palette.text) + ">" +
+		"<div class=\"pl\">" + join(items, "") + "</div></div>"
 }
 
 // ── explorador ───────────────────────────────────────────────────────────
@@ -375,7 +547,7 @@ func explorer(state: model.State): Str {
 		headerAction("⊟", tx(state, "Recolher tudo"), "collapse", "") +
 		headerAction("↑", tx(state, "Pasta acima"), "up", "") +
 		headerAction("…", tx(state, "Abrir pasta") + keyHint(state, "openFolder"), "action", "openFolder") + "</div>" +
-		"<div class=\"root\"" + attr("title", state.root) + ">⌄ " + esc(workspace.baseName(state.root)) + "</div>" +
+		"<div class=\"root\"" + attr("title", state.root) + ">" + esc(workspace.baseName(state.root)) + "</div>" +
 		promptRow(state) + join(rows, "")
 }
 
@@ -514,6 +686,8 @@ func sidePanel(state: model.State): Str {
 		return outlinePanel(state)
 	} else if state.side is model.SideView.GitSide {
 		return gitPanel(state)
+	} else if state.side is model.SideView.SearchSide {
+		return searchPanel(state)
 	}
 	return explorer(state)
 }
@@ -1049,6 +1223,7 @@ func overlay(state: model.State): Str {
 		return "<div class=\"dialog\"><div class=\"msg about\"><div class=\"big\">" + logo() + "</div>" +
 			"<div class=\"about-name\">Hive Studio</div>" +
 			"<div>" + tx(state, "Uma IDE para Hive, escrita em Hive.") + "</div>" +
+			"<div class=\"empty\">" + tx(state, "Versão") + " " + esc(version.current()) + "</div>" +
 			"<div class=\"empty\">" + tx(state, "Configurações em") + " " + esc(settings.path()) + "</div>" +
 			"<div class=\"about-actions\"><button class=\"btn\"" + act("closeAbout", "") + ">" + tx(state, "Fechar") + "</button></div></div></div>"
 	}
@@ -1133,11 +1308,17 @@ func frame(state: model.State): model.Frame {
 		region("commit", commitHtml),
 		region("welcome", welcomeHtml),
 		region("popup", popup(state)),
+		region("find", findBox(state)),
+		region("palette", palette(state)),
 		region("panel", panel(state)),
 		region("status", statusBar(state)),
 		region("overlay", overlay(state))
 	]
 	model.Region[dyn] all = regions
+	mut Int[dyn] marks = []
+	if layout == "edit" || layout == "split" {
+		marks = findMatches(state)
+	}
 	return model.Frame(
 		regions: all,
 		css: theme.css(theme.byName(prefs.theme), prefs.fontSize, prefs.tabSize),
@@ -1154,6 +1335,10 @@ func frame(state: model.State): model.Frame {
 		panelMax: state.panelMax,
 		focus: state.focus,
 		focusSerial: state.focusSerial,
+		marks: marks,
+		markLength: len(state.find.text),
+		markCurrent: state.find.index,
+		findSerial: state.find.serial,
 		recording: state.recording != "",
 		title: title
 	)

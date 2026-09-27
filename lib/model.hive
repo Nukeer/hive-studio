@@ -88,6 +88,43 @@ type Terminal {
 	historyAt: Int
 }
 
+// A caixa de busca do editor (Ctrl+F). `index` é a ocorrência atual; `serial`
+// muda quando a página deve selecioná-la.
+type FindBox {
+	open:          Bool
+	text:          Str
+	caseSensitive: Bool
+	index:         Int
+	serial:        Int
+}
+
+// Um trecho achado no projeto: o arquivo (relativo à raiz), a linha (a partir
+// de 1), a coluna e o texto da linha.
+type Hit {
+	path:   Str
+	line:   Int
+	column: Int
+	text:   Str
+}
+
+// O painel de busca no projeto (Ctrl+Shift+F).
+type SearchPanel {
+	text:          Str
+	caseSensitive: Bool
+	hits:          Hit[dyn]
+	files:         Int
+	truncated:     Bool
+	done:          Bool
+}
+
+// A busca rápida de arquivos (Ctrl+P). `files` é a lista da pasta, lida ao abrir.
+type Palette {
+	open:  Bool
+	text:  Str
+	index: Int
+	files: Str[dyn]
+}
+
 type Pane {
 	OutputPane
 	ProblemsPane
@@ -96,6 +133,7 @@ type Pane {
 
 type SideView {
 	ExplorerSide
+	SearchSide
 	OutlineSide
 	GitSide
 }
@@ -196,6 +234,21 @@ type Msg {
 	GitPull
 	GitInit
 	GitDone          { command: Str, output: Str, ok: Bool }
+	FindOpen         { text: Str }
+	FindTyped        { text: Str }
+	FindNext
+	FindPrev
+	FindClose
+	FindToggleCase
+	SearchTyped      { text: Str }
+	SearchRun
+	SearchToggleCase
+	OpenAt           { path: Str, line: Int, column: Int }
+	PaletteOpen
+	PaletteTyped     { text: Str }
+	PaletteMove      { step: Int }
+	PaletteAccept    { index: Int }
+	PaletteClose
 	PickFolder
 	PickFile
 	Picked           { mode: Str, path: Str }
@@ -250,6 +303,9 @@ type State {
 	commit:        CommitTab
 	words:         hive.map.Map<Str, Str>
 	about:         Bool
+	find:          FindBox
+	search:        SearchPanel
+	palette:       Palette
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -287,6 +343,10 @@ type Frame {
 	panelMax:  Bool
 	focus:     Str
 	focusSerial: Int
+	marks:       Int[dyn]
+	markLength:  Int
+	markCurrent: Int
+	findSerial:  Int
 	recording: Bool
 	title:     Str
 }
@@ -355,8 +415,21 @@ func initial(root: Str, prefs: settings.Settings): State {
 		focusSerial: 0,
 		commit: CommitTab("", "", ""),
 		words: i18n.words(prefs.language),
-		about: false
+		about: false,
+		find: FindBox(false, "", false, 0, 0),
+		search: emptySearch(),
+		palette: emptyPalette()
 	)
+}
+
+func emptySearch(): SearchPanel {
+	Hit[dyn] none = []
+	return SearchPanel("", false, none, 0, false, false)
+}
+
+func emptyPalette(): Palette {
+	Str[dyn] none = []
+	return Palette(false, "", 0, none)
 }
 
 func emptyGit(): GitInfo {

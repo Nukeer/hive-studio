@@ -23,6 +23,7 @@ import ./lib/process
 import ./lib/native.go
 import ./lib/dialogs
 import ./lib/i18n
+import ./lib/search
 
 // ── explorador ───────────────────────────────────────────────────────────
 
@@ -442,6 +443,32 @@ func clampInt(value: Int, low: Int, high: Int): Int {
 	return value
 }
 
+// ── buscas ───────────────────────────────────────────────────────────────
+
+// A primeira ocorrência da busca a partir do cursor (ou a primeira de todas).
+func firstMatchFrom(state: model.State, caret: Int): Int {
+	matches := render.findMatches(state)
+	for i := 0; i < len(matches); i++ {
+		if matches[i] >= caret {
+			return i
+		}
+	}
+	return 0
+}
+
+// Abre um arquivo e põe o cursor numa linha e coluna (a partir de 1 e de 0).
+proc jumpTo(state: model.State, path: Str, line: Int, column: Int): model.State {
+	target := workspace.tidy(path)
+	mut jumped := state
+	if workspace.tidy(render.activePath(state)) != target {
+		jumped = openDoc(state, target)
+	}
+	jumped.editorView = model.EditorView.DocView()
+	jumped.caret = navigate.offsetOf(activeText(jumped), line, column)
+	jumped.textSerial = jumped.textSerial + 1
+	return clearSuggestions(jumped)
+}
+
 // ── a dobra ──────────────────────────────────────────────────────────────
 
 // Painel, terminal, git e navegação: separados da dobra principal para cada
@@ -587,6 +614,78 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 	} else if message is model.Msg.CloseCommit {
 		next.commit = model.CommitTab("", "", "")
 		next.editorView = model.EditorView.DocView()
+	} else if message is model.Msg.FindOpen(text) {
+		next.find.open = true
+		if text != "" && indexOf(text, "\n") is Result.Error(_) {
+			next.find.text = text
+		}
+		next.find.index = firstMatchFrom(next, state.caret)
+		next.find.serial = state.find.serial + 1
+		return Result.Ok(withFocus(next, "find"))
+	} else if message is model.Msg.FindTyped(text) {
+		next.find.text = text
+		next.find.index = firstMatchFrom(next, state.caret)
+		next.find.serial = state.find.serial + 1
+	} else if message is model.Msg.FindNext || message is model.Msg.FindPrev {
+		count := len(render.findMatches(state))
+		if count > 0 {
+			mut delta := 1
+			if message is model.Msg.FindPrev {
+				delta = -1
+			}
+			next.find.index = ((state.find.index + delta) % count + count) % count
+			next.find.serial = state.find.serial + 1
+		}
+	} else if message is model.Msg.FindToggleCase {
+		next.find.caseSensitive = !state.find.caseSensitive
+		next.find.index = firstMatchFrom(next, state.caret)
+		next.find.serial = state.find.serial + 1
+	} else if message is model.Msg.FindClose {
+		next.find.open = false
+		return Result.Ok(withFocus(next, "editor"))
+	} else if message is model.Msg.SearchTyped(text) {
+		next.search.text = text
+	} else if message is model.Msg.SearchRun || message is model.Msg.SearchToggleCase {
+		if message is model.Msg.SearchToggleCase {
+			next.search.caseSensitive = !state.search.caseSensitive
+		}
+		if next.search.text == "" {
+			return Result.Ok(next)
+		}
+		found := search.searchProject(state.root, next.search.text, next.search.caseSensitive, state.settings.showHidden, 2000)
+		next.search.hits = found.hits
+		next.search.files = found.files
+		next.search.truncated = found.truncated
+		next.search.done = true
+		next.sideOpen = true
+		next.side = model.SideView.SearchSide()
+	} else if message is model.Msg.OpenAt(path, line, column) {
+		return Result.Ok(jumpTo(state, path, line, column))
+	} else if message is model.Msg.PaletteOpen {
+		next.palette = model.Palette(true, "", 0, search.allFiles(state.root, state.settings.showHidden, 20000))
+		return Result.Ok(withFocus(next, "palette"))
+	} else if message is model.Msg.PaletteTyped(text) {
+		next.palette.text = text
+		next.palette.index = 0
+	} else if message is model.Msg.PaletteMove(delta) {
+		count := len(render.paletteMatches(state))
+		if count > 0 {
+			next.palette.index = ((state.palette.index + delta) % count + count) % count
+		}
+	} else if message is model.Msg.PaletteAccept(chosen) {
+		found := render.paletteMatches(state)
+		mut index := chosen
+		if index < 0 {
+			index = state.palette.index
+		}
+		next.palette = model.emptyPalette()
+		if found bounds index {
+			return Result.Ok(openDoc(next, workspace.joinPath(state.root, found[index])))
+		}
+		return Result.Ok(withFocus(next, "editor"))
+	} else if message is model.Msg.PaletteClose {
+		next.palette = model.emptyPalette()
+		return Result.Ok(withFocus(next, "editor"))
 	} else if message is model.Msg.PickFolder {
 		mut start := state.root
 		if state.git.repo {
@@ -891,7 +990,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 // o texto novo: é o `textSerial` que avisa.
 proc step(state: model.State, message: model.Msg, from: hive.syslink.Envelope): model.State {
 	mut next := update(state, message, from)
-	jumping := message is model.Msg.GotoDefinition(_)
+	jumping := message is model.Msg.GotoDefinition(_) || message is model.Msg.OpenAt(_, _, _)
 	if render.activePath(next) != render.activePath(state) {
 		next.textSerial = next.textSerial + 1
 		if !jumping {
@@ -968,6 +1067,12 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 		return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
 	} else if action == "definition" {
 		return Result.Ok(model.Msg.GotoDefinition(caret))
+	} else if action == "searchProject" {
+		return Result.Ok(model.Msg.ShowSide(model.SideView.SearchSide()))
+	} else if action == "quickOpen" {
+		return Result.Ok(model.Msg.PaletteOpen())
+	} else if action == "find" {
+		return Result.Ok(model.Msg.FindOpen(""))
 	} else if action == "openFolder" {
 		return Result.Ok(model.Msg.PickFolder())
 	} else if action == "openFile" {
@@ -999,6 +1104,8 @@ func escapeMsg(state: model.State): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.CancelRecording())
 	} else if state.about {
 		return Result.Ok(model.Msg.CloseAbout())
+	} else if state.palette.open {
+		return Result.Ok(model.Msg.PaletteClose())
 	} else if state.git.confirm != "" {
 		return Result.Ok(model.Msg.GitCancelConfirm())
 	} else if state.peekFile != "" {
@@ -1007,6 +1114,8 @@ func escapeMsg(state: model.State): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.CloseSuggest())
 	} else if !(state.prompt == model.Prompt.NoPrompt()) {
 		return Result.Ok(model.Msg.PromptCancel())
+	} else if state.find.open {
+		return Result.Ok(model.Msg.FindClose())
 	}
 	return Result.Error(false)
 }
@@ -1041,10 +1150,33 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.OutlineSide()))
 		} else if arg == "git" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
+		} else if arg == "search" {
+			return Result.Ok(model.Msg.ShowSide(model.SideView.SearchSide()))
 		}
 		return Result.Ok(model.Msg.ShowSide(model.SideView.ExplorerSide()))
 	} else if a == "definition" {
 		return Result.Ok(model.Msg.GotoDefinition(event.caret))
+	} else if a == "findNext" {
+		return Result.Ok(model.Msg.FindNext())
+	} else if a == "findPrev" {
+		return Result.Ok(model.Msg.FindPrev())
+	} else if a == "findClose" {
+		return Result.Ok(model.Msg.FindClose())
+	} else if a == "findCase" {
+		return Result.Ok(model.Msg.FindToggleCase())
+	} else if a == "searchRun" {
+		return Result.Ok(model.Msg.SearchRun())
+	} else if a == "searchCase" {
+		return Result.Ok(model.Msg.SearchToggleCase())
+	} else if a == "openAt" {
+		if event.text is "{line}:{column}" {
+			return Result.Ok(model.Msg.OpenAt(arg, numberOr(line, 1), numberOr(column, 0)))
+		}
+		return Result.Ok(model.Msg.OpenAt(arg, 1, 0))
+	} else if a == "paletteAccept" {
+		return Result.Ok(model.Msg.PaletteAccept(numberOr(arg, -1)))
+	} else if a == "paletteMove" {
+		return Result.Ok(model.Msg.PaletteMove(numberOr(arg, 1)))
 	} else if a == "action" {
 		return actionMsg(state, arg, event.caret)
 	} else if a == "closeAbout" {
@@ -1152,6 +1284,12 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.TermTyped(event.text))
 	} else if a == "gitMessage" {
 		return Result.Ok(model.Msg.GitMessageTyped(event.text))
+	} else if a == "find" {
+		return Result.Ok(model.Msg.FindTyped(event.text))
+	} else if a == "searchText" {
+		return Result.Ok(model.Msg.SearchTyped(event.text))
+	} else if a == "palette" {
+		return Result.Ok(model.Msg.PaletteTyped(event.text))
 	} else if a == "language" {
 		return Result.Ok(model.Msg.SetLanguage(event.text))
 	} else if a == "panelHeight" {
@@ -1170,6 +1308,9 @@ func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 			return Result.Ok(model.Msg.KeyPressed(event.text))
 		}
 		if keys.actionFor(state.settings.keymap, event.text) is Result.Ok(action) {
+			if action == "find" {
+				return Result.Ok(model.Msg.FindOpen(event.arg))
+			}
 			return actionMsg(state, action, event.caret)
 		}
 	} else if event.kind == "field" {
@@ -1521,4 +1662,25 @@ test "as opções da tela inicial são clicáveis" {
 	} else {
 		assert false
 	}
+}
+
+test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
+	folder := scratch()
+	mut state := fresh(folder)
+	state = openDoc(state, folder + "/main.hive")
+	state.find = model.FindBox(true, "ECHO", false, 0, 0)
+	assert len(render.findMatches(state)) == 1
+	assert indexOf(render.findBox(state), "1 de 1") is Result.Ok(_)
+	state.find.caseSensitive = true
+	assert len(render.findMatches(state)) == 0
+	state.palette = model.Palette(true, "main", 0, search.allFiles(folder, false, 100))
+	assert render.paletteMatches(state) == ["main.hive"]
+	assert indexOf(render.palette(state), "main.hive") is Result.Ok(_)
+	if actionMsg(state, "quickOpen", 0) is Result.Ok(message) {
+		assert message == model.Msg.PaletteOpen()
+	} else {
+		assert false
+	}
+	moved := jumpTo(state, folder + "/main.hive", 2, 1)
+	assert moved.caret == len("proc main(): void \{") + 2
 }

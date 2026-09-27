@@ -140,6 +140,35 @@ button,input,select{font:inherit}
 #app.panelmax #panel{flex:1;height:auto!important}
 body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
 #code.linkable #ta{cursor:pointer}
+#marks{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+#marks i{position:absolute;background:color-mix(in srgb,var(--warn) 30%,transparent);border-radius:2px}
+#marks i.cur{background:color-mix(in srgb,var(--accent) 50%,transparent);box-shadow:0 0 0 1px var(--accent)}
+#find:empty{display:none}
+#find{position:absolute;top:6px;right:22px;z-index:25}
+.findbox{display:flex;align-items:center;gap:4px;background:var(--side);border:1px solid var(--border);border-radius:6px;padding:4px 6px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+.findbox .field{width:240px;padding:3px 7px}
+.findbox .count{min-width:86px;font-size:12px;color:var(--muted);text-align:center}
+.act.toggle{font-size:12px;font-weight:600;border:1px solid transparent}
+.act.toggle.on{color:var(--text);background:var(--selection);border-color:var(--accent)}
+#palette:empty{display:none}
+#palette{position:fixed;inset:0;z-index:70;display:flex;justify-content:center;align-items:flex-start;padding-top:52px;background:rgba(0,0,0,.2)}
+.palette{width:min(640px,92vw);background:var(--side);border:1px solid var(--border);border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,.45);overflow:hidden}
+.palette .field{width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;padding:10px 14px;font-size:14px;background:var(--input)}
+.palette .pl{max-height:420px;overflow:auto;padding:4px}
+.pi{display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap}
+.pi:hover{background:color-mix(in srgb,var(--selection) 60%,transparent)}
+.pi.on{background:var(--selection)}
+.pi .ic{width:20px;text-align:center;font-size:11px;font-weight:700}
+.pi .dir,.sfile .dir{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+.searchbox .act.toggle{padding:2px 6px}
+.sfile{padding-left:10px;margin-top:4px}
+.sfile .nm{font-weight:600}
+.shit{display:flex;gap:8px;padding:1px 10px 1px 30px;cursor:pointer;font-size:12px;white-space:nowrap;overflow:hidden}
+.shit:hover{background:var(--selection)}
+.shit .ln{color:var(--gutter);min-width:26px;text-align:right;font-family:var(--mono)}
+.shit .tx{overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
+.shit mark{background:color-mix(in srgb,var(--warn) 35%,transparent);color:inherit;border-radius:2px}
+.aicon{width:24px;height:24px;display:block}
 #link{position:absolute;display:none;pointer-events:none;border-bottom:1px solid var(--syn-call);background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:2px;z-index:2}
 .g-new{color:var(--git-new)!important}
 .g-mod{color:var(--git-mod)!important}
@@ -277,9 +306,11 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 					<div id="code">
 						<pre id="hl"></pre>
 						<textarea id="ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+						<div id="marks"></div>
 						<div id="link"></div>
 					</div>
 					<div id="popup"></div>
+					<div id="find"></div>
 				</div>
 				<div id="preview"></div>
 				<div id="settings"></div>
@@ -292,6 +323,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	</div>
 	<div id="status"></div>
 	<div id="overlay"></div>
+	<div id="palette"></div>
 </div>
 <script>
 (function () {
@@ -405,8 +437,23 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		}
 		if (frame.focusSerial !== focusSerial) {
 			focusSerial = frame.focusSerial;
+			if (frame.focus === "editor") { ta.focus(); }
 			var wanted = document.querySelector('[data-input="' + frame.focus + '"]');
-			if (wanted) { wanted.focus(); if (frame.focus === "prompt" && wanted.select) { wanted.select(); } }
+			if (wanted) {
+				wanted.focus();
+				if ((frame.focus === "prompt" || frame.focus === "find") && wanted.select) { wanted.select(); }
+			}
+		}
+		marks = frame.marks || []; markLength = frame.markLength; markCurrent = frame.markCurrent;
+		if (frame.findSerial !== findSerial) {
+			findSerial = frame.findSerial;
+			var start = marks[markCurrent];
+			if (start !== undefined) {
+				var keep = document.activeElement;
+				ta.setSelectionRange(start, start + markLength);
+				reveal(start);
+				if (keep && keep !== ta && keep.focus) { keep.focus(); }
+			}
 		}
 		sync();
 		if (popupOpen) { place(); }
@@ -414,6 +461,30 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 
 	function sync() {
 		hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gutter.scrollTop = ta.scrollTop;
+		drawMarks();
+	}
+
+	// As ocorrências da busca, desenhadas por cima do texto (só as visíveis).
+	var marks = [], markLength = 0, markCurrent = 0, findSerial = 0;
+	var marksLayer = document.getElementById("marks");
+	function drawMarks() {
+		if (!marks.length || !markLength) { if (marksLayer.firstChild) { marksLayer.innerHTML = ""; } return; }
+		var style = getComputedStyle(ta), height = parseFloat(style.lineHeight), width = measure();
+		var tab = parseInt(style.tabSize, 10) || 4, padLeft = parseFloat(style.paddingLeft), padTop = parseFloat(style.paddingTop);
+		var text = ta.value, starts = [0];
+		for (var i = 0; i < text.length; i++) { if (text.charCodeAt(i) === 10) { starts.push(i + 1); } }
+		var first = Math.floor(ta.scrollTop / height) - 1, last = first + Math.ceil(ta.clientHeight / height) + 2;
+		var html = "";
+		for (var m = 0; m < marks.length; m++) {
+			var offset = marks[m], low = 0, high = starts.length - 1;
+			while (low < high) { var mid = (low + high + 1) >> 1; if (starts[mid] <= offset) { low = mid; } else { high = mid - 1; } }
+			if (low < first || low > last) { continue; }
+			var lineText = text.slice(starts[low], offset + markLength);
+			var begin = visualColumn(lineText, offset - starts[low], tab), end = visualColumn(lineText, offset - starts[low] + markLength, tab);
+			html += '<i class="' + (m === markCurrent ? "cur" : "") + '" style="left:' + (padLeft + begin * width - ta.scrollLeft) +
+				'px;top:' + (padTop + low * height - ta.scrollTop) + 'px;width:' + Math.max(2, (end - begin) * width) + 'px;height:' + height + 'px"></i>';
+		}
+		marksLayer.innerHTML = html;
 	}
 
 	function measure() {
@@ -594,6 +665,12 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		var combo = comboOf(e);
 		if (recording) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart }); return; }
 		var field = e.target;
+		if (field.dataset && field.dataset.palette && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+			e.preventDefault(); send({ kind: "act", act: "paletteMove", arg: e.key === "ArrowUp" ? "-1" : "1" }); return;
+		}
+		if (field.dataset && field.dataset.find && e.key === "Enter" && e.shiftKey) {
+			e.preventDefault(); send({ kind: "act", act: "findPrev" }); return;
+		}
 		if (field.dataset && field.dataset.history) {
 			if (e.key === "ArrowUp" || e.key === "ArrowDown") {
 				e.preventDefault(); send({ kind: "act", act: "termHistory", arg: e.key === "ArrowUp" ? "-1" : "1" }); return;
@@ -612,7 +689,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		if (popupOpen && e.target === ta && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End")) {
 			send({ kind: "act", act: "closeSuggest" });
 		}
-		if (keys.indexOf(combo) >= 0) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart }); return; }
+		if (keys.indexOf(combo) >= 0) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart, arg: ta.value.slice(ta.selectionStart, ta.selectionEnd) }); return; }
 		if (e.target === ta && e.key === "Tab" && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); insert("\t"); return; }
 		if (e.target === ta && e.key === "Enter" && !e.ctrlKey && !e.shiftKey && !e.altKey) {
 			e.preventDefault();
