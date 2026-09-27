@@ -43,6 +43,15 @@ func activePath(state: model.State): Str {
 	return ""
 }
 
+func showingCommit(state: model.State): Bool {
+	return state.commit.key != "" && state.editorView == model.EditorView.CommitPage()
+}
+
+// O editor mostra um documento (e não Configurações nem um commit).
+func showsDoc(state: model.State): Bool {
+	return !showingSettings(state) && !showingCommit(state)
+}
+
 func showingSettings(state: model.State): Bool {
 	return state.settingsOpen && state.editorView == model.EditorView.SettingsView()
 }
@@ -61,6 +70,9 @@ func targetOf(state: model.State): Str {
 }
 
 func layoutOf(state: model.State): Str {
+	if showingCommit(state) {
+		return "commit"
+	}
 	if showingSettings(state) {
 		return "settings"
 	}
@@ -202,7 +214,7 @@ func gitBadge(state: model.State, path: Str): Str {
 
 func treeRow(state: model.State, row: model.TreeRow): Str {
 	entry := row.entry
-	current := entry.path == activePath(state) && !showingSettings(state)
+	current := entry.path == activePath(state) && showsDoc(state)
 	mut cls := "row"
 	if current {
 		cls = "row on"
@@ -301,9 +313,10 @@ func gitRow(state: model.State, file: model.GitFile, stagedList: Bool): Str {
 	if kind != "deleted" {
 		open = act("open", workspace.joinPath(state.git.top, file.path))
 	}
-	mut actions := headerAction("↺", "Descartar alterações", "gitAskDiscard", file.path) + headerAction("+", "Preparar (stage)", "gitStage", file.path)
+	see := headerAction("±", "Ver alterações", "gitShowWork", file.path)
+	mut actions := see + headerAction("↺", "Descartar alterações", "gitAskDiscard", file.path) + headerAction("+", "Preparar (stage)", "gitStage", file.path)
 	if stagedList {
-		actions = headerAction("−", "Tirar da preparação (unstage)", "gitUnstage", file.path)
+		actions = see + headerAction("−", "Tirar da preparação (unstage)", "gitUnstage", file.path)
 	}
 	return "<div class=\"row gitrow\"" + open + attr("title", file.path) + ">" +
 		"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
@@ -366,7 +379,12 @@ func gitPanel(state: model.State): Str {
 	mut Str[dyn] history = []
 	for each line in info.log {
 		if line is "{hash} {subject}" {
-			append(history, "<div class=\"logline\"" + attr("title", line) + "><span class=\"hash\">" + esc(hash) + "</span> " + esc(subject) + "</div>")
+			mut cls := "logline"
+			if state.commit.key != "" && git.startsWith(state.commit.key, hash) {
+				cls = "logline on"
+			}
+			append(history, "<div class=\"" + cls + "\"" + act("gitShow", hash) + attr("title", line + " — clique para ver as alterações") + ">" +
+				"<span class=\"hash\">" + esc(hash) + "</span> " + esc(subject) + "</div>")
 		}
 	}
 	return head +
@@ -390,7 +408,7 @@ func sidePanel(state: model.State): Str {
 
 func tab(state: model.State, index: Int, doc: model.Doc): Str {
 	mut cls := "tab"
-	if index == state.active && !showingSettings(state) {
+	if index == state.active && showsDoc(state) {
 		cls = "tab on"
 	}
 	mut closer := "<span class=\"x\"" + act("close", "{index}") + attr("title", "Fechar" + keyHint(state, "closeTab")) + ">×</span>"
@@ -416,6 +434,15 @@ func tabStrip(state: model.State): Str {
 		append(items, "<div class=\"" + cls + "\"" + act("settings", "") + "><span class=\"ic\">⚙</span><span>Configurações</span>" +
 			"<span class=\"x\"" + act("closeSettings", "") + ">×</span></div>")
 	}
+	if state.commit.key != "" {
+		mut cls := "tab"
+		if showingCommit(state) {
+			cls = "tab on"
+		}
+		append(items, "<div class=\"" + cls + "\"" + act("focusCommit", "") + attr("title", state.commit.title) + ">" +
+			"<span class=\"ic\" style=\"color:var(--accent)\">⑂</span><span>" + esc(state.commit.title) + "</span>" +
+			"<span class=\"x\"" + act("closeCommit", "") + ">×</span></div>")
+	}
 	return join(items, "")
 }
 
@@ -432,6 +459,9 @@ func modeSwitch(doc: model.Doc): Str {
 }
 
 func breadcrumb(state: model.State): Str {
+	if showingCommit(state) {
+		return "<span>Controle de código  ›  " + esc(state.commit.title) + "</span>"
+	}
 	if showingSettings(state) {
 		return "<span>Configurações  ›  Usuário</span>"
 	}
@@ -628,6 +658,117 @@ func settingsPage(state: model.State): Str {
 		"<table class=\"keys\"><tr><th>Ação</th><th>Atalho</th><th></th></tr>" + join(keyRows, "") + "</table></div>"
 }
 
+// ── um commit, ou as alterações de um arquivo ────────────────────────────
+
+func statusName(status: Str): Str {
+	if status == "A" {
+		return "novo"
+	} else if status == "D" {
+		return "removido"
+	} else if status == "R" {
+		return "renomeado"
+	} else if status == "B" {
+		return "binário"
+	}
+	return "editado"
+}
+
+func statusClass(status: Str): Str {
+	if status == "A" || status == "R" {
+		return "g-new"
+	} else if status == "D" {
+		return "g-del"
+	}
+	return "g-mod"
+}
+
+func counts(added: Int, removed: Int): Str {
+	return "<span class=\"plus\">+{added}</span> <span class=\"minus\">−{removed}</span>"
+}
+
+func lineNumber(n: Int): Str {
+	if n == 0 {
+		return ""
+	}
+	return "{n}"
+}
+
+// O conteúdo da linha, com realce quando o arquivo é Hive (ou Go).
+func diffCode(path: Str, text: Str): Str {
+	if path is "{stem}.hive" || path is "{stem}.go" {
+		return highlight.highlight(text)
+	}
+	return esc(text)
+}
+
+func diffRow(path: Str, line: git.DiffLine): Str {
+	if line.kind == "hunk" {
+		return "<tr class=\"hunk\"><td class=\"no\"></td><td class=\"no\"></td><td class=\"code\" colspan=\"2\">" + esc(line.text) + "</td></tr>"
+	}
+	if line.kind == "note" {
+		return "<tr class=\"note\"><td class=\"no\"></td><td class=\"no\"></td><td class=\"code\" colspan=\"2\">" + esc(line.text) + "</td></tr>"
+	}
+	mut sign := " "
+	if line.kind == "add" {
+		sign = "+"
+	} else if line.kind == "del" {
+		sign = "−"
+	}
+	return "<tr class=\"" + line.kind + "\"><td class=\"no\">" + lineNumber(line.old) + "</td><td class=\"no\">" + lineNumber(line.new) +
+		"</td><td class=\"sign\">" + sign + "</td><td class=\"code\">" + diffCode(path, line.text) + "</td></tr>"
+}
+
+func commitPage(commit: git.Commit): Str {
+	mut added := 0
+	mut removed := 0
+	mut Str[dyn] list = []
+	mut Str[dyn] blocks = []
+	for i := 0; i < len(commit.files); i++ {
+		file := commit.files[i]
+		added = added + file.added
+		removed = removed + file.removed
+		cls := statusClass(file.status)
+		mut shown := esc(file.path)
+		if file.status == "R" {
+			shown = esc(file.oldPath) + " → " + esc(file.path)
+		}
+		icon := theme.iconFor(workspace.baseName(file.path))
+		append(list, "<div class=\"cm-file\" data-scrollto=\"df{i}\">" +
+			"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+			"<span class=\"" + cls + "\">" + shown + "</span><span class=\"grow\"></span>" +
+			counts(file.added, file.removed) + "<span class=\"st " + cls + "\">" + statusName(file.status) + "</span></div>")
+		mut Str[dyn] rows = []
+		for each line in file.lines {
+			append(rows, diffRow(file.path, line))
+		}
+		mut body := "<table class=\"df-body\">" + join(rows, "") + "</table>"
+		if file.status == "B" {
+			body = "<div class=\"empty\">Arquivo binário — sem diff de texto.</div>"
+		} else if len(file.lines) == 0 {
+			body = "<div class=\"empty\">Sem alterações de conteúdo.</div>"
+		}
+		append(blocks, "<div class=\"df\" id=\"df{i}\"><div class=\"df-head\" data-collapse>" +
+			"<span class=\"chev\">⌄</span><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+			"<span class=\"" + cls + "\">" + shown + "</span><span class=\"grow\"></span>" + counts(file.added, file.removed) + "</div>" +
+			body + "</div>")
+	}
+	mut meta := ""
+	if commit.short != "" {
+		meta = "<div class=\"cm-meta\"><span class=\"hash\">" + esc(commit.short) + "</span> · " + esc(commit.author) + " · " + esc(commit.date) + "</div>"
+	}
+	mut body := ""
+	if commit.body != "" {
+		body = "<pre class=\"cm-body\">" + esc(commit.body) + "</pre>"
+	}
+	mut truncated := ""
+	if commit.truncated {
+		truncated = "<div class=\"empty\">O diff é grande demais e foi cortado; use o terminal para vê-lo inteiro.</div>"
+	}
+	return "<div class=\"cm\"><div class=\"cm-head\"><div class=\"cm-subject\">" + esc(commit.subject) + "</div>" + meta + body +
+		"<div class=\"cm-stats\">{len(commit.files)} arquivo(s) · " + counts(added, removed) + "</div></div>" +
+		"<div class=\"cm-files\">" + join(list, "") + "</div>" + truncated + join(blocks, "") + "</div>"
+}
+
 // ── painel inferior ──────────────────────────────────────────────────────
 
 func paneTab(label: Str, arg: Str, on: Bool): Str {
@@ -725,7 +866,7 @@ func statusBar(state: model.State): Str {
 		"<span class=\"grow\"></span>"
 	]
 	if activeDoc(state) is Result.Ok(doc) {
-		if !showingSettings(state) {
+		if showsDoc(state) {
 			append(items, statusItem(caretPosition(doc.text, state.caret), "", "", ""))
 			append(items, statusItem("Tab: {state.settings.tabSize}", "", "", ""))
 			mut language := "Texto"
@@ -815,6 +956,10 @@ func frame(state: model.State): model.Frame {
 	if layout == "settings" {
 		settingsHtml = settingsPage(state)
 	}
+	mut commitHtml := ""
+	if layout == "commit" {
+		commitHtml = state.commit.html
+	}
 	mut welcomeHtml := ""
 	if layout == "welcome" {
 		welcomeHtml = welcome(state)
@@ -837,6 +982,7 @@ func frame(state: model.State): model.Frame {
 		region("hl", hl),
 		region("preview", preview(state)),
 		region("settings", settingsHtml),
+		region("commit", commitHtml),
 		region("welcome", welcomeHtml),
 		region("popup", popup(state)),
 		region("panel", panel(state)),

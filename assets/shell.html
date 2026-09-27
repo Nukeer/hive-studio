@@ -36,7 +36,45 @@ button,input,select{font:inherit}
 #crumbs{flex:none;padding:2px 16px;color:var(--muted);font-size:12px;min-height:24px;display:flex;align-items:center;gap:10px;background:var(--editor)}
 #crumbs .grow{flex:1}
 #work{flex:1;min-height:0;display:flex;position:relative;background:var(--editor)}
-#editor,#preview,#settings,#welcome{flex:1;min-width:0;display:none}
+#editor,#preview,#settings,#welcome,#commit{flex:1;min-width:0;display:none}
+.l-commit #commit{display:block}
+#commit{overflow:auto;padding:22px 30px}
+.cm{max-width:1400px}
+.cm-head{padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.cm-subject{font-size:18px;font-weight:600;margin-bottom:4px}
+.cm-meta{color:var(--muted);font-size:12px}
+.cm-meta .hash,.logline .hash{font-family:var(--mono);color:var(--accent)}
+.cm-body{font-family:inherit;white-space:pre-wrap;margin:10px 0 0;color:var(--text)}
+.cm-stats{margin-top:10px;font-size:12px;color:var(--muted)}
+.plus{color:var(--git-new);font-family:var(--mono);font-size:12px}
+.minus{color:var(--danger);font-family:var(--mono);font-size:12px}
+.cm-files{margin-bottom:18px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.cm-file{display:flex;gap:8px;align-items:center;padding:5px 12px;cursor:pointer;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+.cm-file:last-child{border-bottom:0}
+.cm-file:hover{background:var(--selection)}
+.cm-file .grow,.df-head .grow{flex:1}
+.cm-file .ic,.df-head .ic{width:18px;text-align:center;font-size:11px;font-weight:700}
+.cm-file .st{font-size:11px;width:72px;text-align:right}
+.df{border:1px solid var(--border);border-radius:6px;margin-bottom:16px;overflow:hidden}
+.df-head{display:flex;gap:8px;align-items:center;padding:6px 12px;background:var(--side);cursor:pointer;position:sticky;top:-22px;z-index:1;border-bottom:1px solid var(--border)}
+.df-head .chev{width:12px;color:var(--muted)}
+.df.collapsed .df-body,.df.collapsed .empty{display:none}
+.df.collapsed .df-head{border-bottom:0}
+.df.collapsed .chev{transform:rotate(-90deg)}
+.df-body{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:var(--font-size);line-height:var(--line);tab-size:var(--tab)}
+.df-body td{padding:0 8px;vertical-align:top}
+.df-body td.no{width:1%;min-width:44px;text-align:right;color:var(--gutter);user-select:none;white-space:nowrap}
+.df-body td.sign{width:1%;user-select:none;padding:0 4px}
+.df-body td.code{white-space:pre;width:100%}
+.df-body tr.add td{background:color-mix(in srgb,var(--git-new) 13%,transparent)}
+.df-body tr.add td.sign{color:var(--git-new)}
+.df-body tr.del td{background:color-mix(in srgb,var(--danger) 13%,transparent)}
+.df-body tr.del td.sign{color:var(--danger)}
+.df-body tr.hunk td{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--muted)}
+.df-body tr.note td{color:var(--muted);font-style:italic}
+.logline{cursor:pointer}
+.logline:hover{background:color-mix(in srgb,var(--selection) 60%,transparent);color:var(--text)}
+.logline.on{background:var(--selection);color:var(--text)}
 .l-edit #editor,.l-split #editor{display:flex}
 .l-preview #preview,.l-split #preview{display:block}
 .l-split #preview{border-left:1px solid var(--border)}
@@ -216,6 +254,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 				</div>
 				<div id="preview"></div>
 				<div id="settings"></div>
+				<div id="commit"></div>
 				<div id="welcome"></div>
 			</div>
 			<div id="grip" title="Arraste para redimensionar — duplo clique maximiza"></div>
@@ -416,6 +455,14 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	document.addEventListener("click", function (e) {
 		var link = e.target.closest("a");
 		if (link && link.closest("#preview")) { e.preventDefault(); }
+		var jump = e.target.closest("[data-scrollto]");
+		if (jump) {
+			var block = document.getElementById(jump.dataset.scrollto);
+			if (block) { block.classList.remove("collapsed"); block.scrollIntoView({ block: "start" }); }
+			return;
+		}
+		var fold = e.target.closest("[data-collapse]");
+		if (fold) { fold.parentNode.classList.toggle("collapsed"); return; }
 		var focusTarget = e.target.closest("[data-focus]");
 		if (focusTarget && !window.getSelection().toString()) {
 			var input = document.querySelector('[data-input="' + focusTarget.dataset.focus + '"]');

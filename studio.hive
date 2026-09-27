@@ -563,6 +563,28 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 			next.panelOpen = true
 		}
 		return Result.Ok(gitRefresh(reload(next)))
+	} else if message is model.Msg.GitShow(hash) {
+		shown := git.show(state.git, hash)
+		if shown is Result.Ok(commit) {
+			mut title := commit.subject
+			if len(title) > 40 {
+				title = complete.take(title, 40) + "…"
+			}
+			next.commit = model.CommitTab(commit.hash, commit.short + " " + title, render.commitPage(commit))
+			next.editorView = model.EditorView.CommitPage()
+			next.status = "commit {commit.short}"
+		} else if shown is Result.Error(why) {
+			next.status = "git: " + why
+		}
+	} else if message is model.Msg.GitShowWork(path) {
+		commit := git.working(state.git, path)
+		next.commit = model.CommitTab("work:" + path, "± " + workspace.baseName(path), render.commitPage(commit))
+		next.editorView = model.EditorView.CommitPage()
+	} else if message is model.Msg.FocusCommit {
+		next.editorView = model.EditorView.CommitPage()
+	} else if message is model.Msg.CloseCommit {
+		next.commit = model.CommitTab("", "", "")
+		next.editorView = model.EditorView.DocView()
 	} else if message is model.Msg.GotoDefinition(caret) {
 		if render.activeDoc(state) is Result.Ok(doc) {
 			located := navigate.locate(doc.path, doc.text, caret)
@@ -850,6 +872,9 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 	} else if action == "saveAll" {
 		return Result.Ok(model.Msg.SaveAll())
 	} else if action == "closeTab" {
+		if render.showingCommit(state) {
+			return Result.Ok(model.Msg.CloseCommit())
+		}
 		if render.showingSettings(state) {
 			return Result.Ok(model.Msg.CloseSettings())
 		}
@@ -972,6 +997,14 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.GitPull())
 	} else if a == "gitInit" {
 		return Result.Ok(model.Msg.GitInit())
+	} else if a == "gitShow" {
+		return Result.Ok(model.Msg.GitShow(arg))
+	} else if a == "gitShowWork" {
+		return Result.Ok(model.Msg.GitShowWork(arg))
+	} else if a == "focusCommit" {
+		return Result.Ok(model.Msg.FocusCommit())
+	} else if a == "closeCommit" {
+		return Result.Ok(model.Msg.CloseCommit())
 	} else if a == "settings" {
 		return Result.Ok(model.Msg.OpenSettings())
 	} else if a == "closeSettings" {
@@ -1295,6 +1328,23 @@ test "git marca arquivo novo e editado, e commitado volta ao normal" {
 	page := render.sidePanel(state)
 	assert indexOf(page, "ALTERAÇÕES") is Result.Ok(_)
 	assert indexOf(page, "g-mod") is Result.Ok(_)
+	assert indexOf(page, "gitShow") is Result.Ok(_)
+
+	shown := git.show(state.git, "HEAD")
+	if shown is Result.Ok(commit) {
+		assert commit.subject == "um"
+		html := render.commitPage(commit)
+		assert indexOf(html, "<tr class=\"add\">") is Result.Ok(_)
+		assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+	} else {
+		assert false
+	}
+	work := git.working(state.git, "a.hive")
+	if work.files is [changed] {
+		assert changed.added == 1 && changed.removed == 1
+	} else {
+		assert false
+	}
 	_undo := process.run("git", ["checkout", "--", "a.hive"], folder)
 }
 

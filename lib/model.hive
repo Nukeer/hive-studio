@@ -102,6 +102,16 @@ type SideView {
 type EditorView {
 	DocView
 	SettingsView
+	CommitPage
+}
+
+// A aba que mostra um commit (ou as alterações de um arquivo). O HTML é
+// montado uma vez, quando a aba abre — um diff grande não é redesenhado a
+// cada tecla. `key` é o hash, ou `work:<caminho>`; vazio = aba fechada.
+type CommitTab {
+	key:   Str
+	title: Str
+	html:  Str
 }
 
 // A caixa de texto no topo do explorador, e para que ela serve agora.
@@ -185,6 +195,10 @@ type Msg {
 	GitPull
 	GitInit
 	GitDone          { command: Str, output: Str, ok: Bool }
+	GitShow          { hash: Str }
+	GitShowWork      { path: Str }
+	FocusCommit
+	CloseCommit
 }
 
 type State {
@@ -223,6 +237,7 @@ type State {
 	term:          Terminal
 	focus:         Str
 	focusSerial:   Int
+	commit:        CommitTab
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -317,7 +332,8 @@ func initial(root: Str, prefs: settings.Settings): State {
 		git: emptyGit(),
 		term: emptyTerminal(),
 		focus: "",
-		focusSerial: 0
+		focusSerial: 0,
+		commit: CommitTab("", "", "")
 	)
 }
 

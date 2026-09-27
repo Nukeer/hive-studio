@@ -188,6 +188,177 @@ func count(info: model.GitInfo, wantStaged: Bool): Int {
 	return n
 }
 
+// ── diffs ────────────────────────────────────────────────────────────────
+
+// Uma linha de um diff: `ctx` (igual nos dois lados), `add`, `del`, `hunk`
+// (o cabeçalho `@@ … @@`) ou `note` (binário, sem quebra no fim…). `old` e
+// `new` são os números da linha em cada lado, 0 onde ela não existe.
+type DiffLine {
+	kind: Str
+	old:  Int
+	new:  Int
+	text: Str
+}
+
+// `status` é A (novo), M (editado), D (removido), R (renomeado) ou B (binário).
+type DiffFile {
+	path:    Str
+	oldPath: Str
+	status:  Str
+	added:   Int
+	removed: Int
+	lines:   DiffLine[dyn]
+}
+
+type Commit {
+	hash:      Str
+	short:     Str
+	author:    Str
+	date:      Str
+	subject:   Str
+	body:      Str
+	files:     DiffFile[dyn]
+	truncated: Bool
+}
+
+type Diff {
+	files:     DiffFile[dyn]
+	truncated: Bool
+}
+
+func isFileHeader(line: Str): Bool {
+	for each prefix in ["--- ", "+++ ", "index ", "similarity ", "old mode", "new mode"] {
+		if startsWith(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func emptyFile(path: Str, oldPath: Str): DiffFile {
+	DiffLine[dyn] none = []
+	return DiffFile(path, oldPath, "M", 0, 0, none)
+}
+
+// Lê a saída de `git show`/`git diff`. Guarda no máximo `limit` linhas de
+// diff; o resto é contado mas não guardado, e `truncated` avisa.
+func parseDiff(text: Str, limit: Int): Diff {
+	mut DiffFile[dyn] files = []
+	mut current := emptyFile("", "")
+	mut open := false
+	mut oldNo := 0
+	mut newNo := 0
+	mut kept := 0
+	mut truncated := false
+	for each raw in split(replaceAll(text, "\r", ""), "\n") {
+		if raw is "diff --git a/{a} b/{b}" {
+			if open {
+				append(files, current)
+			}
+			current = emptyFile(b, a)
+			open = true
+		} else if open && raw is "new file mode{rest}" {
+			current.status = "A"
+		} else if open && raw is "deleted file mode{rest}" {
+			current.status = "D"
+		} else if open && raw is "rename from {from}" {
+			current.status = "R"
+			current.oldPath = from
+		} else if open && raw is "rename to {to}" {
+			current.path = to
+		} else if open && raw is "Binary files{rest}" {
+			current.status = "B"
+		} else if open && raw is "@@ -{a is (\d+)}{r1} +{b is (\d+)}{r2}@@{ctx}" {
+			oldNo = numberIn(a)
+			newNo = numberIn(b)
+			if kept < limit {
+				mut lines := current.lines
+				append(lines, DiffLine("hunk", 0, 0, raw))
+				current.lines = lines
+				kept++
+			}
+		} else if open && isFileHeader(raw) {
+			// cabeçalho do arquivo, já lido acima
+		} else if open && raw != "" {
+			first := complete.take(raw, 1)
+			body := complete.skip(raw, 1)
+			mut kind := ""
+			mut oldAt := 0
+			mut newAt := 0
+			if first == "+" {
+				kind = "add"
+				newAt = newNo
+				newNo++
+				current.added = current.added + 1
+			} else if first == "-" {
+				kind = "del"
+				oldAt = oldNo
+				oldNo++
+				current.removed = current.removed + 1
+			} else if first == " " {
+				kind = "ctx"
+				oldAt = oldNo
+				newAt = newNo
+				oldNo++
+				newNo++
+			} else if first == "\\" {
+				kind = "note"
+			}
+			if kind != "" {
+				if kept < limit {
+					mut lines := current.lines
+					append(lines, DiffLine(kind, oldAt, newAt, body))
+					current.lines = lines
+					kept++
+				} else {
+					truncated = true
+				}
+			}
+		}
+	}
+	if open {
+		append(files, current)
+	}
+	return Diff(files, truncated)
+}
+
+func diffLimit(): Int {
+	return 8 * 1000
+}
+
+// Um commit inteiro: quem, quando, a mensagem e o diff contra o primeiro pai.
+proc show(info: model.GitInfo, hash: Str): Result<Commit, Str> {
+	meta := process.run("git", ["-c", "core.quotepath=false", "show", "-s", "--date=format:%d/%m/%Y %H:%M",
+		"--format=%H%n%h%n%an <%ae>%n%ad%n%s%n%b", hash], info.top)
+	if meta.code != 0 {
+		return Result.Error(process.firstLine(meta.text))
+	}
+	fields := split(replaceAll(meta.text, "\r", ""), "\n")
+	if fields is [full, short, author, date, subject, ...body] {
+		patch := process.run("git", ["-c", "core.quotepath=false", "show", "--no-color", "--format=", "--patch", "-M",
+			"--diff-merges=first-parent", hash], info.top)
+		parsed := parseDiff(patch.text, diffLimit())
+		return Result.Ok(Commit(full, short, author, date, subject, join(body, "\n"), parsed.files, parsed.truncated))
+	}
+	return Result.Error("não foi possível ler o commit {hash}")
+}
+
+// O que mudou num arquivo desde o último commit (preparado ou não).
+proc working(info: model.GitInfo, path: Str): Commit {
+	mut untracked := false
+	for each file in info.files {
+		if file.path == path && file.index == "?" {
+			untracked = true
+		}
+	}
+	mut patch := process.run("git", ["-c", "core.quotepath=false", "diff", "--no-color", "-M", "HEAD", "--", path], info.top)
+	if untracked || patch.code != 0 {
+		patch = process.run("git", ["-c", "core.quotepath=false", "diff", "--no-color", "--no-index", "--", "/dev/null", path], info.top)
+	}
+	parsed := parseDiff(patch.text, diffLimit())
+	return Commit("", "", "", "", "Alterações não commitadas", path, parsed.files, parsed.truncated)
+}
+
 // ── ações ────────────────────────────────────────────────────────────────
 
 proc stage(info: model.GitInfo, path: Str): process.Output {
@@ -263,6 +434,28 @@ test "o porcelain vira arquivos com caminho relativo à pasta aberta" {
 	if parseFile(" M outro/y.hive", "app/") is Result.Ok(outside) {
 		assert outside.rel == ""
 	}
+}
+
+test "um diff vira arquivos com linhas numeradas nos dois lados" {
+	patch := "diff --git a/lib/a.hive b/lib/a.hive\nindex 1..2 100644\n--- a/lib/a.hive\n+++ b/lib/a.hive\n@@ -1,3 +1,3 @@ proc main\n linha um\n-velha\n+nova\n fim\ndiff --git a/novo.md b/novo.md\nnew file mode 100644\n--- /dev/null\n+++ b/novo.md\n@@ -0,0 +1 @@\n+# oi\n"
+	parsed := parseDiff(patch, 100)
+	assert len(parsed.files) == 2
+	assert !parsed.truncated
+	if parsed.files is [edited, created] {
+		assert edited.path == "lib/a.hive" && edited.status == "M"
+		assert edited.added == 1 && edited.removed == 1
+		assert len(edited.lines) == 5
+		if edited.lines is [hunk, same, gone, came, last] {
+			assert hunk.kind == "hunk"
+			assert same.kind == "ctx" && same.old == 1 && same.new == 1 && same.text == "linha um"
+			assert gone.kind == "del" && gone.old == 2 && gone.new == 0
+			assert came.kind == "add" && came.new == 2 && came.old == 0
+			assert last.old == 3 && last.new == 3
+		}
+		assert created.status == "A" && created.added == 1
+	}
+	short := parseDiff(patch, 3)
+	assert short.truncated
 }
 
 test "o cabeçalho diz o branch e quanto está à frente" {

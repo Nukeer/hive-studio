@@ -31,7 +31,11 @@ hivec test studio.hive             # testes, com cobertura
 - **Aba de controle de código** (`Ctrl+Shift+G`): branch e ↑/↓ em relação ao
   remoto, alterações preparadas e não preparadas (preparar, tirar, descartar com
   confirmação), mensagem + commit (`Ctrl+Enter`; sem nada preparado, commita
-  tudo), push, pull e histórico.
+  tudo), push, pull e histórico. **Clicar num commit do histórico** abre uma aba
+  com a mensagem, autor, data, arquivos alterados (+/−) e o diff de cada um,
+  com números de linha dos dois lados, linhas adicionadas/removidas destacadas
+  e realce de sintaxe Hive; `±` num arquivo alterado mostra o diff do que ainda
+  não foi commitado.
 - **Terminal** no painel de baixo (``Ctrl+Shift+` ``): um cmd.exe (ou o `$SHELL`)
   de verdade, com histórico nas setas; ■ ou `Ctrl+C` encerram o processo e
   reabrem o shell. O painel **muda de altura arrastando a borda** (a altura é
