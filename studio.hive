@@ -637,7 +637,7 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 	} else if message is model.Msg.CloseAbout {
 		next.about = false
 	} else if message is model.Msg.OpenDocs {
-		async dialogs.openUrl("https://github.com/R0DR160HM/hive-lang")
+		async dialogs.openUrl("https://hive-lang.run")
 	} else if message is model.Msg.Quit {
 		if state.term.session != 0 {
 			_stopped := native.stop(state.term.session)
@@ -1507,4 +1507,18 @@ test "a interface muda de idioma na hora" {
 	assert indexOf(render.settingsPage(state), "Keyboard Shortcuts") is Result.Ok(_)
 	state.words = i18n.words("es")
 	assert indexOf(render.titleBar(state), ">Archivo<") is Result.Ok(_)
+}
+
+test "as opções da tela inicial são clicáveis" {
+	folder := scratch()
+	state := fresh(folder)
+	page := render.welcome(state)
+	for each action in ["newFile", "openFolder", "terminal", "settings", "docs"] {
+		assert indexOf(page, "data-arg=\"" + action + "\"") is Result.Ok(_)
+	}
+	if actionMsg(state, "docs", 0) is Result.Ok(message) {
+		assert message == model.Msg.OpenDocs()
+	} else {
+		assert false
+	}
 }

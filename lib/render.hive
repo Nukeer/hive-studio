@@ -652,16 +652,16 @@ func popup(state: model.State): Str {
 }
 
 func welcome(state: model.State): Str {
+	// Cada linha é clicável e faz o mesmo que o atalho mostrado ao lado.
 	mut Str[dyn] rows = []
-	for each id in ["newFile", "openFolder", "save", "run", "terminal", "togglePanel", "suggest", "settings"] {
-		for each a in keys.actions() {
-			if a.id == id {
-				combo := keys.keysFor(state.settings.keymap, id)
-				if combo != "" {
-					append(rows, "<tr><td>" + esc(tx(state, a.label)) + "</td><td><kbd>" + esc(combo) + "</kbd></td></tr>")
-				}
-			}
+	for each option in [["newFile", "Novo arquivo"], ["openFile", "Abrir arquivo…"], ["openFolder", "Abrir pasta…"],
+		["terminal", "Terminal"], ["git", "Controle de código"], ["settings", "Configurações"], ["docs", "Documentação do Hive"]] {
+		combo := keys.keysFor(state.settings.keymap, option[0])
+		mut shortcut := ""
+		if combo != "" {
+			shortcut = "<kbd>" + esc(combo) + "</kbd>"
 		}
+		append(rows, "<tr class=\"wl\"" + act("action", option[0]) + "><td>" + esc(tx(state, option[1])) + "</td><td>" + shortcut + "</td></tr>")
 	}
 	return "<div class=\"big\">" + logo() + "</div><h1>Hive Studio</h1><div>" + tx(state, "Abra um arquivo no explorador para começar.") + "</div>" +
 		"<table>" + join(rows, "") + "</table>"

@@ -131,7 +131,12 @@ func shell(): Str {
 		#welcome .big\{font-size:64px;color:var(--accent);line-height:1}
 		#welcome h1\{color:var(--text);font-weight:500;margin:0}
 		#welcome table\{margin-top:18px;border-collapse:collapse}
-		#welcome td\{padding:4px 12px}
+		#welcome td\{padding:5px 14px}
+		#welcome tr.wl\{cursor:pointer}
+		#welcome tr.wl td:first-child\{color:var(--accent);border-radius:5px 0 0 5px}
+		#welcome tr.wl td:last-child\{border-radius:0 5px 5px 0;text-align:right}
+		#welcome tr.wl:hover td\{background:var(--selection)}
+		#welcome tr.wl:hover td:first-child\{text-decoration:underline}
 		#panel\{height:260px;flex:none;background:var(--panel);border-top:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
 		#app.nopanel #panel,#app.nopanel #grip\{display:none}
 		#grip\{height:5px;margin-top:-3px;position:relative;z-index:5;cursor:ns-resize;flex:none}

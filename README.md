@@ -1,6 +1,6 @@
 # Hive Studio
 
-Uma IDE para [Hive](https://github.com/R0DR160HM/hive-lang), escrita em Hive.
+Uma IDE para [Hive](https://hive-lang.run), escrita em Hive.
 A janela é um Chromium (Edge, Chrome, Brave) em modo aplicativo, com perfil
 próprio — o "webview" — e toda a lógica roda no programa Hive.
 
