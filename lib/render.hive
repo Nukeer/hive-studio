@@ -16,6 +16,7 @@ import ./i18n
 import ./search
 import ./complete
 import ./version
+import ./vim
 
 // O texto da interface no idioma escolhido.
 func tx(state: model.State, text: Str): Str {
@@ -128,6 +129,16 @@ func menuItem(state: model.State, label: Str, action: Str, enabled: Bool): Str {
 		esc(keys.keysFor(state.settings.keymap, action)) + "</span></div>"
 }
 
+// Um item que liga e desliga algo, com ✓ quando está ligado.
+func menuCheck(state: model.State, label: Str, action: Str, on: Bool): Str {
+	mut mark := ""
+	if on {
+		mark = "✓ "
+	}
+	return "<div class=\"mi\"" + act("action", action) + "><span>" + mark + esc(tx(state, label)) + "</span><span class=\"mk\">" +
+		esc(keys.keysFor(state.settings.keymap, action)) + "</span></div>"
+}
+
 // Um item que a própria página resolve (desfazer, copiar…).
 func menuClient(state: model.State, label: Str, command: Str, hint: Str): Str {
 	return "<div class=\"mi\"" + attr("data-client", command) + "><span>" + esc(tx(state, label)) + "</span><span class=\"mk\">" + esc(hint) + "</span></div>"
@@ -178,7 +189,9 @@ func menuBar(state: model.State): Str {
 			menuItem(state, "Ir para arquivo…", "quickOpen", true),
 			separator(),
 			menuItem(state, "Sugestões (autocomplete)", "suggest", hasDoc),
-			menuItem(state, "Ir para a definição", "definition", hasDoc)
+			menuItem(state, "Ir para a definição", "definition", hasDoc),
+			separator(),
+			menuCheck(state, "Modo Vim", "toggleVim", state.settings.vim)
 		]) +
 		menu(state, "Ver", [
 			menuItem(state, "Explorador", "explorer", true),
@@ -959,6 +972,8 @@ func settingsPage(state: model.State): Str {
 		item(tx(state, "Autocomplete"), tx(state, "Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita."),
 			check("autocomplete", tx(state, "Sugerir enquanto digito"), prefs.autocomplete)) +
 		item(tx(state, "Largura do tab"), tx(state, "Quantos espaços um tab ocupa na tela."), select("tabSize", ["2", "4", "8"], "{prefs.tabSize}")) +
+		item(tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
+			check("vim", tx(state, "Usar as teclas do Vim no editor"), prefs.vim)) +
 		"<h2>" + tx(state, "Explorador") + "</h2>" +
 		item(tx(state, "Arquivos ocultos"), "", check("showHidden", tx(state, "Mostrar arquivos ocultos e artefatos de build"), prefs.showHidden)) +
 		"<h2>" + tx(state, "Execução") + "</h2>" +
@@ -1201,9 +1216,70 @@ func statusBar(state: model.State): Str {
 	if state.entrypoint != "" {
 		append(items, statusItem("▶ " + esc(workspace.baseName(state.entrypoint)), "", "", ""))
 	}
+	if state.settings.vim {
+		mut recording := ""
+		if state.vim.recordingTo != "" {
+			recording = " ● @" + esc(state.vim.recordingTo)
+		}
+		append(items, statusItem("VIM " + esc(vimModeText(state)) + recording, "action", "toggleVim", tx(state, "Modo Vim — clique para desligar")))
+	}
 	append(items, statusItem("◐ " + esc(t.name), "settings", "", tx(state, "Trocar tema")))
 	append(items, statusItem("▭", "togglePanel", "", tx(state, "Painel") + keyHint(state, "togglePanel")))
 	return join(items, "")
+}
+
+// ── modo Vim ─────────────────────────────────────────────────────────────
+
+func vimModeText(state: model.State): Str {
+	name := vim.modeName(state.vim)
+	if name == "insert" {
+		return tx(state, "INSERÇÃO")
+	} else if name == "visual" {
+		return "VISUAL"
+	} else if name == "visualLine" {
+		return tx(state, "VISUAL LINHA")
+	}
+	return "NORMAL"
+}
+
+// A mensagem do Vim no idioma da interface, com `%1`, `%2` preenchidos.
+func vimMessage(state: model.State): Str {
+	mut text := tx(state, state.vim.message)
+	for i := 0; i < len(state.vim.args); i++ {
+		text = replaceAll(text, "%{i + 1}", state.vim.args[i])
+	}
+	return text
+}
+
+// A linha do Vim embaixo do editor: o modo, a última mensagem e as teclas
+// pendentes — ou, aberta, a linha de comando (`:`, `/`, `?`).
+func vimBar(state: model.State): Str {
+	layout := layoutOf(state)
+	v := state.vim
+	if !state.settings.vim || (!(layout == "edit" || layout == "split") && v.prompt == "") {
+		return ""
+	}
+	if v.prompt != "" {
+		return "<span class=\"vp\">" + esc(v.prompt) + "</span>" +
+			"<input class=\"vimin\" data-input=\"vimCommand\" data-submit=\"vimSubmit\" data-vimcmd=\"1\" spellcheck=\"false\" autocomplete=\"off\"" +
+			attr("value", v.command) + ">"
+	}
+	mut left := ""
+	label := vim.modeLabel(v)
+	if label != "" {
+		left = "<span class=\"vmode\">" + esc(tx(state, label)) + "</span>"
+	}
+	if v.recordingTo != "" {
+		left = left + "<span class=\"vrec\">" + esc(tx(state, "gravando")) + " @" + esc(v.recordingTo) + "</span>"
+	}
+	if v.message != "" {
+		mut cls := "vmsg"
+		if v.error {
+			cls = "vmsg err"
+		}
+		left = left + "<span class=\"" + cls + "\">" + esc(vimMessage(state)) + "</span>"
+	}
+	return left + "<span class=\"vpend\">" + esc(join(v.pending, "")) + "</span>"
 }
 
 // ── janelas por cima ─────────────────────────────────────────────────────
@@ -1312,12 +1388,36 @@ func frame(state: model.State): model.Frame {
 		region("palette", palette(state)),
 		region("panel", panel(state)),
 		region("status", statusBar(state)),
-		region("overlay", overlay(state))
+		region("overlay", overlay(state)),
+		region("vimbar", vimBar(state))
 	]
 	model.Region[dyn] all = regions
+	inEditor := layout == "edit" || layout == "split"
+	mut vimMode := ""
+	mut selStart := state.caret
+	mut selEnd := state.caret
+	if prefs.vim && inEditor {
+		vimMode = vim.modeName(state.vim)
+		span := vim.shown(text, state.caret, state.vim)
+		selStart = span.from
+		selEnd = span.to
+	}
 	mut Int[dyn] marks = []
-	if layout == "edit" || layout == "split" {
+	mut markLength := len(state.find.text)
+	mut markCurrent := state.find.index
+	if inEditor && state.find.open {
 		marks = findMatches(state)
+	} else if vimMode != "" {
+		// A busca do Vim: as ocorrências enquanto se digita depois de `/`, e a
+		// última busca até `:noh`.
+		marks = vim.highlights(text, state.vim)
+		markLength = vim.highlightLength(state.vim)
+		markCurrent = -1
+		if state.vim.prompt == "/" || state.vim.prompt == "?" {
+			markCurrent = vim.currentHighlight(marks, state.caret, state.vim.prompt == "?")
+		} else if indexOf(marks, state.caret) is Result.Ok(here) {
+			markCurrent = here
+		}
 	}
 	return model.Frame(
 		regions: all,
@@ -1336,11 +1436,19 @@ func frame(state: model.State): model.Frame {
 		focus: state.focus,
 		focusSerial: state.focusSerial,
 		marks: marks,
-		markLength: len(state.find.text),
-		markCurrent: state.find.index,
-		findSerial: state.find.serial,
+		markLength: markLength,
+		markCurrent: markCurrent,
+		findSerial: state.find.serial + state.vim.searchSerial,
 		recording: state.recording != "",
-		title: title
+		title: title,
+		vim: vimMode,
+		vimSerial: state.vim.serial,
+		selStart: selStart,
+		selEnd: selEnd,
+		vimScroll: state.vim.scroll,
+		clip: state.vim.clip,
+		clipSerial: state.vim.clipSerial,
+		vimAck: state.vim.acked
 	)
 }
 

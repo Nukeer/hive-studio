@@ -1,0 +1,3694 @@
+// Modo Vim: o motor que transforma teclas em movimentos e edições.
+//
+// Tudo aqui é `func`: o motor recebe o texto, o cursor e o estado do Vim e
+// devolve os novos. O que só o estúdio sabe fazer — salvar, fechar a aba,
+// abrir um arquivo, rodar o hivec — volta em `effects`, mensagens comuns que
+// a dobra despacha depois. Posições contam caracteres, como no resto do editor.
+//
+// As teclas chegam na notação do Vim: um caractere (`j`, `$`, `J`) ou um nome
+// entre `<` e `>` (`<Esc>`, `<CR>`, `<BS>`, `<Space>`, `<C-r>`, `<Left>`…).
+
+import ./model
+import ./highlight
+import ./complete
+import ./search
+import ./analysis
+
+// ── o que entra e o que sai ──────────────────────────────────────────────
+
+// O documento ativo visto pelo motor. `top` e `rows` são a parte do texto que
+// a página mostra (para `H`, `L`, `Ctrl+D`, `zz`…) e `tab` a largura do tab.
+// Na saída, `scroll` é a linha que deve ir para o topo (-1 = nenhuma), `clip`
+// o que copiar para a área de transferência e `effects` o que a dobra faz.
+type Editor {
+	text:     Str
+	caret:    Int
+	vim:      model.Vim
+	undo:     model.Snapshot[dyn]
+	redo:     model.Snapshot[dyn]
+	dirty:    Bool
+	anyDirty: Bool
+	numbers:  Bool
+	active:   Int
+	top:      Int
+	rows:     Int
+	tab:      Int
+	scroll:   Int
+	clip:     Str
+	effects:  model.Msg[dyn]
+}
+
+// Para onde um movimento leva o cursor, e como um operador o entende. `keep`
+// é de `j`/`k`, que guardam a coluna desejada. `note` é uma mensagem (chave
+// do i18n, com `arg` no lugar de `%1`) e `bad` diz que ela é um erro.
+type Target {
+	pos:       Int
+	linewise:  Bool
+	inclusive: Bool
+	keep:      Bool
+	ok:        Bool
+	note:      Str
+	arg:       Str
+	bad:       Bool
+}
+
+// Um trecho do texto: de `from` até antes de `to`.
+type Span {
+	from:     Int
+	to:       Int
+	linewise: Bool
+	ok:       Bool
+}
+
+// O resultado de ler as teclas pendentes: `#Wait` (faltam teclas), `#Done` ou
+// `#Fail`. `keep` diz que a coluna desejada não muda (depois de `j`, `k`, `$`).
+type Step {
+	editor: Editor
+	status: Atom
+	keep:   Bool
+}
+
+// Um endereço da linha de comando (`12`, `.`, `$`, `'<`, `.+2`), a partir de 0.
+type Address {
+	line: Int
+	next: Int
+	ok:   Bool
+}
+
+// ── pequenas peças ───────────────────────────────────────────────────────
+
+// A coluna "fim da linha" que `$` deixa para `j` e `k`.
+func endColumn(): Int {
+	return 1000000000
+}
+
+func undoLimit(): Int {
+	return 200
+}
+
+func minInt(a: Int, b: Int): Int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a: Int, b: Int): Int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func clampInt(value: Int, low: Int, high: Int): Int {
+	if value > high {
+		return maxInt(low, high)
+	}
+	if value < low {
+		return low
+	}
+	return value
+}
+
+func at(chars: Str[], i: Int): Str {
+	if chars bounds i {
+		return chars[i]
+	}
+	return ""
+}
+
+func atInt(values: Int[], i: Int): Int {
+	if values bounds i {
+		return values[i]
+	}
+	return -1
+}
+
+func isBlank(c: Str): Bool {
+	return c == " " || c == "\t"
+}
+
+func isSpace(c: Str): Bool {
+	return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+// Letras, dígitos e `_` — e qualquer letra fora do ASCII (á, ç…).
+func isKeyword(c: Str): Bool {
+	return highlight.isIdent(c) || c > "~"
+}
+
+func isLetter(c: Str): Bool {
+	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+}
+
+// Para `w`, `b`, `e`: 0 espaço, 1 palavra, 2 pontuação. Com `big` (W, B, E),
+// tudo o que não é espaço é uma palavra.
+func classOf(c: Str, big: Bool): Int {
+	if c == "" || isSpace(c) {
+		return 0
+	}
+	if big || isKeyword(c) {
+		return 1
+	}
+	return 2
+}
+
+// Para `iw` e `aw`: como `classOf`, mas o fim da linha (-1) é uma fronteira.
+func kindOf(c: Str, big: Bool): Int {
+	if c == "" || c == "\n" {
+		return -1
+	}
+	if isBlank(c) {
+		return 0
+	}
+	return classOf(c, big)
+}
+
+func digitOf(key: Str): Int {
+	if len(key) == 1 && highlight.isDigit(key) {
+		if hive.conv.sti(key) is Result.Ok(value) {
+			return value
+		}
+	}
+	return -1
+}
+
+// A tecla como texto: `<Space>` é um espaço, `<CR>` uma quebra de linha.
+func literal(key: Str): Str {
+	if key == "<Space>" {
+		return " "
+	} else if key == "<Tab>" {
+		return "\t"
+	} else if key == "<CR>" {
+		return "\n"
+	} else if len(key) == 1 {
+		return key
+	}
+	return ""
+}
+
+func isEscape(key: Str): Bool {
+	return key == "<Esc>" || key == "<C-[>" || key == "<C-c>"
+}
+
+func endsWith(text: Str, suffix: Str): Bool {
+	size := len(text)
+	return size >= len(suffix) && complete.skip(text, size - len(suffix)) == suffix
+}
+
+// O pedaço de `text` de `from` até antes de `to`.
+func slice(text: Str, from: Int, to: Int): Str {
+	if to <= from {
+		return ""
+	}
+	return complete.take(complete.skip(text, from), to - from)
+}
+
+func cut(text: Str, from: Int, to: Int): Str {
+	return complete.take(text, from) + complete.skip(text, to)
+}
+
+func insertAt(text: Str, pos: Int, piece: Str): Str {
+	return complete.take(text, pos) + piece + complete.skip(text, pos)
+}
+
+func repeatText(text: Str, times: Int): Str {
+	mut Str[dyn] parts = []
+	for n := 0; n < times; n++ {
+		append(parts, text)
+	}
+	return join(parts, "")
+}
+
+func trim(text: Str): Str {
+	mut rest := analysis.trimLeft(text)
+	for ; endsWith(rest, " ") || endsWith(rest, "\t"); {
+		rest = complete.take(rest, len(rest) - 1)
+	}
+	return rest
+}
+
+func leadingBlanks(line: Str): Str {
+	return complete.take(line, len(line) - len(analysis.trimLeft(line)))
+}
+
+func upper(text: Str): Str {
+	mut out := text
+	small := split("abcdefghijklmnopqrstuvwxyzàáâãäçèéêëìíîïñòóôõöùúûü", "")
+	big := split("ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜ", "")
+	for i := 0; i < len(small); i++ {
+		if big bounds i {
+			out = replaceAll(out, small[i], big[i])
+		}
+	}
+	return out
+}
+
+func toggleCase(text: Str): Str {
+	mut Str[dyn] out = []
+	for each c in split(text, "") {
+		low := search.lower(c)
+		if low != c {
+			append(out, low)
+		} else {
+			append(out, upper(c))
+		}
+	}
+	return join(out, "")
+}
+
+func keysFrom(keys: Str[], from: Int, count: Int): Str[dyn] {
+	mut Str[dyn] out = []
+	for i := from; i < from + count; i++ {
+		append(out, at(keys, i))
+	}
+	return out
+}
+
+func isAny(value: Str, options: Str[]): Bool {
+	return indexOf(options, value) is Result.Ok(_)
+}
+
+// ── linhas e colunas ─────────────────────────────────────────────────────
+
+// Onde começa a linha de `pos`.
+func lineStart(chars: Str[], pos: Int): Int {
+	mut i := minInt(pos, len(chars))
+	for ; i > 0; i-- {
+		if at(chars, i - 1) == "\n" {
+			return i
+		}
+	}
+	return 0
+}
+
+// Onde termina a linha de `pos`: o índice do "\n" (ou o fim do texto).
+func lineEnd(chars: Str[], pos: Int): Int {
+	for i := maxInt(pos, 0); i < len(chars); i++ {
+		if at(chars, i) == "\n" {
+			return i
+		}
+	}
+	return len(chars)
+}
+
+// A linha (a partir de 0) de `pos`.
+func lineOf(chars: Str[], pos: Int): Int {
+	mut line := 0
+	for i := 0; i < pos && i < len(chars); i++ {
+		if at(chars, i) == "\n" {
+			line++
+		}
+	}
+	return line
+}
+
+// Onde começa a linha `line` (a partir de 0).
+func lineOffset(chars: Str[], line: Int): Int {
+	if line <= 0 {
+		return 0
+	}
+	mut seen := 0
+	for i := 0; i < len(chars); i++ {
+		if at(chars, i) == "\n" {
+			seen++
+			if seen == line {
+				return i + 1
+			}
+		}
+	}
+	return lineStart(chars, len(chars))
+}
+
+// A última linha de verdade: um "\n" no fim do texto não abre outra.
+func lastLine(chars: Str[]): Int {
+	size := len(chars)
+	total := lineOf(chars, size)
+	if total > 0 && at(chars, size - 1) == "\n" {
+		return total - 1
+	}
+	return total
+}
+
+func lineText(lines: Str[], line: Int): Str {
+	if lines bounds line {
+		return lines[line]
+	}
+	return ""
+}
+
+// Onde começa a linha `line` de um texto já partido em linhas.
+func offsetOfLine(lines: Str[], line: Int): Int {
+	mut offset := 0
+	for i := 0; i < line && i < len(lines); i++ {
+		offset = offset + len(lines[i]) + 1
+	}
+	return offset
+}
+
+func isEmptyAt(chars: Str[], start: Int): Bool {
+	return start >= len(chars) || at(chars, start) == "\n"
+}
+
+// A coluna na tela de `pos`: um tab vai até a próxima parada.
+func displayColumn(chars: Str[], pos: Int, tab: Int): Int {
+	mut column := 0
+	for i := lineStart(chars, pos); i < pos; i++ {
+		if at(chars, i) == "\t" && tab > 0 {
+			column = column + tab - column % tab
+		} else {
+			column++
+		}
+	}
+	return column
+}
+
+// O caractere da linha que começa em `start` que ocupa a coluna `want` da
+// tela, sem passar do último.
+func atColumn(chars: Str[], start: Int, want: Int, tab: Int): Int {
+	end := lineEnd(chars, start)
+	mut column := 0
+	for i := start; i < end; i++ {
+		mut width := 1
+		if at(chars, i) == "\t" && tab > 0 {
+			width = tab - column % tab
+		}
+		if want < column + width {
+			return i
+		}
+		column = column + width
+	}
+	return maxInt(end - 1, start)
+}
+
+// No modo normal o cursor fica sobre um caractere: nunca no fim de uma linha
+// (a não ser numa vazia) nem depois do "\n" final do texto.
+func clampNormal(chars: Str[], pos: Int): Int {
+	size := len(chars)
+	mut p := clampInt(pos, 0, size)
+	if p == size && size > 0 && at(chars, size - 1) == "\n" {
+		p = size - 1
+	}
+	start := lineStart(chars, p)
+	end := lineEnd(chars, p)
+	if p >= end && end > start {
+		return end - 1
+	}
+	return p
+}
+
+func firstNonBlank(chars: Str[], pos: Int): Int {
+	end := lineEnd(chars, pos)
+	for i := lineStart(chars, pos); i < end; i++ {
+		if !isBlank(at(chars, i)) {
+			return i
+		}
+	}
+	return clampNormal(chars, end)
+}
+
+func lastNonBlank(chars: Str[], pos: Int): Int {
+	start := lineStart(chars, pos)
+	for i := lineEnd(chars, pos) - 1; i >= start; i-- {
+		if !isBlank(at(chars, i)) {
+			return i
+		}
+	}
+	return start
+}
+
+// As linhas inteiras de `a` até `b`, com o "\n" do fim.
+func lineSpan(chars: Str[], a: Int, b: Int): Span {
+	return Span(lineStart(chars, a), minInt(lineEnd(chars, b) + 1, len(chars)), true, true)
+}
+
+func noSpan(): Span {
+	return Span(0, 0, false, false)
+}
+
+// ── movimentos ───────────────────────────────────────────────────────────
+
+func moveTo(pos: Int): Target {
+	return Target(pos, false, false, false, true, "", "", false)
+}
+
+func inclusiveTo(pos: Int): Target {
+	return Target(pos, false, true, false, true, "", "", false)
+}
+
+func lineTo(pos: Int): Target {
+	return Target(pos, true, false, false, true, "", "", false)
+}
+
+func keepTo(pos: Int, ok: Bool): Target {
+	return Target(pos, true, false, true, ok, "", "", false)
+}
+
+func noMove(): Target {
+	return Target(0, false, false, false, false, "", "", false)
+}
+
+func problem(note: Str, arg: Str): Target {
+	return Target(0, false, false, false, false, note, arg, true)
+}
+
+// `w`: o começo da próxima palavra. Uma linha vazia também conta.
+func nextWord(chars: Str[], pos: Int, big: Bool): Int {
+	size := len(chars)
+	mut i := pos
+	kind := classOf(at(chars, i), big)
+	if kind != 0 {
+		for ; i < size && classOf(at(chars, i), big) == kind; i++ {
+		}
+	}
+	for ; i < size; i++ {
+		c := at(chars, i)
+		if c == "\n" && at(chars, i + 1) == "\n" {
+			return i + 1
+		}
+		if !isSpace(c) {
+			return i
+		}
+	}
+	return size
+}
+
+// `e`: o fim da palavra (a próxima, se já estiver no fim de uma).
+func wordEnd(chars: Str[], pos: Int, big: Bool): Int {
+	size := len(chars)
+	mut i := pos + 1
+	for ; i < size && isSpace(at(chars, i)); i++ {
+	}
+	if i >= size {
+		return maxInt(size - 1, 0)
+	}
+	kind := classOf(at(chars, i), big)
+	for ; i + 1 < size && classOf(at(chars, i + 1), big) == kind; i++ {
+	}
+	return i
+}
+
+// `b`: o começo da palavra (a anterior, se já estiver no começo de uma).
+func wordBack(chars: Str[], pos: Int, big: Bool): Int {
+	mut i := pos - 1
+	for ; i > 0; i-- {
+		c := at(chars, i)
+		if c == "\n" && at(chars, i - 1) == "\n" {
+			return i
+		}
+		if !isSpace(c) {
+			break
+		}
+	}
+	if i <= 0 {
+		return 0
+	}
+	kind := classOf(at(chars, i), big)
+	for ; i > 0 && classOf(at(chars, i - 1), big) == kind; i-- {
+	}
+	return i
+}
+
+// `ge`: o fim da palavra anterior.
+func wordEndBack(chars: Str[], pos: Int, big: Bool): Int {
+	mut i := pos
+	kind := classOf(at(chars, i), big)
+	if kind != 0 {
+		for ; i >= 0 && classOf(at(chars, i), big) == kind; i-- {
+		}
+	}
+	for ; i > 0; i-- {
+		c := at(chars, i)
+		if c == "\n" && at(chars, i - 1) == "\n" {
+			return i
+		}
+		if !isSpace(c) {
+			return i
+		}
+	}
+	return 0
+}
+
+// `cw` muda até o fim da palavra, mesmo estando no último caractere dela.
+func changeWordEnd(chars: Str[], pos: Int, big: Bool, count: Int): Int {
+	mut p := pos
+	kind := classOf(at(chars, p), big)
+	if classOf(at(chars, p + 1), big) == kind && at(chars, p + 1) != "\n" {
+		p = wordEnd(chars, p, big)
+	}
+	for n := 1; n < count; n++ {
+		p = wordEnd(chars, p, big)
+	}
+	return p
+}
+
+// `}`: a próxima linha vazia (ou o fim do texto).
+func paragraphForward(chars: Str[], pos: Int, count: Int): Int {
+	size := len(chars)
+	mut s := lineStart(chars, pos)
+	for n := 0; n < count; n++ {
+		for ; s < size && isEmptyAt(chars, s); {
+			s = lineEnd(chars, s) + 1
+		}
+		for ; s < size && !isEmptyAt(chars, s); {
+			s = lineEnd(chars, s) + 1
+		}
+	}
+	if s >= size {
+		return size
+	}
+	return s
+}
+
+// `{`: a linha vazia anterior (ou o começo do texto).
+func paragraphBack(chars: Str[], pos: Int, count: Int): Int {
+	mut s := lineStart(chars, pos)
+	for n := 0; n < count; n++ {
+		for ; s > 0 && isEmptyAt(chars, s); {
+			s = lineStart(chars, s - 1)
+		}
+		for ; s > 0 && !isEmptyAt(chars, s); {
+			s = lineStart(chars, s - 1)
+		}
+	}
+	return s
+}
+
+func partnerOf(c: Str): Str {
+	if c == "(" {
+		return ")"
+	} else if c == ")" {
+		return "("
+	} else if c == "[" {
+		return "]"
+	} else if c == "]" {
+		return "["
+	} else if c == "\{" {
+		return "}"
+	} else if c == "}" {
+		return "\{"
+	}
+	return ""
+}
+
+// `%`: o par do primeiro parêntese, colchete ou chave da linha a partir do cursor.
+func matchPair(chars: Str[], pos: Int): Result<Int, Bool> {
+	end := lineEnd(chars, pos)
+	mut i := pos
+	for ; i < end && partnerOf(at(chars, i)) == ""; i++ {
+	}
+	if i >= end {
+		return Result.Error(false)
+	}
+	c := at(chars, i)
+	partner := partnerOf(c)
+	forward := c == "(" || c == "[" || c == "\{"
+	mut depth := 0
+	mut j := i
+	for ; j >= 0 && j < len(chars); {
+		here := at(chars, j)
+		if here == c {
+			depth++
+		} else if here == partner {
+			depth--
+			if depth == 0 {
+				return Result.Ok(j)
+			}
+		}
+		if forward {
+			j++
+		} else {
+			j--
+		}
+	}
+	return Result.Error(false)
+}
+
+// `f`, `t`, `F`, `T`: o `count`-ésimo `target` na linha. `again` é o `;`,
+// que não deixa `t` parado diante do mesmo caractere.
+func findChar(chars: Str[], pos: Int, kind: Str, target: Str, count: Int, again: Bool): Result<Int, Bool> {
+	start := lineStart(chars, pos)
+	end := lineEnd(chars, pos)
+	forward := kind == "f" || kind == "t"
+	mut i := pos
+	if again && kind == "t" {
+		i = pos + 1
+	} else if again && kind == "T" {
+		i = pos - 1
+	}
+	mut left := count
+	for ; left > 0; {
+		if forward {
+			i++
+		} else {
+			i--
+		}
+		if i < start || i >= end {
+			return Result.Error(false)
+		}
+		if at(chars, i) == target {
+			left--
+		}
+	}
+	if kind == "t" {
+		return Result.Ok(i - 1)
+	} else if kind == "T" {
+		return Result.Ok(i + 1)
+	}
+	return Result.Ok(i)
+}
+
+func reversedFind(kind: Str): Str {
+	if kind == "f" {
+		return "F"
+	} else if kind == "F" {
+		return "f"
+	} else if kind == "t" {
+		return "T"
+	}
+	return "t"
+}
+
+// Quantas teclas o movimento que começa em `i` usa: 0 = faltam teclas,
+// -1 = não é um movimento.
+func motionLength(keys: Str[], i: Int): Int {
+	k := at(keys, i)
+	next := at(keys, i + 1)
+	singles := ["h", "j", "k", "l", "w", "W", "b", "B", "e", "E", "0", "^", "$", "G", "\{", "}", "%", ";", ",",
+		"n", "N", "H", "M", "L", "_", "|", "+", "-", "<Left>", "<Right>", "<Up>", "<Down>", "<Home>", "<End>",
+		"<BS>", "<Space>", "<CR>"]
+	if isAny(k, singles) {
+		return 1
+	}
+	if k == "g" {
+		if next == "" {
+			return 0
+		}
+		if isAny(next, ["g", "e", "E", "_", "j", "k", "0", "^", "$"]) {
+			return 2
+		}
+		return -1
+	}
+	if k == "f" || k == "F" || k == "t" || k == "T" {
+		if next == "" {
+			return 0
+		}
+		return 2
+	}
+	return -1
+}
+
+// Para onde o movimento `keys` leva o cursor, repetido `count` vezes.
+func motion(ed: Editor, chars: Str[], keys: Str[], count: Int, hasCount: Bool): Target {
+	pos := ed.caret
+	k := at(keys, 0)
+	arg := at(keys, 1)
+	size := len(chars)
+	final := lastLine(chars)
+	if k == "h" || k == "<Left>" {
+		return moveTo(maxInt(lineStart(chars, pos), pos - count))
+	} else if k == "l" || k == "<Right>" {
+		return moveTo(minInt(pos + count, lineEnd(chars, pos)))
+	} else if k == "<BS>" {
+		mut p := pos
+		for n := 0; n < count && p > 0; n++ {
+			p--
+			if at(chars, p) == "\n" && p > lineStart(chars, p) {
+				p--
+			}
+		}
+		return moveTo(p)
+	} else if k == "<Space>" {
+		mut p := pos
+		for n := 0; n < count && p < size; n++ {
+			p++
+			if at(chars, p) == "\n" && p > lineStart(chars, p) {
+				p++
+			}
+		}
+		return moveTo(minInt(p, size))
+	} else if k == "j" || k == "<Down>" || (k == "g" && arg == "j") {
+		line := lineOf(chars, pos)
+		wanted := minInt(line + count, final)
+		return keepTo(atColumn(chars, lineOffset(chars, wanted), ed.vim.column, ed.tab), wanted != line)
+	} else if k == "k" || k == "<Up>" || (k == "g" && arg == "k") {
+		line := lineOf(chars, pos)
+		wanted := maxInt(line - count, 0)
+		return keepTo(atColumn(chars, lineOffset(chars, wanted), ed.vim.column, ed.tab), wanted != line)
+	} else if k == "+" || k == "<CR>" || k == "-" || k == "_" {
+		line := lineOf(chars, pos)
+		mut wanted := line + count
+		if k == "-" {
+			wanted = line - count
+		} else if k == "_" {
+			wanted = line + count - 1
+		}
+		if wanted < 0 || wanted > final {
+			return noMove()
+		}
+		return lineTo(firstNonBlank(chars, lineOffset(chars, wanted)))
+	} else if k == "0" || k == "<Home>" || (k == "g" && arg == "0") {
+		return moveTo(lineStart(chars, pos))
+	} else if k == "^" || (k == "g" && arg == "^") {
+		return moveTo(firstNonBlank(chars, pos))
+	} else if k == "$" || k == "<End>" || (k == "g" && arg == "$") || (k == "g" && arg == "_") {
+		wanted := minInt(lineOf(chars, pos) + count - 1, final)
+		start := lineOffset(chars, wanted)
+		end := lineEnd(chars, start)
+		if end == start {
+			return moveTo(start)
+		}
+		if k == "g" && arg == "_" {
+			return inclusiveTo(lastNonBlank(chars, start))
+		}
+		return inclusiveTo(end - 1)
+	} else if k == "|" {
+		return moveTo(atColumn(chars, lineStart(chars, pos), count - 1, ed.tab))
+	} else if k == "G" || (k == "g" && arg == "g") {
+		mut line := final
+		if k == "g" {
+			line = 0
+		}
+		if hasCount {
+			line = clampInt(count - 1, 0, final)
+		}
+		return lineTo(firstNonBlank(chars, lineOffset(chars, line)))
+	} else if k == "w" || k == "W" {
+		mut p := pos
+		for n := 0; n < count; n++ {
+			p = nextWord(chars, p, k == "W")
+		}
+		return moveTo(p)
+	} else if k == "b" || k == "B" {
+		mut p := pos
+		for n := 0; n < count; n++ {
+			p = wordBack(chars, p, k == "B")
+		}
+		return moveTo(p)
+	} else if k == "e" || k == "E" {
+		mut p := pos
+		for n := 0; n < count; n++ {
+			p = wordEnd(chars, p, k == "E")
+		}
+		return inclusiveTo(p)
+	} else if k == "g" && (arg == "e" || arg == "E") {
+		mut p := pos
+		for n := 0; n < count; n++ {
+			p = wordEndBack(chars, p, arg == "E")
+		}
+		return inclusiveTo(p)
+	} else if k == "}" {
+		return moveTo(paragraphForward(chars, pos, count))
+	} else if k == "\{" {
+		return moveTo(paragraphBack(chars, pos, count))
+	} else if k == "%" {
+		if hasCount {
+			line := clampInt((count * (final + 1) + 99) / 100 - 1, 0, final)
+			return lineTo(firstNonBlank(chars, lineOffset(chars, line)))
+		}
+		if matchPair(chars, pos) is Result.Ok(found) {
+			return inclusiveTo(found)
+		}
+		return noMove()
+	} else if k == "f" || k == "F" || k == "t" || k == "T" {
+		return findTarget(chars, pos, k, literal(arg), count, false)
+	} else if k == ";" || k == "," {
+		kind := at(ed.vim.find, 0)
+		target := at(ed.vim.find, 1)
+		if kind == "" || target == "" {
+			return noMove()
+		}
+		if k == "," {
+			return findTarget(chars, pos, reversedFind(kind), target, count, true)
+		}
+		return findTarget(chars, pos, kind, target, count, true)
+	} else if k == "H" || k == "M" || k == "L" {
+		top := clampInt(ed.top, 0, final)
+		bottom := clampInt(ed.top + maxInt(ed.rows, 1) - 1, top, final)
+		mut line := top + (bottom - top) / 2
+		if k == "H" {
+			line = minInt(top + count - 1, bottom)
+		} else if k == "L" {
+			line = maxInt(bottom - count + 1, top)
+		}
+		return lineTo(firstNonBlank(chars, lineOffset(chars, line)))
+	} else if k == "n" || k == "N" {
+		return searchTarget(ed, chars, k == "N", count)
+	}
+	return noMove()
+}
+
+func findTarget(chars: Str[], pos: Int, kind: Str, target: Str, count: Int, again: Bool): Target {
+	if target == "" {
+		return noMove()
+	}
+	found := findChar(chars, pos, kind, target, count, again)
+	if found is Result.Ok(p) {
+		if kind == "f" || kind == "t" {
+			return inclusiveTo(p)
+		}
+		return moveTo(p)
+	}
+	return noMove()
+}
+
+// ── busca ────────────────────────────────────────────────────────────────
+
+// Onde `pattern` aparece em `text`, sem sobreposição, no máximo `limit` vezes.
+// O texto é literal: não há expressões regulares.
+func occurrencesOf(text: Str, pattern: Str, sensitive: Bool, limit: Int): Int[dyn] {
+	mut Int[dyn] found = []
+	if pattern == "" {
+		return found
+	}
+	mut haystack := text
+	mut needle := pattern
+	if !sensitive {
+		haystack = search.lower(text)
+		needle = search.lower(pattern)
+	}
+	pieces := split(haystack, needle)
+	size := len(needle)
+	mut offset := 0
+	for i := 0; i + 1 < len(pieces) && len(found) < limit; i++ {
+		offset = offset + len(at(pieces, i))
+		append(found, offset)
+		offset = offset + size
+	}
+	return found
+}
+
+// Maiúsculas no padrão fazem a busca diferenciar maiúsculas (smartcase).
+func sensitiveTo(pattern: Str): Bool {
+	return search.lower(pattern) != pattern
+}
+
+// As ocorrências de uma busca do Vim: smartcase e, com `whole` (`*`, `#`),
+// só palavras inteiras.
+func matchesOf(text: Str, pattern: Str, whole: Bool, limit: Int): Int[dyn] {
+	found := occurrencesOf(text, pattern, sensitiveTo(pattern), limit)
+	if !whole {
+		return found
+	}
+	chars := split(text, "")
+	size := len(pattern)
+	mut Int[dyn] kept = []
+	for each p in found {
+		if !isKeyword(at(chars, p - 1)) && !isKeyword(at(chars, p + size)) {
+			append(kept, p)
+		}
+	}
+	return kept
+}
+
+// `n` e `N`: a próxima ocorrência da última busca, dando a volta no texto.
+func searchTarget(ed: Editor, chars: Str[], reverse: Bool, count: Int): Target {
+	pattern := ed.vim.pattern
+	if pattern == "" {
+		return problem("E35: Nenhuma busca anterior", "")
+	}
+	found := matchesOf(ed.text, pattern, ed.vim.whole, 1000000)
+	if len(found) == 0 {
+		return problem("E486: Padrão não encontrado: %1", pattern)
+	}
+	backward := ed.vim.backward != reverse
+	mut p := ed.caret
+	mut wrapped := false
+	for n := 0; n < count; n++ {
+		mut next := -1
+		if backward {
+			for each m in found {
+				if m < p {
+					next = m
+				}
+			}
+			if next < 0 {
+				wrapped = true
+				next = atInt(found, len(found) - 1)
+			}
+		} else {
+			for each m in found {
+				if m > p && next < 0 {
+					next = m
+				}
+			}
+			if next < 0 {
+				wrapped = true
+				next = atInt(found, 0)
+			}
+		}
+		p = next
+	}
+	mut t := moveTo(p)
+	if wrapped && backward {
+		t.note = "a busca chegou ao INÍCIO, continuando do FIM"
+	} else if wrapped {
+		t.note = "a busca chegou ao FIM, continuando do INÍCIO"
+	}
+	return t
+}
+
+// A palavra sob o cursor (ou a primeira depois dele na linha), para `*` e `#`.
+func wordUnder(chars: Str[], pos: Int): Span {
+	end := lineEnd(chars, pos)
+	mut i := pos
+	for ; i < end && !isKeyword(at(chars, i)); i++ {
+	}
+	if i >= end {
+		return noSpan()
+	}
+	mut from := i
+	for ; from > 0 && isKeyword(at(chars, from - 1)); from-- {
+	}
+	mut to := i
+	for ; to < end && isKeyword(at(chars, to)); to++ {
+	}
+	return Span(from, to, false, true)
+}
+
+// ── objetos de texto ─────────────────────────────────────────────────────
+
+func runStart(chars: Str[], i: Int, big: Bool): Int {
+	kind := kindOf(at(chars, i), big)
+	mut s := i
+	for ; s > 0 && kindOf(at(chars, s - 1), big) == kind; s-- {
+	}
+	return s
+}
+
+func runEnd(chars: Str[], i: Int, big: Bool): Int {
+	kind := kindOf(at(chars, i), big)
+	mut e := i
+	for ; e < len(chars) && kindOf(at(chars, e), big) == kind; e++ {
+	}
+	return e
+}
+
+// `iw`, `aw`, `iW`, `aW`.
+func wordObject(chars: Str[], pos: Int, inner: Bool, big: Bool, count: Int): Span {
+	here := kindOf(at(chars, pos), big)
+	if here < 0 {
+		return Span(pos, pos, false, true)
+	}
+	mut from := runStart(chars, pos, big)
+	mut to := runEnd(chars, pos, big)
+	if !inner {
+		if here == 0 {
+			if kindOf(at(chars, to), big) > 0 {
+				to = runEnd(chars, to, big)
+			}
+		} else if kindOf(at(chars, to), big) == 0 {
+			to = runEnd(chars, to, big)
+		} else if from > 0 && kindOf(at(chars, from - 1), big) == 0 {
+			from = runStart(chars, from - 1, big)
+		}
+	}
+	for n := 1; n < count; n++ {
+		if kindOf(at(chars, to), big) < 0 {
+			break
+		}
+		to = runEnd(chars, to, big)
+		if !inner && kindOf(at(chars, to), big) == 0 {
+			to = runEnd(chars, to, big)
+		}
+	}
+	return Span(from, to, false, true)
+}
+
+// `i"`, `a"`, `i'`, `a'`: o par de aspas da linha que contém o cursor, ou o
+// primeiro depois dele.
+func quoteObject(chars: Str[], pos: Int, inner: Bool, quote: Str): Span {
+	end := lineEnd(chars, pos)
+	mut Int[dyn] quotes = []
+	for i := lineStart(chars, pos); i < end; i++ {
+		if at(chars, i) == quote && at(chars, i - 1) != "\\" {
+			append(quotes, i)
+		}
+	}
+	mut open := -1
+	mut close := -1
+	for p := 0; p + 1 < len(quotes); p = p + 2 {
+		b := atInt(quotes, p + 1)
+		if open < 0 && pos <= b {
+			open = atInt(quotes, p)
+			close = b
+		}
+	}
+	if open < 0 {
+		return noSpan()
+	}
+	if inner {
+		return Span(open + 1, close, false, true)
+	}
+	mut to := close + 1
+	for ; isBlank(at(chars, to)); to++ {
+	}
+	return Span(open, to, false, true)
+}
+
+// O `open` que ainda não foi fechado, andando para trás a partir de `from`.
+func unmatchedOpen(chars: Str[], from: Int, open: Str, close: Str): Int {
+	mut depth := 0
+	for i := from; i >= 0; i-- {
+		c := at(chars, i)
+		if c == close {
+			depth++
+		} else if c == open {
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+func matchingClose(chars: Str[], openAt: Int, open: Str, close: Str): Int {
+	mut depth := 0
+	for i := openAt; i < len(chars); i++ {
+		c := at(chars, i)
+		if c == open {
+			depth++
+		} else if c == close {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func onlyBlanks(chars: Str[], from: Int, to: Int): Bool {
+	for i := from; i < to; i++ {
+		if !isBlank(at(chars, i)) {
+			return false
+		}
+	}
+	return true
+}
+
+// `i(`, `a{`, `i[`, `a<`…: o bloco que envolve o cursor. Por dentro de um bloco
+// de várias linhas, `i{` pega as linhas inteiras entre as chaves.
+func blockObject(chars: Str[], pos: Int, inner: Bool, open: Str, close: Str, count: Int): Span {
+	mut o := pos
+	if at(chars, pos) != open {
+		o = unmatchedOpen(chars, pos - 1, open, close)
+	}
+	for n := 1; n < count && o >= 0; n++ {
+		o = unmatchedOpen(chars, o - 1, open, close)
+	}
+	if o < 0 {
+		return noSpan()
+	}
+	c := matchingClose(chars, o, open, close)
+	if c < 0 {
+		return noSpan()
+	}
+	if !inner {
+		return Span(o, c + 1, false, true)
+	}
+	mut from := o + 1
+	mut to := c
+	if at(chars, from) == "\n" {
+		from++
+	}
+	closeLine := lineStart(chars, c)
+	if closeLine > from && onlyBlanks(chars, closeLine, c) {
+		to = closeLine
+	}
+	if to < from {
+		to = from
+	}
+	linewise := from < to && from == lineStart(chars, from) && at(chars, to - 1) == "\n"
+	return Span(from, to, linewise, true)
+}
+
+// `ip` e `ap`: o parágrafo (ou a sequência de linhas vazias) do cursor.
+func paragraphObject(text: Str, chars: Str[], pos: Int, inner: Bool) : Span {
+	lines := split(text, "\n")
+	final := lastLine(chars)
+	current := lineOf(chars, pos)
+	empty := lineText(lines, current) == ""
+	mut first := current
+	for ; first > 0 && (lineText(lines, first - 1) == "") == empty; first-- {
+	}
+	mut last := current
+	for ; last < final && (lineText(lines, last + 1) == "") == empty; last++ {
+	}
+	if !inner {
+		if last < final {
+			last++
+			for ; last < final && (lineText(lines, last + 1) == "") == !empty; last++ {
+			}
+		} else if first > 0 {
+			first--
+			for ; first > 0 && (lineText(lines, first - 1) == "") == !empty; first-- {
+			}
+		}
+	}
+	return lineSpan(chars, lineOffset(chars, first), lineOffset(chars, last))
+}
+
+func textObject(text: Str, chars: Str[], pos: Int, inner: Bool, obj: Str, count: Int): Span {
+	if obj == "w" || obj == "W" {
+		return wordObject(chars, pos, inner, obj == "W", count)
+	} else if obj == "\"" || obj == "'" || obj == "`" {
+		return quoteObject(chars, pos, inner, obj)
+	} else if obj == "(" || obj == ")" || obj == "b" {
+		return blockObject(chars, pos, inner, "(", ")", count)
+	} else if obj == "\{" || obj == "}" || obj == "B" {
+		return blockObject(chars, pos, inner, "\{", "}", count)
+	} else if obj == "[" || obj == "]" {
+		return blockObject(chars, pos, inner, "[", "]", count)
+	} else if obj == "<" || obj == ">" {
+		return blockObject(chars, pos, inner, "<", ">", count)
+	} else if obj == "p" {
+		return paragraphObject(text, chars, pos, inner)
+	}
+	return noSpan()
+}
+
+// ── desfazer ─────────────────────────────────────────────────────────────
+
+func snapshot(ed: Editor): model.Snapshot {
+	return model.Snapshot(ed.text, ed.caret)
+}
+
+// Guarda `before` para o `u`. Uma alteração nova esquece o que dava para refazer.
+func pushUndo(ed: Editor, before: model.Snapshot): Editor {
+	mut e := ed
+	mut model.Snapshot[dyn] stack = ed.undo
+	append(stack, before)
+	if len(stack) > undoLimit() {
+		if stack bounds 0 {
+			drop(stack, 0, 0)
+		}
+	}
+	e.undo = stack
+	model.Snapshot[dyn] none = []
+	e.redo = none
+	return e
+}
+
+func undoSteps(ed: Editor, count: Int, back: Bool): Editor {
+	mut e := ed
+	mut model.Snapshot[dyn] from = ed.undo
+	mut model.Snapshot[dyn] into = ed.redo
+	if !back {
+		from = ed.redo
+		into = ed.undo
+	}
+	mut done := 0
+	for n := 0; n < count; n++ {
+		last := len(from) - 1
+		if from bounds last {
+			snap := from[last]
+			drop(from, last, last)
+			append(into, model.Snapshot(e.text, e.caret))
+			e.text = snap.text
+			e.caret = snap.caret
+			done++
+		}
+	}
+	if back {
+		e.undo = from
+		e.redo = into
+	} else {
+		e.undo = into
+		e.redo = from
+	}
+	e.caret = clampNormal(split(e.text, ""), e.caret)
+	if done == 0 && back {
+		return say(e, "Já está na alteração mais antiga", "", false)
+	} else if done == 0 {
+		return say(e, "Já está na alteração mais recente", "", false)
+	}
+	return e
+}
+
+// ── edições ──────────────────────────────────────────────────────────────
+
+func say(ed: Editor, message: Str, arg: Str, bad: Bool): Editor {
+	mut e := ed
+	mut Str[dyn] args = []
+	if arg != "" {
+		append(args, arg)
+	}
+	e.vim.message = message
+	e.vim.args = args
+	e.vim.error = bad
+	return e
+}
+
+func sayTwo(ed: Editor, message: Str, first: Str, second: Str): Editor {
+	mut e := ed
+	e.vim.message = message
+	e.vim.args = [first, second]
+	e.vim.error = false
+	return e
+}
+
+// Mensagem de "N linhas…", que o Vim só mostra a partir de 3.
+func report(ed: Editor, message: Str, lines: Int): Editor {
+	if lines >= 3 {
+		return say(ed, message, "{lines}", false)
+	}
+	return ed
+}
+
+func linesIn(text: Str): Int {
+	return len(split(text, "\n")) - 1
+}
+
+func effect(ed: Editor, message: model.Msg): Editor {
+	mut e := ed
+	mut model.Msg[dyn] effects = ed.effects
+	append(effects, message)
+	e.effects = effects
+	return e
+}
+
+// Guarda as teclas da alteração para o `.`.
+func recorded(ed: Editor, keys: Str[dyn]): Editor {
+	mut e := ed
+	e.vim.change = keys
+	e.vim.typed = ""
+	return e
+}
+
+// Copia um trecho para o registrador sem nome.
+func yank(ed: Editor, chars: Str[], span: Span): Editor {
+	mut e := ed
+	mut register := slice(ed.text, span.from, span.to)
+	if span.linewise && !endsWith(register, "\n") {
+		register = register + "\n"
+	}
+	e.vim.register = register
+	e.vim.linewise = span.linewise
+	e.clip = register
+	if span.linewise {
+		if span.from < lineStart(chars, ed.caret) {
+			e.caret = atColumn(chars, span.from, ed.vim.column, ed.tab)
+		}
+	} else {
+		e.caret = clampNormal(chars, span.from)
+	}
+	if span.linewise {
+		return report(e, "%1 linhas copiadas", linesIn(register))
+	}
+	return e
+}
+
+// Apaga um trecho, que vai para o registrador. Apagar a última linha leva junto
+// o "\n" de antes dela.
+func deleteSpan(ed: Editor, chars: Str[], span: Span): Editor {
+	if span.to <= span.from {
+		return ed
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	content := slice(ed.text, span.from, span.to)
+	mut from := span.from
+	mut register := content
+	if span.linewise && !endsWith(content, "\n") {
+		register = content + "\n"
+		if from > 0 {
+			from = from - 1
+		}
+	}
+	e.vim.register = register
+	e.vim.linewise = span.linewise
+	e.text = cut(ed.text, from, span.to)
+	after := split(e.text, "")
+	if span.linewise {
+		e.caret = firstNonBlank(after, clampNormal(after, from))
+		return report(e, "%1 linhas a menos", linesIn(register))
+	}
+	e.caret = clampNormal(after, from)
+	return e
+}
+
+// Entra no modo de inserção. `before` vai para a pilha de desfazer; `keys` e
+// `count` servem para o `.` e para repetir o que for digitado (`3ihi<Esc>`).
+func enterInsert(ed: Editor, before: model.Snapshot, keys: Str[dyn], count: Int): Editor {
+	mut e := pushUndo(ed, before)
+	e.vim.mode = model.VimMode.InsertMode()
+	e.vim.insertBase = ed.text
+	e.vim.insertAt = ed.caret
+	e.vim.insertKeys = keys
+	e.vim.count = maxInt(count, 1)
+	return e
+}
+
+// Apaga o trecho e entra no modo de inserção no lugar dele. Linhas inteiras
+// viram uma linha vazia com a indentação da primeira.
+func changeSpan(ed: Editor, chars: Str[], span: Span, keys: Str[dyn]): Editor {
+	before := snapshot(ed)
+	mut e := ed
+	content := slice(ed.text, span.from, span.to)
+	if content != "" {
+		e.vim.register = content
+		e.vim.linewise = span.linewise
+		if span.linewise && !endsWith(content, "\n") {
+			e.vim.register = content + "\n"
+		}
+	}
+	if span.linewise {
+		indent := leadingBlanks(slice(ed.text, span.from, lineEnd(chars, span.from)))
+		mut replacement := indent
+		if endsWith(content, "\n") {
+			replacement = indent + "\n"
+		}
+		e.text = complete.take(ed.text, span.from) + replacement + complete.skip(ed.text, span.to)
+		e.caret = span.from + len(indent)
+	} else {
+		e.text = cut(ed.text, span.from, span.to)
+		e.caret = span.from
+	}
+	return enterInsert(e, before, keys, 1)
+}
+
+// A unidade de indentação do arquivo: tab, a não ser que ele indente com espaços.
+func indentUnit(text: Str, tab: Int): Str {
+	if complete.startsWith(text, "\t") || indexOf(text, "\n\t") is Result.Ok(_) {
+		return "\t"
+	}
+	if complete.startsWith(text, "  ") || indexOf(text, "\n  ") is Result.Ok(_) {
+		return repeatText(" ", maxInt(tab, 1))
+	}
+	return "\t"
+}
+
+func unindent(line: Str, tab: Int): Str {
+	if complete.startsWith(line, "\t") {
+		return complete.skip(line, 1)
+	}
+	mut rest := line
+	for n := 0; n < maxInt(tab, 1) && complete.startsWith(rest, " "); n++ {
+		rest = complete.skip(rest, 1)
+	}
+	return rest
+}
+
+// `>` e `<`: indenta ou desindenta as linhas do trecho, `levels` vezes.
+func shiftLines(ed: Editor, chars: Str[], span: Span, right: Bool, levels: Int): Editor {
+	first := lineOf(chars, span.from)
+	last := lineOf(chars, maxInt(span.to - 1, span.from))
+	unit := indentUnit(ed.text, ed.tab)
+	mut Str[dyn] lines = split(ed.text, "\n")
+	for l := first; l <= last; l++ {
+		if lines bounds l {
+			mut line := lines[l]
+			for n := 0; n < levels; n++ {
+				if right && line != "" {
+					line = unit + line
+				} else if !right {
+					line = unindent(line, ed.tab)
+				}
+			}
+			lines[l] = line
+		}
+	}
+	text := join(lines, "\n")
+	if text == ed.text {
+		return ed
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = text
+	e.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, first))
+	return e
+}
+
+// `g~`, `gu`, `gU`, `~`, `u` e `U` no visual.
+func recase(ed: Editor, chars: Str[], span: Span, how: Str): Editor {
+	piece := slice(ed.text, span.from, span.to)
+	mut changed := toggleCase(piece)
+	if how == "gu" || how == "u" {
+		changed = search.lower(piece)
+	} else if how == "gU" || how == "U" {
+		changed = upper(piece)
+	}
+	if changed == piece {
+		return ed
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = complete.take(ed.text, span.from) + changed + complete.skip(ed.text, span.to)
+	if !span.linewise {
+		e.caret = clampNormal(split(e.text, ""), span.from)
+	}
+	return e
+}
+
+func applyOperator(ed: Editor, chars: Str[], op: Str, span: Span, keys: Str[dyn], levels: Int): Editor {
+	if op == "y" {
+		return yank(ed, chars, span)
+	} else if op == "d" {
+		return recorded(deleteSpan(ed, chars, span), keys)
+	} else if op == "c" {
+		return changeSpan(ed, chars, span, keys)
+	} else if op == ">" || op == "<" {
+		return recorded(shiftLines(ed, chars, span, op == ">", levels), keys)
+	}
+	return recorded(recase(ed, chars, span, op), keys)
+}
+
+// O trecho que um operador pega com um movimento. Um movimento exclusivo que
+// termina no começo de uma linha para no fim da anterior — e, se começou antes
+// do primeiro caractere não branco, vale pelas linhas inteiras.
+func operatorSpan(chars: Str[], caret: Int, t: Target): Span {
+	from := minInt(caret, t.pos)
+	mut to := maxInt(caret, t.pos)
+	if t.linewise {
+		return lineSpan(chars, from, to)
+	}
+	if t.inclusive {
+		return Span(from, minInt(to + 1, len(chars)), false, true)
+	}
+	if to > from && at(chars, to - 1) == "\n" {
+		if from <= firstNonBlank(chars, from) && to - 1 > from {
+			return lineSpan(chars, from, to - 1)
+		}
+		to = to - 1
+	}
+	return Span(from, to, false, true)
+}
+
+// Abre uma linha abaixo (ou acima) do cursor, com a indentação dela — e um
+// nível a mais depois de `{`, `[` ou `(`.
+func openLine(text: Str, caret: Int, below: Bool): complete.TextEdit {
+	chars := split(text, "")
+	start := lineStart(chars, caret)
+	end := lineEnd(chars, caret)
+	line := slice(text, start, end)
+	mut indent := leadingBlanks(line)
+	if below {
+		trimmed := trim(line)
+		if endsWith(trimmed, "\{") || endsWith(trimmed, "[") || endsWith(trimmed, "(") {
+			indent = indent + "\t"
+		}
+		return complete.TextEdit(insertAt(text, end, "\n" + indent), end + 1 + len(indent))
+	}
+	return complete.TextEdit(insertAt(text, start, indent + "\n"), start + len(indent))
+}
+
+// O que foi digitado desde que a inserção começou em `offset`, se foi só isso.
+func insertedText(base: Str, offset: Int, now: Str): Result<Str, Bool> {
+	grown := len(now) - len(base)
+	if grown < 0 || offset < 0 || offset > len(base) {
+		return Result.Error(false)
+	}
+	if complete.take(now, offset) == complete.take(base, offset) && complete.skip(now, offset + grown) == complete.skip(base, offset) {
+		return Result.Ok(slice(now, offset, offset + grown))
+	}
+	return Result.Error(false)
+}
+
+// `Esc` no modo de inserção: repete o que foi digitado se houve contagem, guarda
+// para o `.` (com `record`) e volta ao modo normal um caractere para trás.
+func leaveInsert(ed: Editor, record: Bool): Editor {
+	mut e := ed
+	v := ed.vim
+	mut text := ed.text
+	mut caret := ed.caret
+	typed := insertedText(v.insertBase, v.insertAt, ed.text)
+	if typed is Result.Ok(piece) {
+		if piece != "" && v.count > 1 {
+			command := at(v.insertKeys, len(v.insertKeys) - 1)
+			for n := 1; n < v.count; n++ {
+				if command == "o" || command == "O" {
+					opened := openLine(text, caret, command == "o")
+					text = opened.text
+					caret = opened.caret
+				}
+				text = insertAt(text, caret, piece)
+				caret = caret + len(piece)
+			}
+		}
+		if record {
+			e.vim.change = v.insertKeys
+			e.vim.typed = piece
+		}
+	}
+	chars := split(text, "")
+	if caret > lineStart(chars, caret) {
+		caret = caret - 1
+	}
+	e.text = text
+	e.caret = clampNormal(chars, caret)
+	e.vim.mode = model.VimMode.NormalMode()
+	e.vim.count = 1
+	e.vim.column = displayColumn(chars, e.caret, ed.tab)
+	// Entrou e saiu sem mudar nada: não há o que desfazer.
+	mut model.Snapshot[dyn] stack = e.undo
+	last := len(stack) - 1
+	if stack bounds last {
+		if stack[last].text == text {
+			drop(stack, last, last)
+		}
+	}
+	e.undo = stack
+	return e
+}
+
+// `p` e `P`: o registrador depois (ou antes) do cursor, `count` vezes.
+func put(ed: Editor, chars: Str[], before: Bool, count: Int): Editor {
+	register := ed.vim.register
+	if register == "" {
+		return say(ed, "E353: Nada no registrador", "", true)
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	size := len(chars)
+	mut piece := repeatText(register, count)
+	if ed.vim.linewise {
+		mut offset := lineStart(chars, ed.caret)
+		if !before {
+			end := lineEnd(chars, ed.caret)
+			if end >= size {
+				offset = size
+				piece = "\n" + complete.take(piece, len(piece) - 1)
+			} else {
+				offset = end + 1
+			}
+		}
+		e.text = insertAt(ed.text, offset, piece)
+		after := split(e.text, "")
+		mut first := offset
+		if complete.startsWith(piece, "\n") {
+			first = offset + 1
+		}
+		e.caret = firstNonBlank(after, first)
+		return report(e, "%1 linhas a mais", linesIn(register) * count)
+	}
+	mut offset := ed.caret
+	if !before && offset < size && at(chars, offset) != "\n" {
+		offset++
+	}
+	e.text = insertAt(ed.text, offset, piece)
+	e.caret = clampNormal(split(e.text, ""), offset + len(piece) - 1)
+	return e
+}
+
+// `J` (e `gJ`, sem mexer nos espaços): junta `count` linhas a partir do cursor.
+func joinLines(ed: Editor, chars: Str[], count: Int, spaces: Bool): Editor {
+	line := lineOf(chars, ed.caret)
+	final := lastLine(chars)
+	if line >= final {
+		return ed
+	}
+	mut Str[dyn] lines = split(ed.text, "\n")
+	mut joinAt := 0
+	mut joined := 0
+	for n := 0; n < maxInt(count - 1, 1); n++ {
+		next := line + 1
+		if next > final - joined {
+			break
+		}
+		current := lineText(lines, line)
+		following := lineText(lines, next)
+		mut rest := following
+		mut gap := ""
+		if spaces {
+			rest = analysis.trimLeft(following)
+			if current != "" && rest != "" && !endsWith(current, " ") && !endsWith(current, "\t") && !complete.startsWith(rest, ")") {
+				gap = " "
+			}
+		}
+		joinAt = len(current)
+		if lines bounds line {
+			lines[line] = current + gap + rest
+		}
+		if lines bounds next {
+			drop(lines, next, next)
+		}
+		joined++
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = join(lines, "\n")
+	e.caret = clampNormal(split(e.text, ""), offsetOfLine(lines, line) + joinAt)
+	return e
+}
+
+// `r`: troca `count` caracteres por `c`. `r<CR>` troca todos por uma quebra de linha.
+func replaceChars(ed: Editor, chars: Str[], c: Str, count: Int): Step {
+	end := lineEnd(chars, ed.caret)
+	if c == "" || ed.caret + count > end {
+		return fail(ed)
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	if c == "\n" {
+		e.text = complete.take(ed.text, ed.caret) + "\n" + complete.skip(ed.text, ed.caret + count)
+		e.caret = ed.caret + 1
+	} else {
+		e.text = complete.take(ed.text, ed.caret) + repeatText(c, count) + complete.skip(ed.text, ed.caret + count)
+		e.caret = ed.caret + count - 1
+	}
+	return done(e)
+}
+
+// `Ctrl+A` e `Ctrl+X`: soma `amount` ao número no cursor (ou ao primeiro depois dele na linha).
+func increment(ed: Editor, chars: Str[], amount: Int): Step {
+	end := lineEnd(chars, ed.caret)
+	mut i := ed.caret
+	for ; i > lineStart(chars, i) && highlight.isDigit(at(chars, i)) && highlight.isDigit(at(chars, i - 1)); i-- {
+	}
+	for ; i < end && !highlight.isDigit(at(chars, i)); i++ {
+	}
+	if i >= end {
+		return fail(ed)
+	}
+	mut start := i
+	mut stop := i
+	for ; stop < end && highlight.isDigit(at(chars, stop)); stop++ {
+	}
+	if at(chars, start - 1) == "-" {
+		start--
+	}
+	number := slice(ed.text, start, stop)
+	if hive.conv.sti(number) is Result.Ok(value) {
+		changed := "{value + amount}"
+		mut e := pushUndo(ed, snapshot(ed))
+		e.text = complete.take(ed.text, start) + changed + complete.skip(ed.text, stop)
+		e.caret = start + len(changed) - 1
+		return done(e)
+	}
+	return fail(ed)
+}
+
+// `Ctrl+D`, `Ctrl+U`, `Ctrl+F`, `Ctrl+B`, `Ctrl+E`, `Ctrl+Y`: rolam a tela e
+// levam o cursor junto quando ele sairia dela.
+func scrollBy(ed: Editor, chars: Str[], k: Str, count: Int, hasCount: Bool): Step {
+	final := lastLine(chars)
+	rows := maxInt(ed.rows, 1)
+	line := lineOf(chars, ed.caret)
+	mut delta := 0
+	mut view := ed.top
+	if k == "<C-d>" || k == "<C-u>" {
+		delta = maxInt(rows / 2, 1)
+		if hasCount {
+			delta = count
+		}
+		if k == "<C-u>" {
+			delta = 0 - delta
+		}
+	} else if k == "<C-f>" || k == "<PageDown>" {
+		delta = maxInt(rows - 2, 1) * count
+	} else if k == "<C-b>" || k == "<PageUp>" {
+		delta = 0 - maxInt(rows - 2, 1) * count
+	} else if k == "<C-e>" {
+		view = ed.top + count
+	} else if k == "<C-y>" {
+		view = ed.top - count
+	}
+	view = clampInt(view + delta, 0, final)
+	mut target := clampInt(line + delta, 0, final)
+	if target < view {
+		target = view
+	} else if target > view + rows - 1 {
+		target = view + rows - 1
+	}
+	mut e := ed
+	e.scroll = view
+	e.caret = atColumn(chars, lineOffset(chars, target), ed.vim.column, ed.tab)
+	return Step(e, #Done, true)
+}
+
+// `zz`, `zt`, `zb` (e `z.`, `z<CR>`, `z-`, que também vão ao primeiro não branco).
+func scrollAround(ed: Editor, chars: Str[], k: Str): Step {
+	mut e := ed
+	line := lineOf(chars, ed.caret)
+	rows := maxInt(ed.rows, 1)
+	if k == "t" || k == "<CR>" {
+		e.scroll = line
+	} else if k == "z" || k == "." {
+		e.scroll = maxInt(line - rows / 2, 0)
+	} else if k == "b" || k == "-" {
+		e.scroll = maxInt(line - rows + 1, 0)
+	} else {
+		return fail(ed)
+	}
+	if k == "<CR>" || k == "." || k == "-" {
+		e.caret = firstNonBlank(chars, ed.caret)
+		return done(e)
+	}
+	return Step(e, #Done, true)
+}
+
+// `*` e `#`: busca a palavra sob o cursor, inteira.
+func searchWord(ed: Editor, chars: Str[], backward: Bool, count: Int): Step {
+	word := wordUnder(chars, ed.caret)
+	if !word.ok {
+		return fail(say(ed, "E348: Nenhuma palavra sob o cursor", "", true))
+	}
+	mut e := ed
+	e.vim.pattern = slice(ed.text, word.from, word.to)
+	e.vim.backward = backward
+	e.vim.whole = true
+	e.vim.highlight = true
+	e.caret = word.from
+	t := searchTarget(e, chars, false, count)
+	if !t.ok {
+		return fail(say(e, t.note, t.arg, t.bad))
+	}
+	e.caret = t.pos
+	return done(say(e, t.note, t.arg, false))
+}
+
+// Abre a linha de comando (`:`, `/` ou `?`), já com `text` escrito.
+func openPrompt(ed: Editor, prompt: Str, text: Str): Editor {
+	mut e := ed
+	e.vim.prompt = prompt
+	e.vim.command = text
+	e.vim.historyAt = len(ed.vim.history)
+	e.vim.promptFrom = ""
+	return e
+}
+
+// ── ler as teclas ────────────────────────────────────────────────────────
+
+func wait(ed: Editor): Step {
+	return Step(ed, #Wait, false)
+}
+
+func done(ed: Editor): Step {
+	return Step(ed, #Done, false)
+}
+
+func fail(ed: Editor): Step {
+	return Step(ed, #Fail, false)
+}
+
+// Guarda o último `f`/`t`/`F`/`T`, para `;` e `,`.
+func remember(ed: Editor, keys: Str[]): Editor {
+	mut e := ed
+	k := at(keys, 0)
+	if (k == "f" || k == "F" || k == "t" || k == "T") && literal(at(keys, 1)) != "" {
+		e.vim.find = [k, literal(at(keys, 1))]
+	}
+	return e
+}
+
+// Um movimento sozinho: leva o cursor (no visual, a ponta da seleção).
+func moveStep(ed: Editor, chars: Str[], keys: Str[dyn], count: Int, hasCount: Bool): Step {
+	t := motion(ed, chars, keys, count, hasCount)
+	mut e := remember(ed, keys)
+	if !t.ok {
+		return fail(say(e, t.note, t.arg, t.bad))
+	}
+	e.caret = clampNormal(chars, t.pos)
+	e = say(e, t.note, t.arg, t.bad)
+	k := at(keys, 0)
+	if k == "$" || k == "<End>" || (k == "g" && at(keys, 1) == "$") {
+		e.vim.column = endColumn()
+		return Step(e, #Done, true)
+	}
+	return Step(e, #Done, t.keep)
+}
+
+// `d`, `c`, `y`, `>`, `<`, `g~`, `gu`, `gU` seguidos de um movimento, de um
+// objeto de texto (`iw`, `a"`, `i\{`…) ou de si mesmos (`dd`, `>>`, `gUU`).
+func operatorStep(ed: Editor, chars: Str[], keys: Str[dyn], start: Int, op: Str, count: Int, hasCount: Bool): Step {
+	mut i := start
+	mut second := 0
+	for ; i < len(keys); i++ {
+		d := digitOf(at(keys, i))
+		if d < 0 || (d == 0 && second == 0) {
+			break
+		}
+		second = second * 10 + d
+	}
+	total := count * maxInt(second, 1)
+	anyCount := hasCount || second > 0
+	k := at(keys, i)
+	if k == "" {
+		return wait(ed)
+	}
+	mut doubled := k == op
+	if op is "g{rest}" {
+		doubled = k == rest || (k == "g" && at(keys, i + 1) == rest)
+	}
+	if doubled {
+		first := lineOf(chars, ed.caret)
+		last := minInt(first + total - 1, lastLine(chars))
+		span := lineSpan(chars, ed.caret, lineOffset(chars, last))
+		return done(applyOperator(ed, chars, op, span, keys, 1))
+	}
+	if k == "i" || k == "a" {
+		obj := at(keys, i + 1)
+		if obj == "" {
+			return wait(ed)
+		}
+		span := textObject(ed.text, chars, ed.caret, k == "i", obj, total)
+		if !span.ok {
+			return fail(ed)
+		}
+		return done(applyOperator(ed, chars, op, span, keys, 1))
+	}
+	size := motionLength(keys, i)
+	if size == 0 {
+		return wait(ed)
+	}
+	if size < 0 {
+		return fail(ed)
+	}
+	moves := keysFrom(keys, i, size)
+	e := remember(ed, moves)
+	big := k == "W"
+	if op == "c" && (k == "w" || k == "W") && !isSpace(at(chars, ed.caret)) && at(chars, ed.caret) != "" {
+		span := Span(ed.caret, minInt(changeWordEnd(chars, ed.caret, big, total) + 1, len(chars)), false, true)
+		return done(applyOperator(e, chars, op, span, keys, 1))
+	}
+	if k == "w" || k == "W" {
+		// A última palavra de uma linha não leva o "\n" junto.
+		mut before := ed.caret
+		mut p := ed.caret
+		for n := 0; n < total; n++ {
+			before = p
+			p = nextWord(chars, p, big)
+		}
+		if lineOf(chars, p) > lineOf(chars, before) {
+			p = maxInt(lineEnd(chars, before), ed.caret)
+		}
+		return done(applyOperator(e, chars, op, Span(ed.caret, p, false, true), keys, 1))
+	}
+	t := motion(e, chars, moves, total, anyCount)
+	if !t.ok {
+		return fail(say(e, t.note, t.arg, t.bad))
+	}
+	return done(applyOperator(e, chars, op, operatorSpan(chars, ed.caret, t), keys, 1))
+}
+
+// Entra no modo de inserção num lugar do texto (`i`, `a`, `I`, `A`, `o`, `O`).
+func insertStep(ed: Editor, chars: Str[], k: Str, keys: Str[dyn], count: Int): Step {
+	before := snapshot(ed)
+	mut e := ed
+	if k == "a" {
+		if ed.caret < len(chars) && at(chars, ed.caret) != "\n" {
+			e.caret = ed.caret + 1
+		}
+	} else if k == "A" {
+		e.caret = lineEnd(chars, ed.caret)
+	} else if k == "I" {
+		e.caret = firstNonBlank(chars, ed.caret)
+		if isBlank(at(chars, e.caret)) {
+			e.caret = lineEnd(chars, ed.caret)
+		}
+	} else if k == "o" || k == "O" {
+		opened := openLine(ed.text, ed.caret, k == "o")
+		e.text = opened.text
+		e.caret = opened.caret
+	}
+	return done(enterInsert(e, before, keys, count))
+}
+
+// `.`: repete a última alteração (com outra contagem, se houver uma).
+func repeatChange(ed: Editor, count: Int, hasCount: Bool): Editor {
+	change := ed.vim.change
+	typed := ed.vim.typed
+	if len(change) == 0 {
+		return ed
+	}
+	mut Str[dyn] keys = []
+	if hasCount {
+		keys = split("{count}", "")
+	}
+	mut counting := true
+	for each k in change {
+		if counting && digitOf(k) >= 0 {
+			if !hasCount {
+				append(keys, k)
+			}
+		} else {
+			counting = false
+			append(keys, k)
+		}
+	}
+	mut e := ed
+	Str[dyn] none = []
+	e.vim.pending = none
+	mut out := normalStep(e, keys).editor
+	if out.vim.mode == model.VimMode.InsertMode() {
+		out.text = insertAt(out.text, out.caret, typed)
+		out.caret = out.caret + len(typed)
+		out = leaveInsert(out, false)
+	}
+	out.vim.change = change
+	out.vim.typed = typed
+	return out
+}
+
+// As teclas pendentes no modo normal.
+func normalStep(ed: Editor, keys: Str[dyn]): Step {
+	chars := split(ed.text, "")
+	mut i := 0
+	mut count := 0
+	for ; i < len(keys); i++ {
+		d := digitOf(at(keys, i))
+		if d < 0 || (d == 0 && count == 0) {
+			break
+		}
+		count = count * 10 + d
+	}
+	hasCount := count > 0
+	n := maxInt(count, 1)
+	k := at(keys, i)
+	next := at(keys, i + 1)
+	pos := ed.caret
+	end := lineEnd(chars, pos)
+	if k == "" {
+		return wait(ed)
+	}
+	if k == "q" {
+		if ed.vim.recordingTo != "" {
+			return Step(stopRecording(ed), #Done, true)
+		} else if next == "" {
+			return wait(ed)
+		}
+		return startRecording(ed, next)
+	} else if k == "@" {
+		if next == "" {
+			return wait(ed)
+		}
+		return playMacro(ed, next, n)
+	}
+	if k == "d" || k == "c" || k == "y" || k == ">" || k == "<" {
+		return operatorStep(ed, chars, keys, i + 1, k, n, hasCount)
+	}
+	if k == "g" {
+		if next == "" {
+			return wait(ed)
+		} else if next == "~" || next == "u" || next == "U" {
+			return operatorStep(ed, chars, keys, i + 2, "g" + next, n, hasCount)
+		} else if next == "d" {
+			return done(effect(ed, model.Msg.GotoDefinition(pos)))
+		} else if next == "t" {
+			return done(effect(ed, model.Msg.CycleTab(1)))
+		} else if next == "T" {
+			return done(effect(ed, model.Msg.CycleTab(-1)))
+		} else if next == "J" {
+			return done(recorded(joinLines(ed, chars, maxInt(count, 2), false), keys))
+		}
+	}
+	if k == "z" {
+		if next == "" {
+			return wait(ed)
+		}
+		return scrollAround(ed, chars, next)
+	}
+	if k == "Z" {
+		if next == "" {
+			return wait(ed)
+		} else if next == "Z" {
+			return done(command(ed, chars, "x", false, "", 0, 0, false))
+		} else if next == "Q" {
+			return done(command(ed, chars, "q", true, "", 0, 0, false))
+		}
+		return fail(ed)
+	}
+	if k == "r" {
+		if next == "" {
+			return wait(ed)
+		}
+		step := replaceChars(ed, chars, literal(next), n)
+		return Step(recorded(step.editor, keys), step.status, false)
+	}
+	if k == "x" || k == "<Del>" {
+		return done(recorded(deleteSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true)), keys))
+	} else if k == "X" {
+		return done(recorded(deleteSpan(ed, chars, Span(maxInt(pos - n, lineStart(chars, pos)), pos, false, true)), keys))
+	} else if k == "D" || k == "C" {
+		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
+		span := Span(pos, lineEnd(chars, lineOffset(chars, last)), false, true)
+		if k == "C" {
+			return done(changeSpan(ed, chars, span, keys))
+		}
+		return done(recorded(deleteSpan(ed, chars, span), keys))
+	} else if k == "s" {
+		return done(changeSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true), keys))
+	} else if k == "S" {
+		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
+		return done(changeSpan(ed, chars, lineSpan(chars, pos, lineOffset(chars, last)), keys))
+	} else if k == "Y" {
+		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
+		return done(yank(ed, chars, lineSpan(chars, pos, lineOffset(chars, last))))
+	} else if k == "p" || k == "P" {
+		return done(recorded(put(ed, chars, k == "P", n), keys))
+	} else if k == "J" {
+		return done(recorded(joinLines(ed, chars, maxInt(count, 2), true), keys))
+	} else if k == "u" {
+		return done(undoSteps(ed, n, true))
+	} else if k == "<C-r>" {
+		return done(undoSteps(ed, n, false))
+	} else if k == "." {
+		return done(repeatChange(ed, n, hasCount))
+	} else if k == "i" || k == "a" || k == "I" || k == "A" || k == "o" || k == "O" {
+		return insertStep(ed, chars, k, keys, n)
+	} else if k == "~" {
+		to := minInt(pos + n, end)
+		if to <= pos {
+			return fail(ed)
+		}
+		mut e := recorded(recase(ed, chars, Span(pos, to, false, true), "~"), keys)
+		e.caret = clampNormal(split(e.text, ""), to)
+		return done(e)
+	} else if k == "v" || k == "V" {
+		mut e := ed
+		e.vim.mode = model.VimMode.VisualMode()
+		if k == "V" {
+			e.vim.mode = model.VimMode.VisualLineMode()
+		}
+		e.vim.anchor = pos
+		return Step(e, #Done, true)
+	} else if k == ":" {
+		mut range := ""
+		if hasCount {
+			range = ".,.+{count - 1}"
+		}
+		return Step(openPrompt(ed, ":", range), #Done, true)
+	} else if k == "/" || k == "?" {
+		return Step(openPrompt(ed, k, ""), #Done, true)
+	} else if k == "*" || k == "#" {
+		return searchWord(ed, chars, k == "#", n)
+	} else if isAny(k, ["<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "<PageDown>", "<PageUp>"]) {
+		return scrollBy(ed, chars, k, n, hasCount)
+	} else if k == "<C-a>" || k == "<C-x>" {
+		mut amount := n
+		if k == "<C-x>" {
+			amount = 0 - n
+		}
+		step := increment(ed, chars, amount)
+		return Step(recorded(step.editor, keys), step.status, false)
+	}
+	length := motionLength(keys, i)
+	if length == 0 {
+		return wait(ed)
+	}
+	if length < 0 {
+		return fail(ed)
+	}
+	return moveStep(ed, chars, keysFrom(keys, i, length), n, hasCount)
+}
+
+// O que está selecionado no modo visual (a ponta do cursor inclusa).
+func selection(text: Str, chars: Str[], caret: Int, v: model.Vim): Span {
+	a := minInt(v.anchor, caret)
+	b := maxInt(v.anchor, caret)
+	if v.mode == model.VimMode.VisualLineMode() {
+		return lineSpan(chars, a, b)
+	}
+	return Span(a, minInt(b + 1, len(chars)), false, true)
+}
+
+// `p` no visual: troca a seleção pelo registrador (e o registrador pelo que saiu).
+func putOver(ed: Editor, chars: Str[], span: Span) : Editor {
+	register := ed.vim.register
+	if register == "" {
+		return say(ed, "E353: Nada no registrador", "", true)
+	}
+	content := slice(ed.text, span.from, span.to)
+	mut piece := register
+	if span.linewise && !ed.vim.linewise {
+		piece = register + "\n"
+	} else if !span.linewise && ed.vim.linewise {
+		piece = "\n" + register
+	}
+	if span.linewise && !endsWith(content, "\n") && endsWith(piece, "\n") {
+		piece = complete.take(piece, len(piece) - 1)
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = complete.take(ed.text, span.from) + piece + complete.skip(ed.text, span.to)
+	e.vim.register = content
+	e.vim.linewise = span.linewise
+	after := split(e.text, "")
+	if span.linewise {
+		e.caret = firstNonBlank(after, span.from)
+	} else {
+		e.caret = clampNormal(after, span.from + len(piece) - 1)
+	}
+	return e
+}
+
+func toNormal(ed: Editor) : Editor {
+	mut e := ed
+	e.vim.mode = model.VimMode.NormalMode()
+	e.caret = clampNormal(split(e.text, ""), e.caret)
+	return e
+}
+
+// As teclas pendentes no modo visual.
+func visualStep(ed: Editor, keys: Str[dyn]): Step {
+	chars := split(ed.text, "")
+	mut i := 0
+	mut count := 0
+	for ; i < len(keys); i++ {
+		d := digitOf(at(keys, i))
+		if d < 0 || (d == 0 && count == 0) {
+			break
+		}
+		count = count * 10 + d
+	}
+	hasCount := count > 0
+	n := maxInt(count, 1)
+	k := at(keys, i)
+	next := at(keys, i + 1)
+	lines := ed.vim.mode == model.VimMode.VisualLineMode()
+	span := selection(ed.text, chars, ed.caret, ed.vim)
+	whole := lineSpan(chars, span.from, maxInt(span.to - 1, span.from))
+	mut e := ed
+	e.vim.visualFrom = lineOf(chars, span.from)
+	e.vim.visualTo = lineOf(chars, maxInt(span.to - 1, span.from))
+	if k == "" {
+		return wait(e)
+	}
+	if k == "q" && ed.vim.recordingTo != "" {
+		return Step(stopRecording(e), #Done, true)
+	}
+	if k == "v" || k == "V" {
+		if (k == "v" && !lines) || (k == "V" && lines) {
+			return done(toNormal(e))
+		}
+		if k == "v" {
+			e.vim.mode = model.VimMode.VisualMode()
+		} else {
+			e.vim.mode = model.VimMode.VisualLineMode()
+		}
+		return Step(e, #Done, true)
+	} else if k == "o" || k == "O" {
+		e.vim.anchor = ed.caret
+		e.caret = ed.vim.anchor
+		return done(e)
+	} else if k == ":" {
+		return Step(toNormal(openPrompt(e, ":", "'<,'>")), #Done, true)
+	} else if k == "d" || k == "x" || k == "<Del>" {
+		return done(toNormal(deleteSpan(e, chars, span)))
+	} else if k == "D" || k == "X" {
+		return done(toNormal(deleteSpan(e, chars, whole)))
+	} else if k == "y" {
+		return done(toNormal(yank(e, chars, span)))
+	} else if k == "Y" {
+		return done(toNormal(yank(e, chars, whole)))
+	} else if k == "c" || k == "s" {
+		return done(changeSpan(e, chars, span, keys))
+	} else if k == "C" || k == "S" || k == "R" {
+		return done(changeSpan(e, chars, whole, keys))
+	} else if k == ">" || k == "<" {
+		return done(toNormal(shiftLines(e, chars, whole, k == ">", n)))
+	} else if k == "~" || k == "u" || k == "U" {
+		return done(toNormal(recase(e, chars, span, k)))
+	} else if k == "J" {
+		e.caret = span.from
+		return done(toNormal(joinLines(e, chars, maxInt(e.vim.visualTo - e.vim.visualFrom + 1, 2), true)))
+	} else if k == "p" || k == "P" {
+		return done(toNormal(putOver(e, chars, span)))
+	} else if k == "r" {
+		if next == "" {
+			return wait(e)
+		}
+		c := literal(next)
+		if c == "" || c == "\n" {
+			return fail(e)
+		}
+		mut Str[dyn] out = []
+		for each ch in split(slice(ed.text, span.from, span.to), "") {
+			if ch == "\n" {
+				append(out, ch)
+			} else {
+				append(out, c)
+			}
+		}
+		mut changed := pushUndo(e, snapshot(e))
+		changed.text = complete.take(ed.text, span.from) + join(out, "") + complete.skip(ed.text, span.to)
+		changed.caret = span.from
+		return done(toNormal(changed))
+	} else if k == "g" {
+		if next == "" {
+			return wait(e)
+		} else if next == "~" || next == "u" || next == "U" {
+			return done(toNormal(recase(e, chars, span, "g" + next)))
+		} else if next == "J" {
+			e.caret = span.from
+			return done(toNormal(joinLines(e, chars, maxInt(e.vim.visualTo - e.vim.visualFrom + 1, 2), false)))
+		}
+	} else if k == "i" || k == "a" {
+		if next == "" {
+			return wait(e)
+		}
+		obj := textObject(ed.text, chars, ed.caret, k == "i", next, n)
+		if !obj.ok || obj.to <= obj.from {
+			return fail(e)
+		}
+		e.vim.anchor = obj.from
+		e.caret = obj.to - 1
+		return done(e)
+	} else if isAny(k, ["<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "<PageDown>", "<PageUp>"]) {
+		return scrollBy(e, chars, k, n, hasCount)
+	}
+	length := motionLength(keys, i)
+	if length == 0 {
+		return wait(e)
+	}
+	if length < 0 {
+		return fail(e)
+	}
+	return moveStep(e, chars, keysFrom(keys, i, length), n, hasCount)
+}
+
+// ── a entrada do motor ───────────────────────────────────────────────────
+
+// Zera o que uma tecla devolve (mensagem, rolagem, cópia, efeitos).
+func begin(ed: Editor): Editor {
+	mut e := say(ed, "", "", false)
+	e.scroll = -1
+	e.clip = ""
+	model.Msg[dyn] none = []
+	e.effects = none
+	return e
+}
+
+// Uma tecla no editor. É a entrada do motor.
+func press(ed: Editor, key: Str): Editor {
+	return recordKey(ed, key, keyStep(begin(ed), key).editor)
+}
+
+// Uma tecla, e se ela deu certo: uma macro para no primeiro erro, como no Vim.
+func keyStep(ed: Editor, key: Str): Step {
+	mut e := ed
+	// O cursor mudou por fora (clique, busca, ir para a definição): a coluna
+	// que `j` e `k` guardam passa a ser a dele.
+	if ed.caret != ed.vim.columnAt {
+		e.vim.column = displayColumn(split(ed.text, ""), ed.caret, ed.tab)
+	}
+	mode := ed.vim.mode
+	if mode == model.VimMode.InsertMode() {
+		if isEscape(key) {
+			return done(settled(leaveInsert(e, true)))
+		}
+		return done(typeKey(e, key))
+	}
+	if ed.vim.prompt != "" {
+		return promptStep(e, key)
+	}
+	Str[dyn] cleared = []
+	if isEscape(key) {
+		e.vim.pending = cleared
+		return done(settled(toNormal(e)))
+	}
+	mut Str[dyn] keys = ed.vim.pending
+	append(keys, key)
+	mut step := normalStep(e, keys)
+	if mode != model.VimMode.NormalMode() {
+		step = visualStep(e, keys)
+	}
+	out := step.editor
+	if step.status == #Wait {
+		mut waiting := out
+		waiting.vim.pending = keys
+		return Step(settled(waiting), #Wait, false)
+	}
+	mut finished := out
+	finished.vim.pending = cleared
+	if step.status == #Done && !step.keep {
+		finished.vim.column = displayColumn(split(out.text, ""), out.caret, out.tab)
+	}
+	return Step(settled(finished), step.status, step.keep)
+}
+
+// Uma tecla com a linha de comando aberta: a página ainda não tinha posto o
+// foco nela, ou uma macro está repetindo o comando que gravou.
+func promptStep(ed: Editor, key: Str): Step {
+	mut e := ed
+	if isEscape(key) {
+		return done(closePrompt(e))
+	} else if key == "<CR>" {
+		out := runCommandLine(e, ed.vim.command)
+		if out.vim.error {
+			return fail(out)
+		}
+		return done(out)
+	} else if complete.startsWith(key, "<Text>") {
+		e.vim.command = complete.skip(key, 6)
+	} else {
+		e.vim = promptKey(ed.vim, key)
+	}
+	return done(e)
+}
+
+func closePrompt(ed: Editor): Editor {
+	mut e := ed
+	e.vim.prompt = ""
+	e.vim.command = ""
+	return e
+}
+
+// Esc na linha de comando, vindo da página.
+func cancel(ed: Editor): Editor {
+	return recordKey(ed, "<Esc>", closePrompt(begin(ed)))
+}
+
+// ── macros ───────────────────────────────────────────────────────────────
+
+// Com uma macro sendo gravada, guarda a tecla. Na inserção, o que se digitou
+// (e a página escreveu sozinha) entra de uma vez, no Esc; na linha de comando,
+// o comando inteiro entra no Enter. `<Text>…` é um texto digitado.
+func recordKey(before: Editor, key: Str, after: Editor): Editor {
+	if before.vim.recordingTo == "" || after.vim.recordingTo == "" {
+		return after
+	}
+	mut Str[dyn] tokens = []
+	if before.vim.mode == model.VimMode.InsertMode() {
+		if !isEscape(key) {
+			return after
+		}
+		typed := insertedText(before.vim.insertBase, before.vim.insertAt, before.text)
+		if typed is Result.Ok(piece) {
+			if piece != "" {
+				append(tokens, "<Text>" + piece)
+			}
+		}
+		append(tokens, "<Esc>")
+	} else if before.vim.prompt != "" {
+		if key == "<CR>" {
+			append(tokens, "<Text>" + before.vim.command)
+			append(tokens, "<CR>")
+		} else if isEscape(key) {
+			append(tokens, "<Esc>")
+		} else {
+			return after
+		}
+	} else {
+		append(tokens, key)
+	}
+	return recordTokens(after, tokens)
+}
+
+func recordTokens(ed: Editor, tokens: Str[]): Editor {
+	mut e := ed
+	mut Str[dyn] recorded = ed.vim.recorded
+	for each token in tokens {
+		append(recorded, token)
+	}
+	e.vim.recorded = recorded
+	return e
+}
+
+func isRegister(reg: Str): Bool {
+	return len(reg) == 1 && (isLetter(reg) || highlight.isDigit(reg))
+}
+
+// `qa` começa a gravar em `a`; `qA` continua a macro que já está em `a`.
+func startRecording(ed: Editor, reg: Str): Step {
+	if !isRegister(reg) {
+		return fail(ed)
+	}
+	name := search.lower(reg)
+	mut Str[dyn] tokens = []
+	if name != reg {
+		if hive.map.get(ed.vim.macros, name) is Result.Ok(old) {
+			tokens = old
+		}
+	}
+	mut e := ed
+	e.vim.recordingTo = name
+	e.vim.recorded = tokens
+	return Step(e, #Done, true)
+}
+
+// `q` de novo: guarda a macro.
+func stopRecording(ed: Editor): Editor {
+	mut e := ed
+	mut hive.map.Map<Str, Str[dyn]> macros = ed.vim.macros
+	hive.map.set(macros, ed.vim.recordingTo, ed.vim.recorded)
+	Str[dyn] none = []
+	e.vim.macros = macros
+	e.vim.recordingTo = ""
+	e.vim.recorded = none
+	return e
+}
+
+// Até quantas macros podem rodar uma dentro da outra (uma que chama a si mesma para aí).
+func macroDepth(): Int {
+	return 20
+}
+
+// O último comando de `:` do histórico, sem os dois-pontos.
+func lastCommand(history: Str[]): Str {
+	mut found := ""
+	for each entry in history {
+		if complete.startsWith(entry, ":") {
+			found = complete.skip(entry, 1)
+		}
+	}
+	return found
+}
+
+// `@a` repete as teclas gravadas em `a`, `count` vezes; `@@` repete a última
+// macro e `@:` o último comando. Para no primeiro erro, como no Vim — é o que
+// faz `100@a` parar no fim do arquivo.
+func playMacro(ed: Editor, reg: Str, count: Int): Step {
+	mut name := search.lower(reg)
+	if reg == "@" {
+		name = ed.vim.lastMacro
+	}
+	if name == "" {
+		return fail(ed)
+	}
+	if ed.vim.replaying >= macroDepth() {
+		return fail(say(ed, "E: macros dentro de macros demais", "", true))
+	}
+	mut Str[dyn] tokens = []
+	if name == ":" {
+		last := lastCommand(ed.vim.history)
+		if last == "" {
+			return fail(say(ed, "E30: Nenhuma linha de comando anterior", "", true))
+		}
+		tokens = [":", "<Text>" + last, "<CR>"]
+	} else if hive.map.get(ed.vim.macros, name) is Result.Ok(found) {
+		tokens = found
+	} else {
+		return fail(ed)
+	}
+	mut e := ed
+	Str[dyn] none = []
+	e.vim.pending = none
+	e.vim.lastMacro = name
+	e.vim.replaying = ed.vim.replaying + 1
+	mut status := #Done
+	for n := 0; n < count && status != #Fail; n++ {
+		for each token in tokens {
+			if status != #Fail {
+				step := keyStep(e, token)
+				e = step.editor
+				if step.status == #Fail {
+					status = #Fail
+				}
+			}
+		}
+	}
+	e.vim.replaying = ed.vim.replaying
+	return Step(e, status, true)
+}
+
+// Uma tecla que chegou aqui no modo de inserção — a página ainda não sabia que
+// a inserção tinha começado — vira texto, como no editor.
+func typeKey(ed: Editor, key: Str): Editor {
+	mut e := ed
+	chars := split(ed.text, "")
+	if complete.startsWith(key, "<Text>") {
+		piece := complete.skip(key, 6)
+		e.text = insertAt(ed.text, ed.caret, piece)
+		e.caret = ed.caret + len(piece)
+	} else if key == "<BS>" {
+		if ed.caret > 0 {
+			e.text = cut(ed.text, ed.caret - 1, ed.caret)
+			e.caret = ed.caret - 1
+		}
+	} else if key == "<Del>" {
+		if ed.caret < len(chars) {
+			e.text = cut(ed.text, ed.caret, ed.caret + 1)
+		}
+	} else if key == "<Left>" {
+		e.caret = maxInt(ed.caret - 1, 0)
+	} else if key == "<Right>" {
+		e.caret = minInt(ed.caret + 1, len(chars))
+	} else if key == "<CR>" {
+		line := slice(ed.text, lineStart(chars, ed.caret), ed.caret)
+		mut indent := leadingBlanks(line)
+		trimmed := trim(line)
+		if endsWith(trimmed, "\{") || endsWith(trimmed, "[") || endsWith(trimmed, "(") {
+			indent = indent + "\t"
+		}
+		e.text = insertAt(ed.text, ed.caret, "\n" + indent)
+		e.caret = ed.caret + 1 + len(indent)
+	} else {
+		c := literal(key)
+		if c != "" {
+			e.text = insertAt(ed.text, ed.caret, c)
+			e.caret = ed.caret + 1
+		}
+	}
+	return e
+}
+
+// Uma tecla que chegou aqui com a linha de comando aberta (a página ainda não
+// tinha posto o foco nela) entra no que está sendo digitado.
+func promptKey(v: model.Vim, key: Str): model.Vim {
+	mut next := v
+	if key == "<BS>" {
+		next.command = complete.take(v.command, len(v.command) - 1)
+	} else if literal(key) != "" && key != "<CR>" {
+		next.command = v.command + literal(key)
+	}
+	return next
+}
+
+// Trocar de documento (ou ligar o modo Vim) começa no modo normal, sem nada pendente.
+func reset(v: model.Vim): model.Vim {
+	mut next := v
+	Str[dyn] none = []
+	next.mode = model.VimMode.NormalMode()
+	next.pending = none
+	next.prompt = ""
+	next.command = ""
+	next.columnAt = -1
+	next.serial = v.serial + 1
+	return next
+}
+
+// Lembra para qual cursor a coluna desejada foi calculada.
+func settled(ed: Editor): Editor {
+	mut e := ed
+	e.vim.columnAt = ed.caret
+	return e
+}
+
+// Um clique (ou uma seleção com o mouse) no texto.
+func click(ed: Editor, start: Int, end: Int): Editor {
+	mut e := say(ed, "", "", false)
+	Str[dyn] cleared = []
+	e.vim.pending = cleared
+	chars := split(ed.text, "")
+	if ed.vim.mode == model.VimMode.InsertMode() {
+		e.caret = start
+		return e
+	}
+	if end > start {
+		if ed.vim.mode != model.VimMode.VisualLineMode() {
+			e.vim.mode = model.VimMode.VisualMode()
+		}
+		e.vim.anchor = start
+		e.caret = end - 1
+	} else {
+		e.vim.mode = model.VimMode.NormalMode()
+		e.caret = clampNormal(chars, start)
+	}
+	e.vim.column = displayColumn(chars, e.caret, ed.tab)
+	return settled(e)
+}
+
+// ── a linha de comando ───────────────────────────────────────────────────
+
+// O que foi digitado depois de `:`, `/` ou `?`, ao apertar Enter na página.
+func submit(ed: Editor, typed: Str): Editor {
+	out := runCommandLine(begin(ed), typed)
+	if ed.vim.recordingTo != "" && out.vim.recordingTo != "" {
+		return recordTokens(out, ["<Text>" + typed, "<CR>"])
+	}
+	return out
+}
+
+func runCommandLine(ed: Editor, typed: Str): Editor {
+	mut e := ed
+	mut prompt := ed.vim.prompt
+	if prompt == "" {
+		prompt = ":"
+	}
+	e.vim.prompt = ""
+	e.vim.command = ""
+	if typed != "" {
+		entry := prompt + typed
+		mut Str[dyn] history = []
+		for each old in ed.vim.history {
+			if old != entry {
+				append(history, old)
+			}
+		}
+		append(history, entry)
+		if len(history) > 100 {
+			if history bounds 0 {
+				drop(history, 0, 0)
+			}
+		}
+		e.vim.history = history
+	}
+	e.vim.historyAt = len(e.vim.history)
+	if prompt == "/" || prompt == "?" {
+		return settled(searchFor(e, typed, prompt == "?"))
+	}
+	return execute(e, typed)
+}
+
+func searchFor(ed: Editor, typed: Str, backward: Bool): Editor {
+	mut e := ed
+	mut pattern := typed
+	if pattern == "" {
+		pattern = ed.vim.pattern
+	}
+	if pattern == "" {
+		return say(e, "E35: Nenhuma busca anterior", "", true)
+	}
+	e.vim.pattern = pattern
+	e.vim.backward = backward
+	e.vim.whole = false
+	e.vim.highlight = true
+	chars := split(e.text, "")
+	t := searchTarget(e, chars, false, 1)
+	if !t.ok {
+		return say(e, t.note, t.arg, t.bad)
+	}
+	e.caret = clampNormal(chars, t.pos)
+	e.vim.column = displayColumn(chars, e.caret, e.tab)
+	return say(e, t.note, t.arg, false)
+}
+
+// ↑ e ↓ na linha de comando: as entradas já usadas do mesmo tipo.
+func browseHistory(v: model.Vim, delta: Int): model.Vim {
+	mut next := v
+	count := len(v.history)
+	mut i := v.historyAt
+	for n := 0; n <= count; n++ {
+		i = i + delta
+		if i < 0 {
+			return next
+		}
+		if i >= count {
+			next.historyAt = count
+			next.command = ""
+			return next
+		}
+		entry := at(v.history, i)
+		search := v.prompt == "/" || v.prompt == "?"
+		if (search && (complete.startsWith(entry, "/") || complete.startsWith(entry, "?"))) || (!search && complete.startsWith(entry, v.prompt)) {
+			next.historyAt = i
+			next.command = complete.skip(entry, 1)
+			return next
+		}
+	}
+	return next
+}
+
+func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Address {
+	mut i := start
+	mut line := current
+	mut ok := false
+	c := at(cmd, i)
+	if highlight.isDigit(c) {
+		mut value := 0
+		for ; highlight.isDigit(at(cmd, i)); i++ {
+			value = value * 10 + digitOf(at(cmd, i))
+		}
+		line = value - 1
+		ok = true
+	} else if c == "." {
+		i++
+		ok = true
+	} else if c == "$" {
+		line = final
+		i++
+		ok = true
+	} else if c == "'" && at(cmd, i + 1) == "<" {
+		line = v.visualFrom
+		i = i + 2
+		ok = true
+	} else if c == "'" && at(cmd, i + 1) == ">" {
+		line = v.visualTo
+		i = i + 2
+		ok = true
+	}
+	for ; at(cmd, i) == "+" || at(cmd, i) == "-"; {
+		sign := at(cmd, i)
+		i++
+		mut value := 0
+		mut digits := false
+		for ; highlight.isDigit(at(cmd, i)); i++ {
+			value = value * 10 + digitOf(at(cmd, i))
+			digits = true
+		}
+		if !digits {
+			value = 1
+		}
+		if sign == "+" {
+			line = line + value
+		} else {
+			line = line - value
+		}
+		ok = true
+	}
+	return Address(line, i, ok)
+}
+
+// Lê `[intervalo]comando[!] [argumentos]` e executa.
+func execute(ed: Editor, typed: Str): Editor {
+	chars := split(ed.text, "")
+	cmd := split(typed, "")
+	current := lineOf(chars, ed.caret)
+	final := lastLine(chars)
+	mut i := 0
+	for ; at(cmd, i) == " " || at(cmd, i) == ":"; i++ {
+	}
+	mut from := -1
+	mut to := -1
+	if at(cmd, i) == "%" {
+		from = 0
+		to = final
+		i++
+	} else {
+		first := address(cmd, i, current, final, ed.vim)
+		if first.ok {
+			from = first.line
+			to = first.line
+			i = first.next
+			if at(cmd, i) == "," || at(cmd, i) == ";" {
+				second := address(cmd, i + 1, current, final, ed.vim)
+				if !second.ok {
+					return say(ed, "E16: Intervalo inválido", "", true)
+				}
+				to = second.line
+				i = second.next
+			}
+		}
+	}
+	for ; at(cmd, i) == " "; i++ {
+	}
+	mut Str[dyn] letters = []
+	for ; isLetter(at(cmd, i)); i++ {
+		append(letters, at(cmd, i))
+	}
+	mut name := join(letters, "")
+	if name == "" && isAny(at(cmd, i), ["!", ">", "<", "&"]) {
+		name = at(cmd, i)
+		i++
+	}
+	mut levels := 1
+	if name == ">" || name == "<" {
+		for ; at(cmd, i) == name; i++ {
+			levels++
+		}
+	}
+	mut bang := false
+	if at(cmd, i) == "!" && name != "!" {
+		bang = true
+		i++
+	}
+	mut Str[dyn] rest = []
+	for j := i; j < len(cmd); j++ {
+		append(rest, at(cmd, j))
+	}
+	args := trim(join(rest, ""))
+	hasRange := from >= 0 || to >= 0
+	if !hasRange {
+		from = current
+		to = current
+	}
+	if from > to {
+		swap := from
+		from = to
+		to = swap
+	}
+	if name == "" {
+		if hasRange {
+			mut e := ed
+			e.caret = firstNonBlank(chars, lineOffset(chars, clampInt(to, 0, final)))
+			return e
+		}
+		return ed
+	}
+	if from < 0 || to > final {
+		if !(name == "m" || name == "move" || name == "t" || name == "co" || name == "copy") || from < 0 {
+			return say(ed, "E16: Intervalo inválido", "", true)
+		}
+	}
+	if name == ">" || name == "<" {
+		span := lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to))
+		return shiftLines(ed, chars, span, name == ">", levels)
+	}
+	return command(ed, chars, name, bang, args, from, to, hasRange)
+}
+
+// A ajuda de uma linha que `:help` mostra.
+func helpText(): Str {
+	return "Vim: :w :q :wq :x :e arquivo :N :s/a/b/g :noh :set nu :d :y :m :t :sort :bn :bp :check :make :run :test :term :!comando"
+}
+
+func command(ed: Editor, chars: Str[], name: Str, bang: Bool, args: Str, from: Int, to: Int, hasRange: Bool): Editor {
+	final := lastLine(chars)
+	if isAny(name, ["w", "write"]) {
+		if args != "" {
+			return say(ed, "E: :w só salva o próprio arquivo", "", true)
+		}
+		return effect(ed, model.Msg.Save())
+	} else if isAny(name, ["wa", "wall"]) {
+		return effect(ed, model.Msg.SaveAll())
+	} else if isAny(name, ["up", "update"]) {
+		if ed.dirty {
+			return effect(ed, model.Msg.Save())
+		}
+		return ed
+	} else if isAny(name, ["q", "quit", "clo", "close", "bd", "bdelete", "tabc", "tabclose"]) {
+		if ed.dirty && !bang {
+			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+		}
+		return effect(ed, model.Msg.CloseDoc(ed.active))
+	} else if isAny(name, ["wq", "x", "xi", "xit", "exi", "exit"]) {
+		mut e := ed
+		if name == "wq" || ed.dirty {
+			e = effect(e, model.Msg.Save())
+		}
+		return effect(e, model.Msg.CloseDoc(ed.active))
+	} else if isAny(name, ["qa", "qall", "quita", "quitall"]) {
+		if ed.anyDirty && !bang {
+			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+		}
+		return effect(ed, model.Msg.Quit())
+	} else if isAny(name, ["wqa", "wqall", "xa", "xall"]) {
+		return effect(effect(ed, model.Msg.SaveAll()), model.Msg.Quit())
+	} else if isAny(name, ["e", "edit"]) {
+		if args != "" {
+			return effect(ed, model.Msg.VimEdit(args))
+		}
+		if ed.dirty && !bang {
+			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+		}
+		return effect(ed, model.Msg.VimReload())
+	} else if isAny(name, ["s", "su", "substitute"]) {
+		return substitute(ed, chars, args, from, to)
+	} else if isAny(name, ["noh", "nohl", "nohlsearch"]) {
+		mut e := ed
+		e.vim.highlight = false
+		return e
+	} else if isAny(name, ["se", "set"]) {
+		return setOptions(ed, args)
+	} else if isAny(name, ["d", "de", "del", "delete"]) {
+		return deleteSpan(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
+	} else if isAny(name, ["y", "ya", "yank"]) {
+		mut e := yank(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
+		e.caret = ed.caret
+		return e
+	} else if isAny(name, ["j", "join"]) {
+		mut e := ed
+		e.caret = lineOffset(chars, from)
+		return joinLines(e, chars, maxInt(to - from + 1, 2), !bang)
+	} else if isAny(name, ["m", "move", "t", "co", "copy"]) {
+		target := address(split(args, ""), 0, lineOf(chars, ed.caret), final, ed.vim)
+		if !target.ok || target.line < -1 || target.line > final {
+			return say(ed, "E14: Endereço inválido", "", true)
+		}
+		return moveLines(ed, from, to, target.line, name == "m" || name == "move")
+	} else if isAny(name, ["sor", "sort"]) {
+		if hasRange {
+			return sortLines(ed, from, to, bang)
+		}
+		return sortLines(ed, 0, final, bang)
+	} else if isAny(name, ["bn", "bnext", "tabn", "tabnext"]) {
+		return effect(ed, model.Msg.CycleTab(1))
+	} else if isAny(name, ["bp", "bprevious", "bN", "bNext", "tabp", "tabprevious", "tabN", "tabNext"]) {
+		return effect(ed, model.Msg.CycleTab(-1))
+	} else if isAny(name, ["check", "make", "run", "test", "build"]) {
+		// `:make` compila, como no Vim; os diagnósticos vêm do `:check`.
+		mut action := name
+		if name == "make" {
+			action = "build"
+		}
+		return effect(ed, model.Msg.Invoke(action))
+	} else if isAny(name, ["term", "terminal"]) {
+		return effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
+	} else if name == "!" {
+		e := effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
+		if args == "" {
+			return e
+		}
+		return effect(e, model.Msg.TermSubmit(args))
+	} else if isAny(name, ["Ex", "Explore", "Sex", "Sexplore", "Vex", "Vexplore", "Lex", "Lexplore", "Hex", "Hexplore", "Tex", "Texplore"]) {
+		return effect(ed, model.Msg.FocusExplorer(args))
+	} else if isAny(name, ["u", "un", "undo"]) {
+		return undoSteps(ed, 1, true)
+	} else if isAny(name, ["red", "redo"]) {
+		return undoSteps(ed, 1, false)
+	} else if isAny(name, ["h", "help"]) {
+		return say(ed, helpText(), "", false)
+	}
+	return say(ed, "E492: Não é um comando do editor: %1", name, true)
+}
+
+// `:set nu`, `:set nonu`, `:set nu!`, `:set ts=4`, `:set hls`, `:set nohls`.
+func setOptions(ed: Editor, args: Str): Editor {
+	mut e := ed
+	mut numbers := ed.numbers
+	for each option in split(args, " ") {
+		if option == "" {
+			continue
+		}
+		mut wanted := numbers
+		if isAny(option, ["nu", "number"]) {
+			wanted = true
+		} else if isAny(option, ["nonu", "nonumber"]) {
+			wanted = false
+		} else if isAny(option, ["nu!", "number!", "invnu", "invnumber"]) {
+			wanted = !numbers
+		} else if isAny(option, ["hls", "hlsearch"]) {
+			e.vim.highlight = true
+		} else if isAny(option, ["nohls", "nohlsearch"]) {
+			e.vim.highlight = false
+		} else if option is "{key}={value}" && isAny(key, ["ts", "tabstop", "sw", "shiftwidth"]) {
+			if hive.conv.sti(value) is Result.Ok(size) {
+				e = effect(e, model.Msg.SetTabSize(size))
+			} else {
+				return say(e, "E521: Número esperado: %1", option, true)
+			}
+		} else {
+			return say(e, "E518: Opção desconhecida: %1", option, true)
+		}
+		if wanted != numbers {
+			numbers = wanted
+			e = effect(e, model.Msg.ToggleSetting("lineNumbers"))
+		}
+	}
+	return e
+}
+
+// `:s/padrão/troca/g` nas linhas `from`–`to`. O padrão é texto literal; na
+// troca, `&` é o trecho achado e `\n`, `\t` e `\&` valem o que dizem.
+func substitute(ed: Editor, chars: Str[], args: Str, from: Int, to: Int): Editor {
+	parts := split(args, "")
+	delimiter := at(parts, 0)
+	if delimiter == "" || isKeyword(delimiter) || isBlank(delimiter) || delimiter == "\\" || delimiter == "\"" {
+		return say(ed, "E: use :s/padrão/troca/", "", true)
+	}
+	mut i := 1
+	mut Str[dyn] wanted = []
+	for ; i < len(parts) && at(parts, i) != delimiter; i++ {
+		c := at(parts, i)
+		if c == "\\" && i + 1 < len(parts) {
+			escaped := at(parts, i + 1)
+			if escaped == "n" {
+				append(wanted, "\n")
+			} else if escaped == "t" {
+				append(wanted, "\t")
+			} else {
+				append(wanted, escaped)
+			}
+			i++
+		} else {
+			append(wanted, c)
+		}
+	}
+	i++
+	mut Str[dyn] pieces = []
+	mut Str[dyn] current = []
+	for ; i < len(parts) && at(parts, i) != delimiter; i++ {
+		c := at(parts, i)
+		if c == "\\" && i + 1 < len(parts) {
+			escaped := at(parts, i + 1)
+			if escaped == "n" {
+				append(current, "\n")
+			} else if escaped == "t" {
+				append(current, "\t")
+			} else {
+				append(current, escaped)
+			}
+			i++
+		} else if c == "&" {
+			append(pieces, join(current, ""))
+			Str[dyn] fresh = []
+			current = fresh
+		} else {
+			append(current, c)
+		}
+	}
+	append(pieces, join(current, ""))
+	i++
+	mut Str[dyn] flagChars = []
+	for j := i; j < len(parts); j++ {
+		append(flagChars, at(parts, j))
+	}
+	flags := join(flagChars, "")
+	mut pattern := join(wanted, "")
+	if pattern == "" {
+		pattern = ed.vim.pattern
+	}
+	if pattern == "" {
+		return say(ed, "E35: Nenhuma busca anterior", "", true)
+	}
+	global := indexOf(flags, "g") is Result.Ok(_)
+	mut sensitive := sensitiveTo(pattern)
+	if indexOf(flags, "i") is Result.Ok(_) {
+		sensitive = false
+	} else if indexOf(flags, "I") is Result.Ok(_) {
+		sensitive = true
+	}
+	size := len(pattern)
+	mut Str[dyn] lines = split(ed.text, "\n")
+	mut replaced := 0
+	mut touched := 0
+	mut lastTouched := -1
+	for l := from; l <= to; l++ {
+		if lines bounds l {
+			line := lines[l]
+			mut limit := 1
+			if global {
+				limit = len(line) + 1
+			}
+			found := occurrencesOf(line, pattern, sensitive, limit)
+			if len(found) > 0 {
+				mut out := ""
+				mut previous := 0
+				for each p in found {
+					out = out + slice(line, previous, p) + join(pieces, slice(line, p, p + size))
+					previous = p + size
+				}
+				lines[l] = out + complete.skip(line, previous)
+				replaced = replaced + len(found)
+				touched++
+				lastTouched = l
+			}
+		}
+	}
+	mut e := ed
+	e.vim.pattern = pattern
+	e.vim.whole = false
+	if replaced == 0 {
+		return say(e, "E486: Padrão não encontrado: %1", pattern, true)
+	}
+	e = pushUndo(e, snapshot(ed))
+	e.text = join(lines, "\n")
+	e.caret = firstNonBlank(split(e.text, ""), offsetOfLine(lines, lastTouched))
+	return sayTwo(e, "%1 substituição(ões) em %2 linha(s)", "{replaced}", "{touched}")
+}
+
+// `:m` (mover) e `:t` (copiar) as linhas `from`–`to` para depois de `after`
+// (-1 = antes da primeira).
+func moveLines(ed: Editor, from: Int, to: Int, after: Int, moving: Bool): Editor {
+	if moving && after >= from && after < to {
+		return say(ed, "E134: Não dá para mover linhas para dentro delas mesmas", "", true)
+	}
+	lines := split(ed.text, "\n")
+	mut Str[dyn] block = []
+	for l := from; l <= to; l++ {
+		append(block, lineText(lines, l))
+	}
+	mut Str[dyn] out = []
+	mut lastMoved := 0
+	if after < 0 {
+		for each b in block {
+			append(out, b)
+		}
+		lastMoved = len(out) - 1
+	}
+	for l := 0; l < len(lines); l++ {
+		if !(moving && l >= from && l <= to) {
+			append(out, lineText(lines, l))
+		}
+		if l == after {
+			for each b in block {
+				append(out, b)
+			}
+			lastMoved = len(out) - 1
+		}
+	}
+	text := join(out, "\n")
+	if text == ed.text {
+		return ed
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = text
+	e.caret = firstNonBlank(split(text, ""), offsetOfLine(out, lastMoved))
+	return e
+}
+
+// `:sort` (e `:sort!`, ao contrário) das linhas `from`–`to`.
+func sortLines(ed: Editor, from: Int, to: Int, reverse: Bool): Editor {
+	mut Str[dyn] lines = split(ed.text, "\n")
+	mut Str[dyn] block = []
+	for l := from; l <= to; l++ {
+		append(block, lineText(lines, l))
+	}
+	mut ordered := sort(block)
+	if reverse {
+		mut Str[dyn] flipped = []
+		for each line in ordered {
+			prepend(flipped, line)
+		}
+		ordered = flipped
+	}
+	for l := from; l <= to; l++ {
+		k := l - from
+		if lines bounds l && ordered bounds k {
+			lines[l] = ordered[k]
+		}
+	}
+	text := join(lines, "\n")
+	if text == ed.text {
+		return ed
+	}
+	mut e := pushUndo(ed, snapshot(ed))
+	e.text = text
+	e.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, from))
+	return e
+}
+
+// ── o que a página mostra ────────────────────────────────────────────────
+
+func modeName(v: model.Vim): Str {
+	if v.mode is model.VimMode.NormalMode {
+		return "normal"
+	} else if v.mode is model.VimMode.InsertMode {
+		return "insert"
+	} else if v.mode is model.VimMode.VisualMode {
+		return "visual"
+	} else if v.mode is model.VimMode.VisualLineMode {
+		return "visualLine"
+	}
+}
+
+func modeLabel(v: model.Vim): Str {
+	if v.mode is model.VimMode.NormalMode {
+		return ""
+	} else if v.mode is model.VimMode.InsertMode {
+		return "-- INSERÇÃO --"
+	} else if v.mode is model.VimMode.VisualMode {
+		return "-- VISUAL --"
+	} else if v.mode is model.VimMode.VisualLineMode {
+		return "-- VISUAL LINHA --"
+	}
+}
+
+// O trecho que a página seleciona: a seleção visual, ou só o cursor.
+func shown(text: Str, caret: Int, v: model.Vim): Span {
+	if v.mode == model.VimMode.VisualMode() || v.mode == model.VimMode.VisualLineMode() {
+		return selection(text, split(text, ""), caret, v)
+	}
+	return Span(caret, caret, false, true)
+}
+
+// As ocorrências para realçar: o que está sendo digitado depois de `/` ou `?`,
+// senão a última busca (até `:noh`).
+func highlights(text: Str, v: model.Vim): Int[dyn] {
+	if (v.prompt == "/" || v.prompt == "?") && v.command != "" {
+		return matchesOf(text, v.command, false, 5000)
+	}
+	if v.highlight && v.prompt == "" {
+		return matchesOf(text, v.pattern, v.whole, 5000)
+	}
+	Int[dyn] none = []
+	return none
+}
+
+func highlightLength(v: model.Vim): Int {
+	if (v.prompt == "/" || v.prompt == "?") && v.command != "" {
+		return len(v.command)
+	}
+	return len(v.pattern)
+}
+
+// A ocorrência que a busca incremental mostra: a primeira depois do cursor.
+func currentHighlight(found: Int[], caret: Int, backward: Bool): Int {
+	mut best := -1
+	for i := 0; i < len(found); i++ {
+		m := atInt(found, i)
+		if backward && m < caret {
+			best = i
+		} else if !backward && m > caret && best < 0 {
+			best = i
+		}
+	}
+	if best < 0 && len(found) > 0 {
+		if backward {
+			return len(found) - 1
+		}
+		return 0
+	}
+	return best
+}
+
+// ── testes ───────────────────────────────────────────────────────────────
+
+func editorFor(text: Str, caret: Int): Editor {
+	model.Snapshot[dyn] none = []
+	model.Msg[dyn] nothing = []
+	return Editor(text: text, caret: caret, vim: model.emptyVim(), undo: none, redo: none, dirty: false, anyDirty: false,
+		numbers: true, active: 0, top: 0, rows: 20, tab: 4, scroll: -1, clip: "", effects: nothing)
+}
+
+func specialKeys(): Str[dyn] {
+	return ["<Esc>", "<CR>", "<BS>", "<Space>", "<Del>", "<Tab>", "<C-r>", "<C-a>", "<C-x>", "<C-d>", "<C-u>",
+		"<C-e>", "<C-y>", "<C-f>", "<C-b>", "<Left>", "<Right>", "<Up>", "<Down>", "<Home>", "<End>"]
+}
+
+// "d2w<Esc>" → ["d", "2", "w", "<Esc>"].
+func tokens(text: Str): Str[dyn] {
+	chars := split(text, "")
+	mut Str[dyn] out = []
+	mut i := 0
+	for ; i < len(chars); {
+		mut matched := ""
+		if at(chars, i) == "<" {
+			for each name in specialKeys() {
+				if matched == "" && slice(text, i, i + len(name)) == name {
+					matched = name
+				}
+			}
+		}
+		if matched == "" {
+			append(out, at(chars, i))
+			i++
+		} else {
+			append(out, matched)
+			i = i + len(matched)
+		}
+	}
+	return out
+}
+
+func feed(ed: Editor, keys: Str): Editor {
+	mut e := ed
+	for each k in tokens(keys) {
+		e = press(e, k)
+	}
+	return e
+}
+
+// O que a página faz quando se digita no modo de inserção.
+func typeText(ed: Editor, text: Str): Editor {
+	mut e := ed
+	e.text = insertAt(ed.text, ed.caret, text)
+	e.caret = ed.caret + len(text)
+	return e
+}
+
+func caretsOf(ed: Editor, keys: Str): Int[dyn] {
+	mut e := ed
+	mut Int[dyn] seen = []
+	for each k in tokens(keys) {
+		e = press(e, k)
+		append(seen, e.caret)
+	}
+	return seen
+}
+
+test "w, W, e, b e ge andam por palavras, pontuação e linhas vazias" {
+	text := "foo bar.baz\n  qux quux\n\nend"
+	assert caretsOf(editorFor(text, 0), "wwwwwww") == [4, 7, 8, 14, 18, 23, 24]
+	assert caretsOf(editorFor(text, 0), "WW") == [4, 14]
+	assert caretsOf(editorFor(text, 0), "eeee") == [2, 6, 7, 10]
+	assert caretsOf(editorFor(text, 10), "bbbb") == [8, 7, 4, 0]
+	assert caretsOf(editorFor(text, 8), "gege") == [8, 7, 7, 6]
+	assert caretsOf(editorFor(text, 0), "3w") == [0, 8]
+}
+
+test "linhas: 0, ^, $, j e k com a coluna guardada, gg e G" {
+	text := "foo bar.baz\n  qux quux\n\nend"
+	assert feed(editorFor(text, 5), "$").caret == 10
+	assert feed(editorFor(text, 5), "0").caret == 0
+	assert feed(editorFor(text, 16), "^").caret == 14
+	assert caretsOf(editorFor(text, 2), "jjjkk") == [14, 23, 26, 23, 14]
+	assert caretsOf(editorFor(text, 0), "$jj") == [10, 21, 23]
+	assert feed(editorFor(text, 20), "gg").caret == 0
+	assert feed(editorFor(text, 0), "G").caret == 24
+	assert feed(editorFor(text, 0), "2G").caret == 14
+	assert feed(editorFor(text, 0), "3gg").caret == 23
+	assert feed(editorFor("a\nb\n", 0), "G").caret == 2
+	tabs := "\tab\n12345678"
+	assert feed(editorFor(tabs, 1), "j").caret == 8
+}
+
+test "f, t, F, T, ; e , ficam na linha" {
+	text := "foo bar.baz(a)"
+	assert feed(editorFor(text, 0), "f.").caret == 7
+	assert caretsOf(editorFor(text, 0), "fa;,") == [0, 5, 9, 5]
+	assert feed(editorFor(text, 0), "t.").caret == 6
+	assert feed(editorFor(text, 0), "t.;").caret == 6
+	assert feed(editorFor(text, 13), "Fb").caret == 8
+	assert feed(editorFor(text, 13), "Tb").caret == 9
+	assert feed(editorFor(text, 0), "fq").caret == 0
+	assert feed(editorFor(text, 0), "2fa").caret == 9
+}
+
+test "% salta entre pares, chaves entre parágrafos" {
+	assert caretsOf(editorFor("(a [b] c)", 0), "%%") == [8, 0]
+	assert feed(editorFor("x = f(a[1])", 0), "%").caret == 10
+	text := "a\nb\n\nc\nd\n\ne"
+	assert caretsOf(editorFor(text, 0), "}}}") == [4, 9, 10]
+	assert caretsOf(editorFor(text, 10), "\{\{") == [9, 4]
+}
+
+test "dw não leva o fim da linha, cw muda só até o fim da palavra" {
+	assert feed(editorFor("foo bar\nbaz", 4), "dw").text == "foo \nbaz"
+	assert feed(editorFor("foo bar baz", 0), "d2w").text == "baz"
+	assert feed(editorFor("a b\nc d", 0), "d2w").text == "\nc d"
+	deleted := feed(editorFor("foo bar", 0), "dw")
+	assert deleted.text == "bar"
+	assert deleted.vim.register == "foo "
+	changed := feed(typeText(feed(editorFor("foo bar", 0), "cw"), "x"), "<Esc>")
+	assert changed.text == "x bar"
+	assert changed.vim.mode == model.VimMode.NormalMode()
+	assert feed(typeText(feed(editorFor("foo bar", 2), "cw"), "x"), "<Esc>").text == "fox bar"
+	assert feed(editorFor("foo bar baz", 4), "de").text == "foo  baz"
+	assert feed(editorFor("foo bar baz", 8), "db").text == "foo baz"
+	assert feed(editorFor("foo(a, b)", 0), "dt,").text == ", b)"
+	assert feed(editorFor("foo(a, b)", 0), "df(").text == "a, b)"
+}
+
+test "dd, D, x e X, com contagem" {
+	assert feed(editorFor("a\nb\nc\nd", 0), "dd").text == "b\nc\nd"
+	assert feed(editorFor("a\nb\nc\nd", 0), "2dd").text == "c\nd"
+	assert feed(editorFor("a\nb\nc\nd", 0), "d2d").text == "c\nd"
+	last := feed(editorFor("a\nb", 2), "dd")
+	assert last.text == "a"
+	assert last.caret == 0
+	assert last.vim.register == "b\n"
+	assert last.vim.linewise
+	assert feed(editorFor("a\nb\n", 2), "dd").text == "a\n"
+	assert feed(editorFor("a\nb\nc", 2), "dj").text == "a"
+	assert feed(editorFor("a\nb\nc", 2), "dk").text == "c"
+	assert feed(editorFor("a\n  b\nc", 0), "dG").text == ""
+	lines := feed(editorFor("a\nb\nc\nd", 0), "3dd")
+	assert lines.vim.message == "%1 linhas a menos"
+	assert lines.vim.args == ["3"]
+	cut := feed(editorFor("hello world", 5), "D")
+	assert cut.text == "hello"
+	assert cut.caret == 4
+	assert feed(editorFor("abc", 1), "x").text == "ac"
+	assert feed(editorFor("abcdef", 1), "3x").text == "aef"
+	assert feed(editorFor("abc", 2), "x").caret == 1
+	assert feed(editorFor("abc", 2), "X").text == "ac"
+	assert feed(editorFor("abc", 0), "X").text == "abc"
+}
+
+test "yy, yw, p e P, e xp troca dois caracteres" {
+	below := feed(editorFor("one\ntwo", 0), "yyp")
+	assert below.text == "one\none\ntwo"
+	assert below.caret == 4
+	above := feed(editorFor("one\ntwo", 4), "yyP")
+	assert above.text == "one\ntwo\ntwo"
+	assert above.caret == 4
+	word := feed(editorFor("foo bar", 4), "ywP")
+	assert word.text == "foo barbar"
+	assert word.caret == 6
+	assert feed(editorFor("a\nb", 2), "yyp").text == "a\nb\nb"
+	assert feed(editorFor("a\nb", 0), "yy3p").text == "a\na\na\na\nb"
+	assert feed(editorFor("ab", 0), "xp").text == "ba"
+	copied := feed(editorFor("a\nb\nc", 0), "yj")
+	assert copied.clip == "a\nb\n"
+	assert copied.caret == 0
+	assert feed(editorFor("a", 0), "p").vim.error
+}
+
+test "inserir: i, a, I, A, o e O, com indentação e contagem" {
+	appended := feed(editorFor("foo", 0), "A")
+	assert appended.caret == 3
+	assert appended.vim.mode == model.VimMode.InsertMode()
+	done := feed(typeText(appended, "!"), "<Esc>")
+	assert done.text == "foo!"
+	assert done.caret == 3
+	opened := feed(editorFor("\tfoo \{", 0), "o")
+	assert opened.text == "\tfoo \{\n\t\t"
+	assert opened.caret == len(opened.text)
+	above := feed(editorFor("\tfoo", 1), "O")
+	assert above.text == "\t\n\tfoo"
+	assert above.caret == 1
+	assert feed(editorFor("\t  x", 0), "I").caret == 3
+	assert feed(editorFor("ab", 0), "a").caret == 1
+	assert feed(typeText(feed(editorFor("", 0), "3i"), "hi"), "<Esc>").text == "hihihi"
+	assert feed(typeText(feed(editorFor("a", 0), "2o"), "x"), "<Esc>").text == "a\nx\nx"
+}
+
+test "o ponto repete a última alteração, inclusive o que foi digitado" {
+	assert feed(editorFor("a b c d", 0), "dw.").text == "c d"
+	changed := feed(typeText(feed(editorFor("foo bar", 0), "ciw"), "x"), "<Esc>")
+	again := feed(changed, "w.")
+	assert again.text == "x x"
+	assert again.caret == 2
+	semicolons := feed(typeText(feed(editorFor("a\nb", 0), "A"), ";"), "<Esc>j.")
+	assert semicolons.text == "a;\nb;"
+	assert feed(editorFor("abcdef", 0), "x2.").text == "def"
+	assert feed(editorFor("a\nb\nc", 0), "ddu.").text == "b\nc"
+}
+
+test "u e Ctrl+R, e uma inserção inteira é um passo só" {
+	undone := feed(editorFor("a\nb", 0), "ddu")
+	assert undone.text == "a\nb"
+	assert undone.caret == 0
+	assert feed(undone, "<C-r>").text == "b"
+	typed := feed(typeText(feed(editorFor("x", 0), "A"), "yz"), "<Esc>")
+	assert typed.text == "xyz"
+	assert len(typed.undo) == 1
+	back := feed(typed, "u")
+	assert back.text == "x"
+	oldest := feed(back, "u")
+	assert oldest.vim.message == "Já está na alteração mais antiga"
+	assert len(feed(editorFor("abc", 0), "i<Esc>").undo) == 0
+	assert feed(editorFor("abc", 0), "xxx3u").text == "abc"
+}
+
+test "objetos de texto: palavras, aspas, blocos e parágrafos" {
+	assert feed(editorFor("f(a, b)", 3), "di(").text == "f()"
+	assert feed(editorFor("f(a, b)", 3), "da(").text == "f"
+	assert feed(editorFor("f(a, (b))", 7), "d2i(").text == "f()"
+	assert feed(typeText(feed(editorFor("x = \"hello\"", 0), "ci\""), "bye"), "<Esc>").text == "x = \"bye\""
+	assert feed(editorFor("say 'hi' now", 5), "da'").text == "say now"
+	assert feed(editorFor("foo bar", 5), "diw").text == "foo "
+	assert feed(editorFor("foo bar baz", 4), "daw").text == "foo baz"
+	assert feed(editorFor("foo bar", 6), "daw").text == "foo"
+	block := "f() \{\n\ta\n\tb\n}"
+	assert feed(editorFor(block, 7), "di\{").text == "f() \{\n}"
+	changed := feed(editorFor(block, 7), "ci\{")
+	assert changed.text == "f() \{\n\t\n}"
+	assert changed.caret == 7
+	assert feed(editorFor(block, 7), "yiB").vim.linewise
+	assert feed(editorFor("x [1, 2]", 4), "di]").text == "x []"
+	assert feed(editorFor("a\nb\n\nc", 0), "dip").text == "\nc"
+	assert feed(editorFor("a\nb\n\nc", 0), "dap").text == "c"
+	assert feed(editorFor("f(a)", 0), "dix").text == "f(a)"
+}
+
+test "maiúsculas, r, ~, J, gJ, >> e <<" {
+	assert feed(editorFor("foo bar", 4), "gUiw").text == "foo BAR"
+	assert feed(editorFor("FOO BAR", 0), "guu").text == "foo bar"
+	assert feed(editorFor("ação", 0), "gUU").text == "AÇÃO"
+	assert feed(editorFor("abc", 0), "rx").text == "xbc"
+	replaced := feed(editorFor("abcd", 0), "3r-")
+	assert replaced.text == "---d"
+	assert replaced.caret == 2
+	assert feed(editorFor("abc", 1), "5rx").text == "abc"
+	toggled := feed(editorFor("aBc", 0), "~")
+	assert toggled.text == "ABc"
+	assert toggled.caret == 1
+	assert feed(editorFor("aBc", 0), "3~").text == "AbC"
+	joined := feed(editorFor("a\n  b", 0), "J")
+	assert joined.text == "a b"
+	assert joined.caret == 1
+	assert feed(editorFor("a\n  b", 0), "gJ").text == "a  b"
+	assert feed(editorFor("f(\n)", 0), "J").text == "f()"
+	assert feed(editorFor("a\nb\nc", 0), "3J").text == "a b c"
+	assert feed(editorFor("a", 0), ">>").text == "\ta"
+	assert feed(editorFor("\t\ta", 0), "<<").text == "\ta"
+	assert feed(editorFor("a\nb\nc", 0), "2>>").text == "\ta\n\tb\nc"
+	assert feed(editorFor("  x\ny", 4), ">>").text == "  x\n    y"
+	assert feed(editorFor("f \{\n\ta\n}", 7), ">i\{").text == "f \{\n\t\ta\n}"
+}
+
+test "visual: v, V, o, operadores e objetos" {
+	yanked := feed(editorFor("hello world", 0), "vey")
+	assert yanked.vim.register == "hello"
+	assert yanked.vim.mode == model.VimMode.NormalMode()
+	assert yanked.caret == 0
+	assert feed(editorFor("hello world", 0), "ved").text == " world"
+	assert feed(editorFor("a\nb\nc", 0), "Vjd").text == "c"
+	assert feed(editorFor("ab\ncd", 1), "vjd").text == "a"
+	assert feed(editorFor("foo bar", 5), "viwU").text == "foo BAR"
+	assert feed(editorFor("a\nb", 0), "Vj>").text == "\ta\n\tb"
+	swapped := feed(editorFor("abcdef", 1), "vllo")
+	assert swapped.caret == 1
+	assert swapped.vim.anchor == 3
+	over := feed(editorFor("foo bar", 0), "yiwwviwp")
+	assert over.text == "foo foo"
+	assert over.vim.register == "bar"
+	selecting := feed(editorFor("a\nb\nc", 0), "Vj")
+	assert selecting.vim.mode == model.VimMode.VisualLineMode()
+	span := shown(selecting.text, selecting.caret, selecting.vim)
+	assert span.from == 0 && span.to == 4
+	assert feed(selecting, "<Esc>").vim.mode == model.VimMode.NormalMode()
+	assert feed(editorFor("abc", 0), "vlrx").text == "xxc"
+}
+
+test "a busca: /, n, N, *, # e smartcase" {
+	text := "foo bar foo baz foo"
+	found := submit(feed(editorFor(text, 0), "/"), "foo")
+	assert found.caret == 8
+	assert found.vim.highlight
+	assert feed(found, "n").caret == 16
+	wrapped := feed(found, "nn")
+	assert wrapped.caret == 0
+	assert wrapped.vim.message == "a busca chegou ao FIM, continuando do INÍCIO"
+	assert feed(found, "N").caret == 0
+	assert feed(found, "dn").text == "foo bar foo"
+	backward := submit(feed(editorFor(text, 10), "?"), "foo")
+	assert backward.caret == 8
+	assert feed(backward, "n").caret == 0
+	assert submit(feed(editorFor("Foo foo", 0), "/"), "foo").caret == 4
+	assert submit(feed(editorFor("Foo foo", 1), "/"), "Foo").caret == 0
+	assert feed(editorFor("ab abc ab", 0), "*").caret == 7
+	assert feed(editorFor("ab abc ab", 7), "#").caret == 0
+	missing := submit(feed(editorFor(text, 0), "/"), "zzz")
+	assert missing.vim.error
+	assert missing.vim.args == ["zzz"]
+	assert len(highlights(text, found.vim)) == 3
+	assert len(highlights(text, submit(found, "noh").vim)) == 0
+}
+
+test "linha de comando: endereços, :s, :d, :m, :t, :sort e :>" {
+	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "3").caret == 4
+	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "$").caret == 4
+	all := submit(feed(editorFor("foo\nboo", 0), ":"), "%s/o/0/g")
+	assert all.text == "f00\nb00"
+	assert all.vim.args == ["4", "2"]
+	assert submit(feed(editorFor("foo", 0), ":"), "s/o/[&]/").text == "f[o]o"
+	assert submit(feed(editorFor("a.b", 0), ":"), "s#.#\\n#").text == "a\nb"
+	assert submit(feed(editorFor("a\nb\nc\nd", 0), ":"), "2,3d").text == "a\nd"
+	assert submit(feed(editorFor("a\nb\nc", 4), ":"), "m0").text == "c\na\nb"
+	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "m$").text == "b\nc\na"
+	assert submit(feed(editorFor("a\nb", 0), ":"), "t.").text == "a\na\nb"
+	assert submit(feed(editorFor("c\na\nb", 0), ":"), "sort").text == "a\nb\nc"
+	assert submit(feed(editorFor("c\na\nb", 0), ":"), "sort!").text == "c\nb\na"
+	assert submit(feed(editorFor("a\nb", 0), ":"), "%>").text == "\ta\n\tb"
+	assert submit(feed(editorFor("a\nb\nc", 0), ":"), ".,+1j").text == "a b\nc"
+	ranged := submit(feed(editorFor("a\nb\nc", 0), "Vj:"), "'<,'>d")
+	assert ranged.text == "c"
+	assert feed(editorFor("a\nb\nc", 0), "Vj:").vim.command == "'<,'>"
+	assert feed(editorFor("a\nb\nc", 0), "3:").vim.command == ".,.+2"
+	unknown := submit(feed(editorFor("a", 0), ":"), "frobnicate")
+	assert unknown.vim.error
+	assert unknown.vim.args == ["frobnicate"]
+	assert submit(feed(editorFor("a", 0), ":"), "5,2d").text == "a"
+}
+
+test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
+	mut clean := editorFor("a", 0)
+	clean.active = 2
+	mut dirty := editorFor("a", 0)
+	dirty.active = 2
+	dirty.dirty = true
+	assert submit(clean, "w").effects == [model.Msg.Save()]
+	assert submit(clean, "q").effects == [model.Msg.CloseDoc(2)]
+	assert submit(clean, "x").effects == [model.Msg.CloseDoc(2)]
+	assert submit(clean, "wq").effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	refused := submit(dirty, "q")
+	assert refused.vim.error
+	assert len(refused.effects) == 0
+	assert submit(dirty, "q!").effects == [model.Msg.CloseDoc(2)]
+	assert submit(dirty, "x").effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	assert submit(clean, "e lib/novo.hive").effects == [model.Msg.VimEdit("lib/novo.hive")]
+	assert submit(dirty, "e!").effects == [model.Msg.VimReload()]
+	assert submit(clean, "set nonu").effects == [model.Msg.ToggleSetting("lineNumbers")]
+	assert len(submit(clean, "set nu").effects) == 0
+	assert submit(clean, "set ts=2").effects == [model.Msg.SetTabSize(2)]
+	assert submit(clean, "bn").effects == [model.Msg.CycleTab(1)]
+	assert submit(clean, "run").effects == [model.Msg.Invoke("run")]
+	assert submit(clean, "make").effects == [model.Msg.Invoke("build")]
+	assert submit(clean, "check").effects == [model.Msg.Invoke("check")]
+	assert submit(clean, "!ls").effects == [model.Msg.ShowPane(model.Pane.TerminalPane()), model.Msg.TermSubmit("ls")]
+	assert submit(clean, "Ex").effects == [model.Msg.FocusExplorer("")]
+	assert submit(clean, "Vex lib").effects == [model.Msg.FocusExplorer("lib")]
+	assert feed(clean, "gd").effects == [model.Msg.GotoDefinition(0)]
+	assert feed(clean, "ZZ").effects == [model.Msg.CloseDoc(2)]
+	history := submit(submit(feed(clean, ":"), "set nu"), "noh")
+	mut browsing := history.vim
+	browsing.prompt = ":"
+	assert browseHistory(browsing, -1).command == "noh"
+	assert browseHistory(browseHistory(browsing, -1), -1).command == "set nu"
+}
+
+test "Ctrl+A, Ctrl+X, rolagem e clique" {
+	plus := feed(editorFor("x = 41", 0), "<C-a>")
+	assert plus.text == "x = 42"
+	assert plus.caret == 5
+	assert feed(editorFor("x = 41", 0), "5<C-x>").text == "x = 36"
+	assert feed(editorFor("-3", 0), "<C-a>").text == "-2"
+	mut Str[dyn] many = []
+	for n := 0; n < 100; n++ {
+		append(many, "line {n}")
+	}
+	long := join(many, "\n")
+	down := feed(editorFor(long, 0), "<C-d>")
+	assert lineOf(split(long, ""), down.caret) == 10
+	assert down.scroll == 10
+	mut middle := editorFor(long, lineOffset(split(long, ""), 50))
+	middle.top = 45
+	assert feed(middle, "zz").scroll == 40
+	assert feed(middle, "zt").scroll == 50
+	assert lineOf(split(long, ""), feed(middle, "H").caret) == 45
+	assert lineOf(split(long, ""), feed(middle, "L").caret) == 64
+	selected := click(editorFor("hello", 0), 1, 4)
+	assert selected.vim.mode == model.VimMode.VisualMode()
+	assert selected.vim.anchor == 1
+	assert selected.caret == 3
+	assert click(selected, 2, 2).vim.mode == model.VimMode.NormalMode()
+	assert click(editorFor("ab\n", 0), 3, 3).caret == 1
+}
+
+test "teclas que chegam atrasadas no modo de inserção viram texto" {
+	typed := feed(editorFor("\tf(", 2), "a<CR>x<BS>y<Esc>")
+	assert typed.text == "\tf(\n\t\ty"
+	assert typed.vim.mode == model.VimMode.NormalMode()
+	assert typed.vim.typed == "\n\t\ty"
+	mut v := feed(editorFor("a", 0), ":").vim
+	v = promptKey(promptKey(promptKey(v, "w"), "q"), "<BS>")
+	assert v.command == "w"
+	assert feed(editorFor("abc def", 0), "g_").caret == 6
+}
+
+test "macros: q grava, @ repete, e a repetição para no primeiro erro" {
+	recorded := feed(typeText(feed(editorFor("a\nb\nc", 0), "qaA"), ";"), "<Esc>jq")
+	assert recorded.text == "a;\nb\nc"
+	assert recorded.vim.recordingTo == ""
+	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
+		assert keys == ["A", "<Text>;", "<Esc>", "j"]
+	} else {
+		assert false
+	}
+	once := feed(recorded, "@a")
+	assert once.text == "a;\nb;\nc"
+	assert lineOf(split(once.text, ""), once.caret) == 2
+	// No fim, o `j` falha e a macro para, mas o que já fez fica.
+	assert feed(once, "@@").text == "a;\nb;\nc;"
+	assert feed(recorded, "5@a").text == "a;\nb;\nc;"
+	assert feed(recorded, "u").text == "a\nb\nc"
+	lines := feed(editorFor("x\nx\nx\nx", 0), "qb0rYjq100@b")
+	assert lines.text == "Y\nY\nY\nY"
+	recording := feed(editorFor("a", 0), "qc")
+	assert recording.vim.recordingTo == "c"
+	assert feed(recording, "vq").vim.recordingTo == ""
+}
+
+test "macros: comandos de :, visual, maiúscula acrescenta, @: e macro que chama a si mesma" {
+	started := submit(feed(editorFor("foo\nfoo\nfoo", 0), "qa:"), "s/o/0/g")
+	recorded := feed(started, "jq")
+	assert recorded.text == "f00\nfoo\nfoo"
+	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
+		assert keys == [":", "<Text>s/o/0/g", "<CR>", "j"]
+	}
+	assert feed(recorded, "@a").text == "f00\nf00\nfoo"
+	assert feed(recorded, "@:").text == "f00\nf00\nfoo"
+	assert feed(feed(recorded, "j@:"), "").caret == 8
+	visual := feed(submit(feed(editorFor("a\nb\nc\nd", 0), "qvVj:"), "'<,'>d"), "q")
+	assert visual.text == "c\nd"
+	assert feed(visual, "@v").text == ""
+	appended := feed(editorFor("abcdef", 0), "qbxqqBxq")
+	if hive.map.get(appended.vim.macros, "b") is Result.Ok(keys) {
+		assert keys == ["x", "x"]
+	}
+	assert feed(appended, "@b").text == "ef"
+	cancelled := cancel(feed(editorFor("abc", 0), "qd:"))
+	assert cancelled.vim.prompt == ""
+	assert feed(cancelled, "xq@d").text == "c"
+	endless := feed(editorFor("abc", 0), "qeq")
+	mut looping := endless
+	looping.vim.macros = endless.vim.macros
+	mut hive.map.Map<Str, Str[dyn]> macros = endless.vim.macros
+	hive.map.set(macros, "e", ["l", "@", "e"])
+	looping.vim.macros = macros
+	stopped := feed(looping, "@e")
+	assert stopped.vim.replaying == 0
+	assert len(stopped.vim.pending) == 0
+	assert feed(editorFor("abc", 0), "@z").text == "abc"
+	assert feed(editorFor("abc", 0), "q!").vim.recordingTo == ""
+}
+
+test "teclas incompletas esperam, e Esc esquece" {
+	waiting := feed(editorFor("abc", 0), "2d")
+	assert waiting.vim.pending == ["2", "d"]
+	assert waiting.text == "abc"
+	assert len(feed(waiting, "<Esc>").vim.pending) == 0
+	assert len(feed(editorFor("abc", 0), "dq").vim.pending) == 0
+	assert feed(editorFor("abc", 0), "dq").text == "abc"
+	assert modeName(feed(editorFor("abc", 0), "v").vim) == "visual"
+	assert modeLabel(feed(editorFor("abc", 0), "i").vim) == "-- INSERÇÃO --"
+}

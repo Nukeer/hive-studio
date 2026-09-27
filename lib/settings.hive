@@ -13,10 +13,11 @@ type Settings {
 	browser:       Str  -- Default as "";
 	panelHeight:   Int  -- JSON as panel_height; Default as 260;
 	language:      Str  -- Default as "pt-BR";
+	vim:           Bool -- Default as false;
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR")
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false)
 }
 
 func envOr(name: Str, fallback: Str): Str {
@@ -65,7 +66,7 @@ func save(value: Settings): Result<Bool, Str> {
 }
 
 test "configurações vão e voltam em JSON, com padrões para o que falta" {
-	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en")
+	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true)
 	text := encode(custom, hive.json.codec())
 	if Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
 		assert back == custom
@@ -78,6 +79,7 @@ test "configurações vão e voltam em JSON, com padrões para o que falta" {
 		assert partial.compiler == "hivec"
 		assert partial.fontSize == 14
 		assert partial.keymap == ""
+		assert !partial.vim
 	} else {
 		assert false
 	}

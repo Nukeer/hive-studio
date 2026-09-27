@@ -25,6 +25,35 @@ hivec test studio.hive             # testes, com cobertura
   substituem os atalhos do navegador.
 - **Idioma da interface**: Português (Brasil), English ou Español, em
   Configurações → Aparência; muda na hora.
+- **Modo Vim** (Configurações → Editor → *Usar as teclas do Vim no editor*,
+  ou menu **Editar → Modo Vim**; ligado, o `VIM` da barra de status mostra o
+  modo e desliga com um clique): modos normal, inserção, visual e visual de linha, com
+  cursor em bloco e a linha do Vim embaixo do editor (modo, mensagens e teclas
+  pendentes).
+  - Movimentos: `h j k l`, `w W b B e E ge`, `0 ^ $ g_`, `gg G`, `f t F T ; ,`,
+    `%`, `{ }`, `H M L`, `n N * #`, com contagem (`3w`, `5G`).
+  - Operadores `d c y > < g~ gu gU` com movimentos e objetos de texto
+    (`iw aw iW i" a' i( a) i{ aB i[ i< ip ap`), dobrados (`dd`, `>>`, `gUU`);
+    `x X s S D C Y p P J gJ r ~ i a I A o O`, `u` / `Ctrl+R`, `.`,
+    `Ctrl+A` / `Ctrl+X`, `Ctrl+D` / `Ctrl+U` / `Ctrl+E` / `Ctrl+Y`, `zz zt zb`.
+    `gd` vai para a definição; `gt` / `gT` trocam de aba.
+  - Busca com `/` e `?`, realçando enquanto se digita, até `:noh`.
+  - Macros: `qa` grava em `a` (a barra mostra *gravando @a*), `q` para, `qA`
+    acrescenta; `@a` repete (com contagem), `@@` repete a última e `@:` o
+    último comando. A repetição para no primeiro erro, então `100@a` para no
+    fim do arquivo. O que se digita na inserção e na linha de comando entra
+    na macro.
+  - Linha de comando (`:`), com `↑`/`↓` no histórico e intervalos (`%`, `.`,
+    `$`, `'<,'>`, `N,M`, `.+2`): `:w :wa :q :q! :wq :x :qa :e arquivo :e! :N
+    :s/a/b/g :noh :set nu / nonu / ts=4 :d :y :> :< :j :m :t :sort :bn :bp`, e
+    os da IDE: `:check` (diagnósticos), `:make` (build), `:run`, `:test`,
+    `:term`, `:!comando` (no terminal). `:Ex` (e `:Sex`, `:Vex`, `:Lex`,
+    `:e .`, `:Ex pasta`) abre o explorador com o arquivo atual selecionado e
+    põe o foco nele; com o explorador já aberto, `:Ex` (sem pasta) o fecha e
+    volta ao código.
+  - O que `y` copia vai também para a área de transferência; `Ctrl+C` e
+    `Ctrl+V` continuam valendo. As teclas mortas do ABNT2 (`~`, `^`) funcionam
+    no modo normal. Os atalhos da IDE (`Ctrl+S`, `F5`…) valem em todos os modos.
 
 - **Editor com realce de sintaxe Hive** (palavras-chave, tipos, textos,
   números, comentários, chamadas, átomos, `hive`), numeração de linhas, fonte
@@ -38,7 +67,10 @@ hivec test studio.hive             # testes, com cobertura
   listas (inclusive de tarefas), citações, tabelas, links, imagens e blocos de
   código (com realce quando a linguagem é `hive`).
 - **Explorador em árvore** estilo VS Code, abas, breadcrumb, estrutura do
-  arquivo, barra de status (Ln/Col, linguagem, tema).
+  arquivo, barra de status (Ln/Col, linguagem, tema). Com o foco nele (um
+  clique, ou `:Ex` no modo Vim), `↑`/`↓` andam, `→`/`←` abrem e fecham pastas,
+  `Enter` abre, `Home`/`End`; no modo Vim também `j k l h o gg G`, contagens,
+  `:` para a linha de comando e `Esc` de volta ao editor.
 - **Cores do git** no explorador e nas abas: arquivo novo em verde (`U`/`A`),
   editado em amarelo/laranja (`M`), removido em vermelho (`D`); commitado fica na
   cor normal. Pastas levam a cor do que têm dentro.
@@ -137,6 +169,7 @@ se existir, vence o compilador configurado.
 | `lib/toolchain.hive` | roda `hivec` e devolve o resultado ao serviço |
 | `lib/git.hive` | status, classificação dos arquivos e ações do git |
 | `lib/navigate.hive` | ir para a definição |
+| `lib/vim.hive` | modo Vim: teclas → movimentos, operadores e linha de comando |
 | `lib/process.hive` | executar programas sem console (via `native.go`) |
 | `lib/native.go` | processos ocultos e sessões de shell (Go) |
 | `assets/shell.html` → `lib/assets.hive` | a página da janela |
@@ -184,3 +217,6 @@ git config core.hooksPath .githooks
 - O autocomplete conta a posição em caracteres; um emoji antes do cursor
   (fora do plano básico) desloca o encaixe.
 - Fechar com alterações não salvas não pede confirmação.
+- No modo Vim, `/` e `:s` buscam texto literal (o Hive não tem expressões
+  regulares em tempo de execução), com smartcase; não há registradores
+  nomeados, marcas, macros nem visual de bloco.

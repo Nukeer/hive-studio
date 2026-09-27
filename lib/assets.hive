@@ -57,6 +57,8 @@ func shell(): Str {
 		#activity .grow\{flex:1}
 		#side\{width:270px;flex:none;background:var(--side);overflow:auto;border-right:1px solid var(--border)}
 		#app.noside #side\{display:none}
+		#side:focus\{outline:none}
+		#side:focus .row.focus\{border-color:var(--accent);background:color-mix(in srgb,var(--selection) 75%,transparent)}
 		#main\{flex:1;display:flex;flex-direction:column;min-width:0}
 		#tabs\{display:flex;background:var(--tabstrip);overflow-x:auto;overflow-y:hidden;flex:none;min-height:36px}
 		#tabs::-webkit-scrollbar\{height:3px}
@@ -174,6 +176,18 @@ func shell(): Str {
 		.shit .tx\{overflow:hidden;text-overflow:ellipsis;font-family:var(--mono)}
 		.shit mark\{background:color-mix(in srgb,var(--warn) 35%,transparent);color:inherit;border-radius:2px}
 		.aicon\{width:24px;height:24px;display:block}
+		#vimcur\{position:absolute;display:none;pointer-events:none;background:color-mix(in srgb,var(--text) 45%,transparent);z-index:2;border-radius:1px}
+		#vimcur.idle\{background:transparent;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 55%,transparent)}
+		#code.vimblock #ta\{caret-color:transparent}
+		#vimbar\{flex:none;display:flex;align-items:center;min-height:24px;padding:0 14px;font-family:var(--mono);font-size:12px;background:var(--editor);border-top:1px solid var(--border);white-space:nowrap;overflow:hidden}
+		#vimbar:empty,#app.panelmax #vimbar\{display:none}
+		#vimbar .vmode\{font-weight:700;color:var(--accent);margin-right:12px}
+		#vimbar .vmsg\{overflow:hidden;text-overflow:ellipsis}
+		#vimbar .vrec\{color:var(--danger);margin-right:12px}
+		#vimbar .vmsg.err\{color:var(--danger)}
+		#vimbar .vpend\{margin-left:auto;padding-left:12px;color:var(--muted)}
+		#vimbar .vp\{color:var(--accent);font-weight:700}
+		#vimbar .vimin\{flex:1;background:transparent;border:0;outline:none;color:var(--text);font:inherit;padding:0 0 0 1px}
 		#link\{position:absolute;display:none;pointer-events:none;border-bottom:1px solid var(--syn-call);background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:2px;z-index:2}
 		.g-new\{color:var(--git-new)!important}
 		.g-mod\{color:var(--git-mod)!important}
@@ -301,7 +315,7 @@ func shell(): Str {
 			<div id="title"></div>
 			<div id="body">
 				<div id="activity"></div>
-				<div id="side"></div>
+				<div id="side" tabindex="-1"></div>
 				<div id="main">
 					<div id="tabs"></div>
 					<div id="crumbs"></div>
@@ -313,6 +327,7 @@ func shell(): Str {
 								<textarea id="ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
 								<div id="marks"></div>
 								<div id="link"></div>
+								<div id="vimcur"></div>
 							</div>
 							<div id="popup"></div>
 							<div id="find"></div>
@@ -322,6 +337,7 @@ func shell(): Str {
 						<div id="commit"></div>
 						<div id="welcome"></div>
 					</div>
+					<div id="vimbar"></div>
 					<div id="grip" title="Arraste para redimensionar — duplo clique maximiza"></div>
 					<div id="panel"></div>
 				</div>
@@ -344,6 +360,13 @@ func shell(): Str {
 			var grip = document.getElementById("grip");
 			var ws = null, cache = \{}, serial = -1, keys = [], popupOpen = false, recording = false, charWidth = 0;
 			var focusSerial = 0, dragging = null, openMenu = null;
+			// Modo Vim: o modo que o programa diz, a seleção que ele mandou aplicar, e
+			// quantas teclas do Vim foram mandadas e quantas ele já tratou — enquanto a
+			// página estiver atrás, as teclas vão para ele em vez de virarem texto aqui.
+			var vimMode = "", vimSerial = -1, vimCaret = 0, vimApplied = [0, 0], vimSent = 0, vimAck = 0;
+			var clipSerial = -1, composing = null;
+			var vimCursor = document.getElementById("vimcur");
+			var side = document.getElementById("side");
 		
 			// ── menus: abrir e fechar é só da página ──
 			function menuIndex(menu) \{
@@ -397,14 +420,19 @@ func shell(): Str {
 				cache[id] = html;
 				var el = document.getElementById(id);
 				if (!el) \{ return; }
-				var focused = document.activeElement, key = null, from = 0, to = 0;
+				var focused = document.activeElement, key = null, from = 0, to = 0, before = "";
 				if (focused && el.contains(focused) && focused.dataset && focused.dataset.input) \{
-					key = focused.dataset.input; from = focused.selectionStart; to = focused.selectionEnd;
+					key = focused.dataset.input; from = focused.selectionStart; to = focused.selectionEnd; before = focused.value;
 				}
 				el.innerHTML = html;
 				if (key) \{
 					var again = el.querySelector('[data-input="' + key + '"]');
-					if (again) \{ again.focus(); try \{ again.setSelectionRange(from, to); } catch (e) \{} }
+					if (again) \{
+						again.focus();
+						// A linha de comando do Vim trocada pelo histórico: o cursor vai para o fim.
+						if (again.dataset.vimcmd && again.value !== before) \{ from = to = again.value.length; }
+						try \{ again.setSelectionRange(from, to); } catch (e) \{}
+					}
 				}
 				var scrolled = el.querySelectorAll("[data-autoscroll]");
 				for (var i = 0; i < scrolled.length; i++) \{ scrolled[i].scrollTop = scrolled[i].scrollHeight; }
@@ -427,26 +455,37 @@ func shell(): Str {
 					(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "");
 				if (!dragging) \{ panel.style.height = frame.panelHeight + "px"; }
 				for (var i = 0; i < frame.regions.length; i++) \{ region(frame.regions[i].id, frame.regions[i].html); }
+				if (document.activeElement === side) \{
+					var chosen = side.querySelector(".row.focus");
+					if (chosen) \{ chosen.scrollIntoView(\{ block: "nearest" }); }
+				}
 				if (openMenu !== null) \{
 					var menus = document.querySelectorAll("#title .menu");
 					if (menus[openMenu]) \{ menus[openMenu].classList.add("open"); }
 				}
 				keys = frame.keys; recording = frame.recording; popupOpen = frame.popup;
 				popup.classList.toggle("open", popupOpen);
-				if (frame.serial !== serial) \{
+				vimMode = frame.vim || "";
+				vimAck = Math.max(vimAck, frame.vimAck || 0);
+				if (vimAck > vimSent) \{ vimSent = vimAck; }
+				code.classList.toggle("vimblock", vimMode !== "" && vimMode !== "insert");
+				var textChanged = frame.serial !== serial;
+				if (textChanged) \{
 					serial = frame.serial;
 					ta.value = frame.text;
 					if (frame.layout === "edit" || frame.layout === "split") \{ ta.focus(); }
 					try \{ ta.setSelectionRange(frame.caret, frame.caret); } catch (e) \{}
-					reveal(frame.caret);
+					if (!vimMode) \{ reveal(frame.caret); }
 				}
 				if (frame.focusSerial !== focusSerial) \{
 					focusSerial = frame.focusSerial;
 					if (frame.focus === "editor") \{ ta.focus(); }
+					if (frame.focus === "explorer") \{ side.focus(\{ preventScroll: true }); }
 					var wanted = document.querySelector('[data-input="' + frame.focus + '"]');
 					if (wanted) \{
 						wanted.focus();
 						if ((frame.focus === "prompt" || frame.focus === "find") && wanted.select) \{ wanted.select(); }
+						if (frame.focus === "vimCommand") \{ try \{ wanted.setSelectionRange(wanted.value.length, wanted.value.length); } catch (e) \{} }
 					}
 				}
 				marks = frame.marks || []; markLength = frame.markLength; markCurrent = frame.markCurrent;
@@ -460,6 +499,20 @@ func shell(): Str {
 						if (keep && keep !== ta && keep.focus) \{ keep.focus(); }
 					}
 				}
+				if (vimMode && (frame.vimSerial > vimSerial || textChanged)) \{
+					vimSerial = frame.vimSerial;
+					try \{ ta.setSelectionRange(frame.selStart, frame.selEnd); } catch (e) \{}
+					vimApplied = [ta.selectionStart, ta.selectionEnd];
+					vimCaret = frame.caret;
+					if (frame.vimScroll >= 0) \{ ta.scrollTop = frame.vimScroll * lineHeight(); } else \{ keepVisible(frame.caret); }
+				}
+				if (frame.clipSerial !== clipSerial) \{
+					// O que o "y" do Vim copiou vai também para a área de transferência.
+					if (clipSerial >= 0 && frame.clip && navigator.clipboard && navigator.clipboard.writeText) \{
+						navigator.clipboard.writeText(frame.clip).catch(function () \{});
+					}
+					clipSerial = frame.clipSerial;
+				}
 				sync();
 				if (popupOpen) \{ place(); }
 			}
@@ -467,6 +520,108 @@ func shell(): Str {
 			function sync() \{
 				hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gutter.scrollTop = ta.scrollTop;
 				drawMarks();
+				drawCursor();
+			}
+		
+			function lineHeight() \{
+				return parseFloat(getComputedStyle(ta).lineHeight) || 20;
+			}
+		
+			// O cursor em bloco do modo normal e do visual, desenhado por cima do texto.
+			function drawCursor() \{
+				var editing = app.classList.contains("l-edit") || app.classList.contains("l-split");
+				if (!vimMode || vimMode === "insert" || !editing) \{ vimCursor.style.display = "none"; return; }
+				var style = getComputedStyle(ta), tab = parseInt(style.tabSize, 10) || 4, height = parseFloat(style.lineHeight), width = measure();
+				var text = ta.value, caret = Math.max(0, Math.min(vimCaret, text.length));
+				var start = text.lastIndexOf("\n", caret - 1) + 1, end = text.indexOf("\n", start);
+				if (end < 0) \{ end = text.length; }
+				var row = 0;
+				for (var i = 0; i < start; i++) \{ if (text.charCodeAt(i) === 10) \{ row++; } }
+				var column = visualColumn(text.slice(start, end), caret - start, tab), size = 1;
+				if (text[caret] === "\t") \{ size = tab - (column % tab); }
+				vimCursor.style.left = (parseFloat(style.paddingLeft) + column * width - ta.scrollLeft) + "px";
+				vimCursor.style.top = (parseFloat(style.paddingTop) + row * height - ta.scrollTop) + "px";
+				vimCursor.style.width = (size * width) + "px";
+				vimCursor.style.height = height + "px";
+				vimCursor.style.display = "block";
+				vimCursor.classList.toggle("idle", document.activeElement !== ta);
+			}
+		
+			// Rola o mínimo para o cursor ficar à vista, com duas linhas de folga; um
+			// salto para longe centraliza, como no Vim.
+			function keepVisible(caret) \{
+				var height = lineHeight(), view = ta.clientHeight, margin = Math.min(height * 2, view / 4);
+				var before = ta.value.slice(0, caret), line = before.split("\n").length - 1, top = line * height;
+				if (top < ta.scrollTop - view || top > ta.scrollTop + view * 2) \{
+					ta.scrollTop = Math.max(0, top - view / 2);
+				} else if (top < ta.scrollTop + margin) \{
+					ta.scrollTop = Math.max(0, top - margin);
+				} else if (top + height > ta.scrollTop + view - margin) \{
+					ta.scrollTop = top + height + margin - view;
+				}
+				var style = getComputedStyle(ta), tab = parseInt(style.tabSize, 10) || 4, width = measure();
+				var left = visualColumn(before.slice(before.lastIndexOf("\n") + 1), caret, tab) * width, visible = ta.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+				if (left < ta.scrollLeft) \{ ta.scrollLeft = Math.max(0, left - width * 4); }
+				else if (left + width > ta.scrollLeft + visible) \{ ta.scrollLeft = left + width * 4 - visible; }
+			}
+		
+			// A primeira linha visível e quantas cabem, para H, M, L, Ctrl+D, zz…
+			function viewOf() \{
+				var height = lineHeight();
+				return Math.floor(ta.scrollTop / height + 0.5) + " " + Math.max(1, Math.floor(ta.clientHeight / height));
+			}
+		
+			// Manda uma tecla para o Vim. O cursor só vai junto quando a página o mudou
+			// por conta própria; senão vale o do programa, que pode estar à frente.
+			function sendVim(key) \{
+				var caret = -1;
+				if (ta.selectionStart !== vimApplied[0] || ta.selectionEnd !== vimApplied[1]) \{
+					caret = ta.selectionStart;
+					vimApplied = [ta.selectionStart, ta.selectionEnd];
+				}
+				vimSent++;
+				send(\{ kind: "vim", text: key, caret: caret, arg: viewOf() });
+			}
+		
+			var vimNames = \{ Escape: "<Esc>", Enter: "<CR>", Backspace: "<BS>", Delete: "<Del>", Tab: "<Tab>", ArrowLeft: "<Left>",
+				ArrowRight: "<Right>", ArrowUp: "<Up>", ArrowDown: "<Down>", Home: "<Home>", End: "<End>", PageUp: "<PageUp>",
+				PageDown: "<PageDown>", " ": "<Space>" };
+			// As combinações com Ctrl que o Vim usa no modo normal — quando nenhum atalho da IDE as usa.
+			var vimCtrl = ["r", "d", "u", "e", "y", "f", "b", "a", "x", "["];
+		
+			// A tecla na notação do Vim: j, $, <Esc>, <C-r>… (null: não é do Vim).
+			function vimKeyName(e) \{
+				var k = e.key, altGraph = e.getModifierState && e.getModifierState("AltGraph");
+				if ((e.ctrlKey || e.metaKey) && !altGraph) \{
+					if (e.altKey) \{ return null; }
+					if (k === "[" || e.code === "BracketLeft") \{ return "<C-[>"; }
+					return k.length === 1 ? "<C-" + k.toLowerCase() + ">" : null;
+				}
+				if (e.altKey && !altGraph) \{ return null; }
+				if (vimNames[k]) \{ return vimNames[k]; }
+				return k.length === 1 ? k : null;
+			}
+		
+			// Decide o que uma tecla faz com o modo Vim ligado. true = já tratada.
+			function vimRoute(e, combo) \{
+				var behind = vimSent > vimAck, modified = e.ctrlKey || e.metaKey || e.altKey;
+				var command = e.target.dataset && e.target.dataset.vimcmd;
+				if (command && !behind) \{ return false; }
+				if (vimMode === "insert" && !behind && !command) \{
+					if (e.key === "Escape" || (e.ctrlKey && (e.key === "[" || e.code === "BracketLeft"))) \{
+						e.preventDefault(); sendVim("<Esc>"); return true;
+					}
+					return false;
+				}
+				// Uma tecla morta (~, ^, ´ no ABNT2) compõe o caractere; ele chega no compositionend.
+				if (e.key === "Dead" || e.isComposing || e.keyCode === 229) \{ return true; }
+				var name = vimKeyName(e);
+				if (keys.indexOf(combo) >= 0 && (modified || /^F\d+$/.test(e.key))) \{ return false; }
+				if (/^F\d+$/.test(e.key) || (modified && name === null)) \{ return false; }
+				if (name && name.indexOf("<C-") === 0 && vimCtrl.indexOf(name.slice(3, -1)) < 0) \{ return false; }
+				e.preventDefault();
+				if (name) \{ sendVim(name); }
+				return true;
 			}
 		
 			// As ocorrências da busca, desenhadas por cima do texto (só as visíveis).
@@ -535,7 +690,10 @@ func shell(): Str {
 			}
 		
 			ta.addEventListener("scroll", function () \{ sync(); if (popupOpen) \{ place(); } });
-			ta.addEventListener("input", function () \{ send(\{ kind: "edit", text: ta.value, caret: ta.selectionStart }); });
+			ta.addEventListener("input", function () \{
+				if (composing) \{ return; }
+				send(\{ kind: "edit", text: ta.value, caret: ta.selectionStart });
+			});
 			// ── Ctrl + mouse: sublinha o nome sob o mouse quando dá para ir à definição ──
 			var link = document.getElementById("link");
 			var mouse = null, hovered = null, linked = null, hoverKey = "";
@@ -627,6 +785,31 @@ func shell(): Str {
 					return;
 				}
 				if (popupOpen) \{ send(\{ kind: "act", act: "closeSuggest" }); }
+				if (vimMode) \{
+					if (document.querySelector("#vimbar .vimin")) \{ send(\{ kind: "act", act: "vimCancel" }); }
+					vimApplied = [ta.selectionStart, ta.selectionEnd];
+					vimCaret = ta.selectionEnd > ta.selectionStart ? ta.selectionEnd - 1 : ta.selectionStart;
+					drawCursor();
+					send(\{ kind: "vimMouse", caret: ta.selectionStart, arg: String(ta.selectionEnd) });
+				}
+			});
+			ta.addEventListener("focus", drawCursor);
+			ta.addEventListener("blur", drawCursor);
+		
+			// No modo normal, uma tecla morta (o ~ e o ^ do ABNT2) compõe o caractere no
+			// próprio texto: ele é desfeito e vira uma tecla do Vim.
+			ta.addEventListener("compositionstart", function () \{
+				if (vimMode && vimMode !== "insert") \{ composing = \{ value: ta.value, start: ta.selectionStart, end: ta.selectionEnd }; }
+			});
+			ta.addEventListener("compositionend", function (e) \{
+				if (!composing) \{ return; }
+				var saved = composing, typed = e.data || "";
+				setTimeout(function () \{
+					composing = null;
+					ta.value = saved.value;
+					try \{ ta.setSelectionRange(saved.start, saved.end); } catch (err) \{}
+					for (var i = 0; i < typed.length; i++) \{ sendVim(typed[i] === " " ? "<Space>" : typed[i]); }
+				}, 0);
 			});
 		
 			document.addEventListener("keyup", function (e) \{ if (e.key === "Control" || e.key === "Meta") \{ hideLink(); } });
@@ -669,7 +852,22 @@ func shell(): Str {
 				if (["Control", "Shift", "Alt", "Meta"].indexOf(e.key) >= 0) \{ return; }
 				var combo = comboOf(e);
 				if (recording) \{ e.preventDefault(); send(\{ kind: "key", text: combo, caret: ta.selectionStart }); return; }
+				if (e.key === "Escape" && openMenu !== null) \{ closeMenus(); return; }
+				// Com o foco no explorador, as teclas andam pela árvore (e, no modo Vim, abrem a linha de comando).
+				if (e.target === side && !(e.ctrlKey || e.metaKey || e.altKey) && e.key !== "Tab") \{
+					var treeKey = vimKeyName(e);
+					if (treeKey) \{ e.preventDefault(); send(\{ kind: "tree", text: treeKey }); return; }
+				}
+				if (vimMode && (e.target === ta || (e.target.dataset && e.target.dataset.vimcmd)) && vimRoute(e, combo)) \{ return; }
 				var field = e.target;
+				if (field.dataset && field.dataset.vimcmd) \{
+					if (e.key === "Backspace" && field.value === "") \{ e.preventDefault(); send(\{ kind: "act", act: "vimCancel" }); return; }
+					if (e.key === "ArrowUp" || e.key === "ArrowDown") \{
+						e.preventDefault(); send(\{ kind: "act", act: "vimHistory", arg: e.key === "ArrowUp" ? "-1" : "1" }); return;
+					}
+					if (e.key === "Tab") \{ e.preventDefault(); return; }
+					if (e.ctrlKey && (e.key === "[" || e.code === "BracketLeft" || e.key === "c")) \{ e.preventDefault(); send(\{ kind: "act", act: "vimCancel" }); return; }
+				}
 				if (field.dataset && field.dataset.palette && (e.key === "ArrowUp" || e.key === "ArrowDown")) \{
 					e.preventDefault(); send(\{ kind: "act", act: "paletteMove", arg: e.key === "ArrowUp" ? "-1" : "1" }); return;
 				}

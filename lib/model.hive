@@ -18,10 +18,17 @@ type TreeRow {
 	open:  Bool
 }
 
+// Um estado do texto, para desfazer e refazer no modo Vim.
+type Snapshot {
+	text:  Str
+	caret: Int
+}
+
 // Um arquivo aberto numa aba. `saved` é o conteúdo em disco, então a aba está
 // suja quando `text != saved`. O texto fica sempre com `\n`; `eol` lembra o
 // fim de linha do arquivo para salvar do jeito que veio. `html` é o realce
 // guardado, refeito só quando o texto muda. `mode` é `edit`, `preview` ou `split`.
+// `undo` e `redo` são as pilhas do `u` e do `Ctrl+R` do modo Vim.
 type Doc {
 	path:  Str
 	name:  Str
@@ -30,6 +37,8 @@ type Doc {
 	eol:   Str
 	html:  Str
 	mode:  Str
+	undo:  Snapshot[dyn]
+	redo:  Snapshot[dyn]
 }
 
 // Uma linha `arquivo:linha: mensagem` do compilador.
@@ -123,6 +132,76 @@ type Palette {
 	text:  Str
 	index: Int
 	files: Str[dyn]
+}
+
+// O modo Vim do editor. A linha de comando (`:`, `/`, `?`) abre por cima do
+// modo normal: é o `prompt` do `Vim` que diz se ela está aberta.
+type VimMode {
+	NormalMode
+	InsertMode
+	VisualMode
+	VisualLineMode
+}
+
+// Tudo o que o modo Vim lembra entre uma tecla e outra.
+//
+// `pending` são as teclas de um comando ainda incompleto (`2d`, `g`, `f`);
+// `anchor` é onde a seleção visual começou; `column` é a coluna que `j` e `k`
+// tentam manter, calculada com o cursor em `columnAt`. `register` é o registrador sem nome (`linewise` quando guarda
+// linhas inteiras). `prompt`/`command` são a linha de comando; `message` é uma
+// chave do i18n com `%1`, `%2` trocados por `args`. `pattern`, `backward` e
+// `whole` são a última busca, realçada enquanto `highlight`. `find` é o último
+// `f`/`t`/`F`/`T` (tecla e caractere), para `;` e `,`. `change` e `typed` são
+// a última alteração, para o `.`; `insertBase`, `insertAt`, `insertKeys` e
+// `count` descrevem a inserção em andamento. `serial` muda sempre que a página
+// deve aplicar o cursor e a seleção; `scroll` é a linha que vai para o topo
+// (-1 = só manter o cursor à vista). `clip` é o último texto copiado com `y`.
+// `acked` conta as teclas do Vim já tratadas: enquanto a página estiver atrás,
+// ela manda as teclas para cá em vez de digitá-las. `recordingTo` é o
+// registrador da macro sendo gravada (`q`), com as teclas em `recorded`;
+// `macros` guarda as gravadas, `lastMacro` é a do `@@` e `replaying` conta
+// macros dentro de macros. `promptFrom` diz de onde a linha de comando foi
+// aberta (`explorer` ou o editor), para o foco voltar para lá.
+type Vim {
+	mode:         VimMode
+	pending:      Str[dyn]
+	anchor:       Int
+	column:       Int
+	columnAt:     Int
+	register:     Str
+	linewise:     Bool
+	prompt:       Str
+	command:      Str
+	message:      Str
+	args:         Str[dyn]
+	error:        Bool
+	pattern:      Str
+	backward:     Bool
+	whole:        Bool
+	highlight:    Bool
+	find:         Str[dyn]
+	change:       Str[dyn]
+	typed:        Str
+	count:        Int
+	insertBase:   Str
+	insertAt:     Int
+	insertKeys:   Str[dyn]
+	visualFrom:   Int
+	visualTo:     Int
+	history:      Str[dyn]
+	historyAt:    Int
+	serial:       Int
+	scroll:       Int
+	clip:         Str
+	clipSerial:   Int
+	searchSerial: Int
+	acked:        Int
+	recordingTo:  Str
+	recorded:     Str[dyn]
+	macros:       hive.map.Map<Str, Str[dyn]>
+	lastMacro:    Str
+	replaying:    Int
+	promptFrom:   Str
 }
 
 type Pane {
@@ -262,6 +341,16 @@ type Msg {
 	GitShowWork      { path: Str }
 	FocusCommit
 	CloseCommit
+	VimKey           { key: Str, caret: Int, view: Str }
+	VimMouse         { start: Int, end: Int }
+	VimTyped         { text: Str }
+	VimSubmit        { text: Str }
+	VimCancel
+	VimHistory       { step: Int }
+	VimEdit          { path: Str }
+	VimReload
+	TreeKey          { key: Str }
+	FocusExplorer    { path: Str }
 }
 
 type State {
@@ -306,6 +395,8 @@ type State {
 	find:          FindBox
 	search:        SearchPanel
 	palette:       Palette
+	vim:           Vim
+	treeKeys:      Str
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -349,6 +440,14 @@ type Frame {
 	findSerial:  Int
 	recording: Bool
 	title:     Str
+	vim:        Str
+	vimSerial:  Int
+	selStart:   Int
+	selEnd:     Int
+	vimScroll:  Int
+	clip:       Str
+	clipSerial: Int
+	vimAck:     Int
 }
 
 // A resposta a "dá para ir à definição do nome em `caret`?", mandada enquanto
@@ -418,8 +517,61 @@ func initial(root: Str, prefs: settings.Settings): State {
 		about: false,
 		find: FindBox(false, "", false, 0, 0),
 		search: emptySearch(),
-		palette: emptyPalette()
+		palette: emptyPalette(),
+		vim: emptyVim(),
+		treeKeys: ""
 	)
+}
+
+func emptyVim(): Vim {
+	Str[dyn] none = []
+	return Vim(
+		mode: VimMode.NormalMode(),
+		pending: none,
+		anchor: 0,
+		column: 0,
+		columnAt: -1,
+		register: "",
+		linewise: false,
+		prompt: "",
+		command: "",
+		message: "",
+		args: none,
+		error: false,
+		pattern: "",
+		backward: false,
+		whole: false,
+		highlight: false,
+		find: none,
+		change: none,
+		typed: "",
+		count: 1,
+		insertBase: "",
+		insertAt: 0,
+		insertKeys: none,
+		visualFrom: 0,
+		visualTo: 0,
+		history: none,
+		historyAt: 0,
+		serial: 0,
+		scroll: -1,
+		clip: "",
+		clipSerial: 0,
+		searchSerial: 0,
+		acked: 0,
+		recordingTo: "",
+		recorded: none,
+		macros: hive.map.new(),
+		lastMacro: "",
+		replaying: 0,
+		promptFrom: ""
+	)
+}
+
+// Um documento recém-aberto, sem nada para desfazer.
+func newDoc(path: Str, name: Str, text: Str, eol: Str, html: Str, mode: Str): Doc {
+	Snapshot[dyn] none = []
+	return Doc(path, name, text, text, eol, html, mode, none, none)
 }
 
 func emptySearch(): SearchPanel {
