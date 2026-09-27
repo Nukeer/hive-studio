@@ -20,9 +20,35 @@ func normalize(path: Str): Str {
 func joinPath(folder: Str, name: Str): Str {
 	base := normalize(folder)
 	if base is "{head}/" {
-		return base + name
+		return tidy(base + name)
 	}
-	return base + "/" + name
+	return tidy(base + "/" + name)
+}
+
+func isDrive(part: Str): Bool {
+	return part is "{letter}:"
+}
+
+// Resolve os `.` e `..` do meio de um caminho, para um arquivo ter um nome só.
+func tidy(path: Str): Str {
+	mut Str[dyn] kept = []
+	parts := split(replaceAll(path, "\\", "/"), "/")
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		last := len(kept) - 1
+		if part == "." && i > 0 {
+			continue
+		}
+		if part == ".." && kept bounds last {
+			previous := kept[last]
+			if previous != ".." && previous != "." && previous != "" && !isDrive(previous) {
+				drop(kept, last, last)
+				continue
+			}
+		}
+		append(kept, part)
+	}
+	return join(kept, "/")
 }
 
 func baseName(path: Str): Str {
@@ -136,6 +162,14 @@ test "caminhos se juntam com uma barra só" {
 	assert joinPath(".", "a.hive") == "./a.hive"
 	assert joinPath("src/", "a.hive") == "src/a.hive"
 	assert joinPath("C:\\proj", "a.hive") == "C:/proj/a.hive"
+}
+
+test "caminhos com . e .. ficam com um nome só" {
+	assert tidy("C:/p/./lib/x.hive") == "C:/p/lib/x.hive"
+	assert tidy("C:/p/lib/../a.hive") == "C:/p/a.hive"
+	assert tidy("./lib/x.hive") == "./lib/x.hive"
+	assert tidy("../up/x") == "../up/x"
+	assert joinPath("./studio", "./lib/model.hive") == "./studio/lib/model.hive"
 }
 
 test "o nome de um arquivo é o último pedaço do caminho" {

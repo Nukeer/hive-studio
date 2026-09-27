@@ -1,0 +1,269 @@
+// Ir para a definição (Ctrl+clique ou F12): acha onde o nome sob o cursor foi
+// declarado — no próprio arquivo, num módulo importado (`modulo.nome`) ou num
+// arquivo Go importado (`native.start` → `func Start`).
+
+import ./highlight
+import ./analysis
+import ./workspace
+import ./complete
+
+type Target {
+	file:   Str
+	line:   Int
+	column: Int
+}
+
+// O nome sob o cursor e o que vem antes dele separado por pontos.
+type Word {
+	name:      Str
+	qualifier: Str
+}
+
+func wordAt(text: Str, caret: Int): Word {
+	chars := split(text, "")
+	mut start := caret
+	for ; chars bounds (start - 1); start-- {
+		back := start - 1
+		if chars bounds back {
+			if !highlight.isIdent(chars[back]) {
+				break
+			}
+		}
+	}
+	mut end := caret
+	for ; chars bounds end; end++ {
+		if !highlight.isIdent(chars[end]) {
+			break
+		}
+	}
+	name := highlight.piece(chars, start, end)
+	mut qualifier := ""
+	dot := start - 1
+	if chars bounds dot {
+		if chars[dot] == "." {
+			mut k := dot - 1
+			for ; chars bounds k; k-- {
+				c := chars[k]
+				if !(highlight.isIdent(c) || c == ".") {
+					break
+				}
+			}
+			qualifier = highlight.piece(chars, k + 1, dot)
+		}
+	}
+	return Word(name, qualifier)
+}
+
+func upperFirst(word: Str): Str {
+	lower := "abcdefghijklmnopqrstuvwxyz"
+	upper := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	if word bounds 0 {
+		if indexOf(lower, word[0]) is Result.Ok(at) {
+			if upper bounds at {
+				return upper[at] + complete.skip(word, 1)
+			}
+		}
+	}
+	return word
+}
+
+func lineOf(text: Str, predicate: func(Str): Bool): Result<Int, Bool> {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	for i := 0; i < len(lines); i++ {
+		if predicate(lines[i]) {
+			return Result.Ok(i + 1)
+		}
+	}
+	return Result.Error(false)
+}
+
+// `word` seguido de algo que não continua um nome.
+func beginsWithWord(text: Str, word: Str): Bool {
+	if !complete.startsWith(text, word) {
+		return false
+	}
+	rest := complete.skip(text, len(word))
+	if rest == "" {
+		return true
+	}
+	return !highlight.isIdent(complete.take(rest, 1))
+}
+
+func isVariant(word: Str, line: Str): Bool {
+	trimmed := analysis.trimLeft(line)
+	return trimmed != line && beginsWithWord(trimmed, word)
+}
+
+func has(text: Str, piece: Str): Bool {
+	return indexOf(text, piece) is Result.Ok(_)
+}
+
+// `nome := …`, `mut nome …` ou `Tipo nome = …`.
+func isBinding(word: Str, line: Str): Bool {
+	trimmed := analysis.trimLeft(line)
+	return complete.startsWith(trimmed, word + " :=") ||
+		complete.startsWith(trimmed, "mut " + word + " ") ||
+		has(trimmed, " " + word + " = ")
+}
+
+func isGoFunc(word: Str, line: Str): Bool {
+	return complete.startsWith(line, "func " + upperFirst(word) + "(")
+}
+
+// A linha da declaração de `word` num texto Hive: uma declaração de topo, uma
+// variante de tipo ou, por fim, uma variável local.
+func findIn(text: Str, word: Str): Result<Int, Bool> {
+	for each symbol in analysis.outline(text) {
+		if symbol.name == word && symbol.kind != "import" && symbol.kind != "test" {
+			return Result.Ok(symbol.line)
+		}
+	}
+	if lineOf(text, isVariant(word, _)) is Result.Ok(line) {
+		return Result.Ok(line)
+	}
+	return lineOf(text, isBinding(word, _))
+}
+
+// O arquivo que um nome de módulo (`model`, `native`, …) importa neste texto.
+func importFor(text: Str, alias: Str, from: Str): Result<Str, Bool> {
+	folder := workspace.parentOf(from)
+	for each line in split(replaceAll(text, "\r", ""), "\n") {
+		mut path := ""
+		mut name := ""
+		if line is "import {p} as {n}" {
+			path = p
+			name = n
+		} else if line is "import {p}" {
+			path = p
+			name = workspace.baseName(p)
+			if name is "{stem}.go" {
+				name = stem
+			}
+		}
+		if path != "" && name == alias && !complete.startsWith(path, "hive.") {
+			if path is "{stem}.go" {
+				return Result.Ok(workspace.joinPath(folder, path))
+			}
+			return Result.Ok(workspace.joinPath(folder, path + ".hive"))
+		}
+	}
+	return Result.Error(false)
+}
+
+func columnOf(text: Str, line: Int, word: Str): Int {
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	index := line - 1
+	if lines bounds index {
+		if indexOf(lines[index], word) is Result.Ok(at) {
+			return at
+		}
+	}
+	return 0
+}
+
+// Quantos caracteres há antes da linha `line` (a partir de 1), mais `column`.
+func offsetOf(text: Str, line: Int, column: Int): Int {
+	lines := split(text, "\n")
+	mut offset := 0
+	for i := 0; i < line - 1; i++ {
+		if lines bounds i {
+			offset = offset + len(lines[i]) + 1
+		}
+	}
+	return offset + column
+}
+
+proc locate(path: Str, text: Str, caret: Int): Result<Target, Str> {
+	word := wordAt(text, caret)
+	if word.name == "" {
+		return Result.Error("nenhum nome sob o cursor")
+	}
+	if word.qualifier == "" {
+		if findIn(text, word.name) is Result.Ok(line) {
+			return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
+		}
+		return Result.Error("não achei a definição de {word.name}")
+	}
+	parts := split(word.qualifier, ".")
+	mut module := word.qualifier
+	if parts bounds 0 {
+		module = parts[0]
+	}
+	if module == "hive" {
+		return Result.Error("{word.qualifier}.{word.name} é da biblioteca padrão")
+	}
+	if importFor(text, module, path) is Result.Ok(file) {
+		read := hive.file.read(file)
+		if read is Result.Ok(content) {
+			mut found := findIn(content, word.name)
+			if file is "{stem}.go" {
+				found = lineOf(content, isGoFunc(word.name, _))
+			}
+			if found is Result.Ok(line) {
+				mut column := columnOf(content, line, word.name)
+				if file is "{stem}.go" {
+					column = columnOf(content, line, upperFirst(word.name))
+				}
+				return Result.Ok(Target(file, line, column))
+			}
+			return Result.Error("{word.name} não está declarado em {workspace.baseName(file)}")
+		}
+		return Result.Error("não foi possível ler {file}")
+	}
+	// Um qualificador que não é módulo é um valor: `state.docs` → procura aqui.
+	if findIn(text, word.name) is Result.Ok(line) {
+		return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
+	}
+	return Result.Error("não achei a definição de {word.qualifier}.{word.name}")
+}
+
+test "o nome sob o cursor e seu qualificador" {
+	w := wordAt("x := model.Msg.Toggle(p)", 18)
+	assert w.name == "Toggle"
+	assert w.qualifier == "model.Msg"
+	plain := wordAt("return reload(next)", 9)
+	assert plain.name == "reload" && plain.qualifier == ""
+}
+
+test "acha declarações, variantes e variáveis locais no próprio arquivo" {
+	source := "type Msg \{\n\tOpen \{ path: Str }\n\tSave\n}\n\nfunc total(v: Int): Int \{\n\tsum := v + 1\n\treturn sum\n}\n"
+	if findIn(source, "total") is Result.Ok(line) {
+		assert line == 6
+	} else {
+		assert false
+	}
+	if findIn(source, "Save") is Result.Ok(line) {
+		assert line == 3
+	}
+	if findIn(source, "sum") is Result.Ok(line) {
+		assert line == 7
+	}
+	assert offsetOf(source, 3, 1) == len("type Msg \{\n\tOpen \{ path: Str }\n") + 1
+}
+
+test "resolve módulos importados, inclusive Go" {
+	if hive.file.makeDir("./nav-test/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./nav-test/lib/util.hive", "func helper(): Int \{\n\treturn 1\n}\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./nav-test/lib/native.go", "package native\n\nfunc Start(dir string) (int, error) \{ return 0, nil }\n") is Result.Error(why) {
+		panic why
+	}
+	main := "import ./lib/util\nimport ./lib/native.go\n\nproc main(): void \{\n\techo util.helper()\n\tx := native.start(\".\")\n}\n"
+	caretHelper := offsetOf(main, 5, 11)
+	if locate("./nav-test/main.hive", main, caretHelper) is Result.Ok(target) {
+		assert target.file == "./nav-test/lib/util.hive"
+		assert target.line == 1
+	} else {
+		assert false
+	}
+	caretStart := offsetOf(main, 6, 16)
+	if locate("./nav-test/main.hive", main, caretStart) is Result.Ok(target) {
+		assert target.file == "./nav-test/lib/native.go"
+		assert target.line == 3
+	} else {
+		assert false
+	}
+}
