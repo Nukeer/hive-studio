@@ -23,8 +23,22 @@ hivec test studio.hive             # testes, com cobertura
   Preview** no canto do breadcrumb ou com `Ctrl+Shift+V`. Títulos, ênfase,
   listas (inclusive de tarefas), citações, tabelas, links, imagens e blocos de
   código (com realce quando a linguagem é `hive`).
-- **Explorador em árvore** estilo VS Code, abas, breadcrumb, painel de
-  PROBLEMAS/SAÍDA, estrutura do arquivo, barra de status (Ln/Col, linguagem, tema).
+- **Explorador em árvore** estilo VS Code, abas, breadcrumb, estrutura do
+  arquivo, barra de status (Ln/Col, linguagem, tema).
+- **Cores do git** no explorador e nas abas: arquivo novo em verde (`U`/`A`),
+  editado em amarelo/laranja (`M`), removido em vermelho (`D`); commitado fica na
+  cor normal. Pastas levam a cor do que têm dentro.
+- **Aba de controle de código** (`Ctrl+Shift+G`): branch e ↑/↓ em relação ao
+  remoto, alterações preparadas e não preparadas (preparar, tirar, descartar com
+  confirmação), mensagem + commit (`Ctrl+Enter`; sem nada preparado, commita
+  tudo), push, pull e histórico.
+- **Terminal** no painel de baixo (``Ctrl+Shift+` ``): um cmd.exe (ou o `$SHELL`)
+  de verdade, com histórico nas setas; ■ ou `Ctrl+C` encerram o processo e
+  reabrem o shell. O painel **muda de altura arrastando a borda** (a altura é
+  lembrada), duplo clique ou `Ctrl+Shift+M` maximiza.
+- **Ir para a definição**: `Ctrl+clique` ou `F12` num nome — declarações do
+  arquivo, variantes (`model.Msg.Toggle`), variáveis locais, `modulo.nome` de
+  imports Hive e funções de arquivos `.go` importados.
 - **Check · Run · Test · Build** chamando `hivec` numa thread separada; os
   diagnósticos `arquivo:linha: mensagem` viram itens clicáveis.
 - **7 temas** (Hive Dark, Dark Modern, Light Modern, Monokai, Dracula,
@@ -41,7 +55,9 @@ hivec test studio.hive             # testes, com cobertura
 | Fechar aba | `Ctrl+W` | Configurações | `Ctrl+,` |
 | Próxima / anterior | `Ctrl+PageDown` / `Ctrl+PageUp` | Sugestões | `Ctrl+Space` |
 | Check / Run | `F8` / `F5` | Preview do Markdown | `Ctrl+Shift+V` |
-| Test / Build | `Ctrl+Shift+T` / `Ctrl+Shift+B` | | |
+| Test / Build | `Ctrl+Shift+T` / `Ctrl+Shift+B` | Terminal | ``Ctrl+Shift+` `` |
+| Ir para a definição | `F12` / `Ctrl+clique` | Git | `Ctrl+Shift+G` |
+| Maximizar painel | `Ctrl+Shift+M` | | |
 
 `Ctrl+`` ` é a tecla à esquerda do `1`, em qualquer layout (no ABNT2 é a do `'`).
 
@@ -65,7 +81,10 @@ se existir, vence o compilador configurado.
 - O estado mora num serviço `hive.syslink`; cada evento da página vira uma
   `Msg`, a dobra produz o próximo estado e a resposta é o frame desenhado
   (regiões HTML + CSS do tema). A página só troca as regiões que mudaram.
-- Realce, markdown, autocomplete, atalhos e temas são Hive
+- A única parte em Go é `lib/native.go`, importado pelo Hive: roda processos
+  sem abrir janela de console (git, hivec) e mantém o shell do terminal vivo,
+  lendo a saída aos pedaços. Hive não tem API de processo interativo.
+- Realce, markdown, autocomplete, atalhos, git e temas são Hive
   (`lib/highlight`, `lib/markdown`, `lib/complete`, `lib/keys`, `lib/theme`).
   O JavaScript da página só manda eventos e aplica o que recebe.
 - Servidor em `127.0.0.1`, porta livre sorteada e token aleatório por execução.
@@ -92,6 +111,10 @@ se existir, vence o compilador configurado.
 | `lib/workspace.hive` | caminhos, árvore, breadcrumb |
 | `lib/analysis.hive` | diagnósticos, estrutura, trecho numerado |
 | `lib/toolchain.hive` | roda `hivec` e devolve o resultado ao serviço |
+| `lib/git.hive` | status, classificação dos arquivos e ações do git |
+| `lib/navigate.hive` | ir para a definição |
+| `lib/process.hive` | executar programas sem console (via `native.go`) |
+| `lib/native.go` | processos ocultos e sessões de shell (Go) |
 | `assets/shell.html` → `lib/assets.hive` | a página da janela |
 
 ## Git
@@ -109,9 +132,9 @@ git config core.hooksPath .githooks
 
 ## Limites conhecidos
 
-- No `studio.exe` compilado, cada Check/Run/Test/Build pode piscar uma janela
-  de console no Windows (o `hive.term.exec` não a esconde). Com
-  `hivec run studio.hive` isso não acontece.
+- O terminal não é um PTY: programas de tela cheia (vim, less, htop) e prompts
+  que leem direto do console não funcionam; `Ctrl+C` reinicia o shell em vez de
+  mandar um sinal.
 - `Run` mostra a saída quando o programa termina.
 - O autocomplete conta a posição em caracteres; um emoji antes do cursor
   (fora do plano básico) desloca o encaixe.

@@ -11,6 +11,7 @@ import ./settings
 import ./highlight
 import ./markdown
 import ./keys
+import ./git
 
 func esc(text: Str): Str {
 	return highlight.escape(text)
@@ -121,7 +122,13 @@ func activityBar(state: model.State): Str {
 	if showingSettings(state) {
 		settingsCls = "ai on"
 	}
+	changes := len(state.git.files)
+	mut gitGlyph := "⑂"
+	if changes > 0 {
+		gitGlyph = "⑂<span class=\"count\">{changes}</span>"
+	}
 	return activityItem(state, "❐", "Explorador", model.SideView.ExplorerSide(), "explorer", "explorer") +
+		activityItem(state, gitGlyph, "Controle de código", model.SideView.GitSide(), "git", "git") +
 		activityItem(state, "☰", "Estrutura", model.SideView.OutlineSide(), "outline", "outline") +
 		"<div class=\"grow\"></div>" +
 		"<div class=\"" + settingsCls + "\"" + act("settings", "") + attr("title", "Configurações" + keyHint(state, "settings")) + ">⚙</div>"
@@ -149,7 +156,7 @@ func promptRow(state: model.State): Str {
 	if state.prompt is model.Prompt.NoPrompt {
 		return ""
 	}
-	return "<div class=\"prompt\"><input class=\"field\" data-input=\"prompt\" data-submit=\"promptSubmit\" data-autofocus" +
+	return "<div class=\"prompt\"><input class=\"field\" data-input=\"prompt\" data-submit=\"promptSubmit\"" +
 		attr("placeholder", promptPlaceholder(state.prompt)) + attr("value", state.promptText) + ">" +
 		headerAction("✓", "Confirmar (Enter)", "promptSubmit", "") +
 		headerAction("✕", "Cancelar (Esc)", "promptCancel", "") + "</div>"
@@ -173,6 +180,26 @@ func dirtyPath(state: model.State, path: Str): Bool {
 	return false
 }
 
+// O caminho de um item visto da pasta aberta, como o git o chama.
+func relPath(state: model.State, path: Str): Str {
+	return join(workspace.crumbs(state.root, path), "/")
+}
+
+func gitKindOf(state: model.State, path: Str): Str {
+	return git.fileKind(state.git, relPath(state, path))
+}
+
+func gitBadge(state: model.State, path: Str): Str {
+	rel := relPath(state, path)
+	for each file in state.git.files {
+		if file.rel == rel {
+			kind := git.kindOf(file)
+			return "<span class=\"gb " + git.cssOf(kind) + "\">" + git.badge(kind, file) + "</span>"
+		}
+	}
+	return ""
+}
+
 func treeRow(state: model.State, row: model.TreeRow): Str {
 	entry := row.entry
 	current := entry.path == activePath(state) && !showingSettings(state)
@@ -189,8 +216,13 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 		if row.open {
 			chevron = "⌄"
 		}
+		kind := git.folderKind(state.git, relPath(state, entry.path))
+		mut dot := ""
+		if kind != "" {
+			dot = "<span class=\"gb " + git.cssOf(kind) + "\">•</span>"
+		}
 		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + indent + ">" +
-			"<span class=\"chev\">" + chevron + "</span><span class=\"nm\">" + esc(entry.name) + "</span></div>"
+			"<span class=\"chev\">" + chevron + "</span><span class=\"nm " + git.cssOf(kind) + "\">" + esc(entry.name) + "</span>" + dot + "</div>"
 	}
 	icon := theme.iconFor(entry.name)
 	mut marker := ""
@@ -199,7 +231,7 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 	}
 	return "<div class=\"" + cls + "\"" + act("open", entry.path) + indent + ">" +
 		"<span class=\"chev\"></span><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
-		"<span class=\"nm\">" + esc(entry.name) + "</span>" + marker + "</div>"
+		"<span class=\"nm " + git.cssOf(gitKindOf(state, entry.path)) + "\">" + esc(entry.name) + "</span>" + marker + gitBadge(state, entry.path) + "</div>"
 }
 
 func explorer(state: model.State): Str {
@@ -255,9 +287,101 @@ func outlinePanel(state: model.State): Str {
 	return join(rows, "")
 }
 
+func gitRow(state: model.State, file: model.GitFile, stagedList: Bool): Str {
+	kind := git.kindOf(file)
+	name := workspace.baseName(file.path)
+	parts := split(file.path, "/")
+	mut folder := ""
+	last := len(parts) - 2
+	if parts bounds 0 && parts bounds last {
+		folder = join(parts[0:last], "/")
+	}
+	icon := theme.iconFor(name)
+	mut open := ""
+	if kind != "deleted" {
+		open = act("open", workspace.joinPath(state.git.top, file.path))
+	}
+	mut actions := headerAction("↺", "Descartar alterações", "gitAskDiscard", file.path) + headerAction("+", "Preparar (stage)", "gitStage", file.path)
+	if stagedList {
+		actions = headerAction("−", "Tirar da preparação (unstage)", "gitUnstage", file.path)
+	}
+	return "<div class=\"row gitrow\"" + open + attr("title", file.path) + ">" +
+		"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+		"<span class=\"nm " + git.cssOf(kind) + "\">" + esc(name) + "</span>" +
+		"<span class=\"dir\">" + esc(folder) + "</span><span class=\"grow\"></span>" +
+		"<span class=\"acts\">" + actions + "</span>" +
+		"<span class=\"gb " + git.cssOf(kind) + "\">" + git.badge(kind, file) + "</span></div>"
+}
+
+func gitPanel(state: model.State): Str {
+	info := state.git
+	head := "<div class=\"hdr\">CONTROLE DE CÓDIGO<span class=\"grow\"></span>" +
+		headerAction("⟳", "Atualizar", "gitRefresh", "") +
+		headerAction("↓", "Pull", "gitPull", "") +
+		headerAction("↑", "Push", "gitPush", "") + "</div>"
+	if !info.repo {
+		return head + "<div class=\"empty\">Esta pasta não está num repositório git.</div>" +
+			"<div class=\"prompt\"><button class=\"btn primary\"" + act("gitInit", "") + ">Inicializar repositório</button></div>"
+	}
+	stagedCount := git.count(info, true)
+	changedCount := git.count(info, false)
+	mut sync := ""
+	if info.ahead > 0 || info.behind > 0 {
+		sync = " <span class=\"muted\">↑{info.ahead} ↓{info.behind}</span>"
+	}
+	mut busy := ""
+	if info.busy != "" {
+		busy = "<span class=\"muted\">⟳ " + esc(info.busy) + "…</span>"
+	}
+	mut commitLabel := "✓ Commit"
+	if stagedCount == 0 {
+		commitLabel = "✓ Commit (tudo)"
+	}
+	mut disabled := ""
+	if info.message == "" || len(info.files) == 0 || info.busy != "" {
+		disabled = " disabled"
+	}
+	mut Str[dyn] stagedRows = []
+	mut Str[dyn] changedRows = []
+	for each file in info.files {
+		if git.staged(file) {
+			append(stagedRows, gitRow(state, file, true))
+		}
+		if git.unstaged(file) {
+			append(changedRows, gitRow(state, file, false))
+		}
+	}
+	mut body := ""
+	if stagedCount > 0 {
+		body = body + "<div class=\"hdr sub\">PREPARADAS  {stagedCount}<span class=\"grow\"></span>" +
+			headerAction("−", "Tirar tudo da preparação", "gitUnstageAll", "") + "</div>" + join(stagedRows, "")
+	}
+	if changedCount > 0 {
+		body = body + "<div class=\"hdr sub\">ALTERAÇÕES  {changedCount}<span class=\"grow\"></span>" +
+			headerAction("+", "Preparar tudo", "gitStageAll", "") + "</div>" + join(changedRows, "")
+	}
+	if len(info.files) == 0 {
+		body = "<div class=\"empty\">Nada para commitar — tudo em dia.</div>"
+	}
+	mut Str[dyn] history = []
+	for each line in info.log {
+		if line is "{hash} {subject}" {
+			append(history, "<div class=\"logline\"" + attr("title", line) + "><span class=\"hash\">" + esc(hash) + "</span> " + esc(subject) + "</div>")
+		}
+	}
+	return head +
+		"<div class=\"branch\">⑂ " + esc(info.branch) + sync + busy + "</div>" +
+		"<div class=\"commitbox\"><textarea class=\"field\" rows=\"3\" data-input=\"gitMessage\" data-ctrlsubmit=\"gitCommit\" placeholder=\"Mensagem do commit (Ctrl+Enter)\">" + esc(info.message) + "</textarea>" +
+		"<button class=\"btn primary\"" + act("gitCommit", "") + disabled + ">" + commitLabel + "</button></div>" +
+		body +
+		"<div class=\"hdr sub\">HISTÓRICO</div>" + join(history, "")
+}
+
 func sidePanel(state: model.State): Str {
 	if state.side is model.SideView.OutlineSide {
 		return outlinePanel(state)
+	} else if state.side is model.SideView.GitSide {
+		return gitPanel(state)
 	}
 	return explorer(state)
 }
@@ -276,7 +400,7 @@ func tab(state: model.State, index: Int, doc: model.Doc): Str {
 	icon := theme.iconFor(doc.name)
 	return "<div class=\"" + cls + "\"" + act("focus", "{index}") + attr("title", doc.path) + ">" +
 		"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
-		"<span>" + esc(doc.name) + "</span>" + closer + "</div>"
+		"<span class=\"" + git.cssOf(gitKindOf(state, doc.path)) + "\">" + esc(doc.name) + "</span>" + closer + "</div>"
 }
 
 func tabStrip(state: model.State): Str {
@@ -514,9 +638,36 @@ func paneTab(label: Str, arg: Str, on: Bool): Str {
 	return "<span class=\"" + cls + "\"" + act("pane", arg) + ">" + label + "</span>"
 }
 
+func terminalBody(state: model.State): Str {
+	term := state.term
+	mut status := ""
+	if term.session == 0 {
+		status = "<div class=\"empty\">Terminal encerrado — Enter abre um novo.</div>"
+	}
+	return "<pre class=\"term\" data-autoscroll data-focus=\"termInput\">" + esc(term.log) + "</pre>" + status +
+		"<div class=\"termline\"><span class=\"tp\">›</span>" +
+		"<input class=\"termin\" data-input=\"termInput\" data-submit=\"termSubmit\" data-history=\"1\" spellcheck=\"false\" autocomplete=\"off\"" +
+		attr("placeholder", "comando (↑ ↓ histórico, Ctrl+C encerra o processo)") + attr("value", term.input) + "></div>"
+}
+
 func panel(state: model.State): Str {
 	problems := state.pane is model.Pane.ProblemsPane
+	terminal := state.pane is model.Pane.TerminalPane
 	mut body := esc(state.output)
+	mut bodyClass := "body"
+	mut actions := headerAction("⌫", "Limpar", "clear", "")
+	if terminal {
+		body = terminalBody(state)
+		bodyClass = "body termbody"
+		actions = headerAction("⌫", "Limpar", "termClear", "") +
+			headerAction("■", "Encerrar o processo (reinicia o shell)", "termRestart", "")
+	}
+	mut maxGlyph := "⤢"
+	mut maxTip := "Maximizar painel"
+	if state.panelMax {
+		maxGlyph = "⤡"
+		maxTip = "Restaurar painel"
+	}
 	if problems {
 		mut Str[dyn] rows = []
 		for each d in state.diagnostics {
@@ -531,11 +682,12 @@ func panel(state: model.State): Str {
 	}
 	return "<div class=\"head\">" +
 		paneTab("PROBLEMAS  {len(state.diagnostics)}", "problems", problems) +
-		paneTab("SAÍDA", "output", !problems) +
-		"<span class=\"grow\"></span>" +
-		headerAction("⌫", "Limpar", "clear", "") +
+		paneTab("SAÍDA", "output", !problems && !terminal) +
+		paneTab("TERMINAL", "terminal", terminal) +
+		"<span class=\"grow\"></span>" + actions +
+		headerAction(maxGlyph, maxTip + keyHint(state, "maximizePanel"), "panelMax", "") +
 		headerAction("✕", "Fechar painel" + keyHint(state, "togglePanel"), "togglePanel", "") +
-		"</div><div class=\"body\">" + body + "</div>"
+		"</div><div class=\"" + bodyClass + "\">" + body + "</div>"
 }
 
 // ── barra de status ──────────────────────────────────────────────────────
@@ -610,6 +762,13 @@ func overlay(state: model.State): Str {
 		}
 		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">" + esc(label) + "</div>" +
 			"<div class=\"empty\">Pressione a nova combinação de teclas. Esc cancela.</div></div></div>"
+	}
+	if state.git.confirm != "" {
+		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">Descartar as alterações de <b>" +
+			esc(state.git.confirm) + "</b>?</div><div class=\"empty\">Isto não pode ser desfeito. Um arquivo novo é apagado.</div>" +
+			"<div style=\"margin-top:16px;display:flex;gap:8px;justify-content:center\">" +
+			"<button class=\"btn\"" + act("gitCancel", "") + ">Cancelar</button>" +
+			"<button class=\"btn danger\"" + act("gitDiscard", state.git.confirm) + ">Descartar</button></div></div></div>"
 	}
 	if state.peekFile == "" {
 		return ""
@@ -697,6 +856,10 @@ func frame(state: model.State): model.Frame {
 		panel: state.panelOpen,
 		popup: len(state.suggestions) > 0 && (layout == "edit" || layout == "split"),
 		numbers: prefs.lineNumbers,
+		panelHeight: prefs.panelHeight,
+		panelMax: state.panelMax,
+		focus: state.focus,
+		focusSerial: state.focusSerial,
 		recording: state.recording != "",
 		title: title
 	)

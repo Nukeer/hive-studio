@@ -25,6 +25,8 @@ type Theme {
 	warn:       Str
 	good:       Str
 	gutter:     Str
+	gitNew:     Str
+	gitMod:     Str
 	synKeyword: Str
 	synType:    Str
 	synString:  Str
@@ -42,49 +44,49 @@ func themes(): Theme[dyn] {
 			panel: "#16181d", tabStrip: "#121418", tabIdle: "#16181d", titleBar: "#111317",
 			statusBg: "#f5a623", statusFg: "#1b1d23", muted: "#7f8794", accent: "#f5a623",
 			selection: "#2b2f38", input: "#22252c", button: "#2a2e36", buttonText: "#d7dae0", border: "#2a2d34",
-			danger: "#f14c4c", warn: "#cca700", good: "#4ec96f", gutter: "#4b525e",
+			danger: "#f14c4c", warn: "#cca700", good: "#4ec96f", gutter: "#4b525e", gitNew: "#73c991", gitMod: "#e2c08d",
 			synKeyword: "#c678dd", synType: "#e5c07b", synString: "#98c379", synNumber: "#d19a66",
 			synComment: "#5c6370", synCall: "#61afef", synAtom: "#56b6c2", synLiteral: "#d19a66", synModule: "#e06c75"),
 		Theme(name: "Dark Modern", dark: true, editor: "#1f1f1f", text: "#cccccc", side: "#181818", activity: "#181818",
 			panel: "#181818", tabStrip: "#181818", tabIdle: "#181818", titleBar: "#181818",
 			statusBg: "#0078d4", statusFg: "#ffffff", muted: "#9d9d9d", accent: "#0078d4",
 			selection: "#37373d", input: "#313131", button: "#313131", buttonText: "#cccccc", border: "#2b2b2b",
-			danger: "#f14c4c", warn: "#cca700", good: "#89d185", gutter: "#6e7681",
+			danger: "#f14c4c", warn: "#cca700", good: "#89d185", gutter: "#6e7681", gitNew: "#73c991", gitMod: "#e2c08d",
 			synKeyword: "#569cd6", synType: "#4ec9b0", synString: "#ce9178", synNumber: "#b5cea8",
 			synComment: "#6a9955", synCall: "#dcdcaa", synAtom: "#4fc1ff", synLiteral: "#569cd6", synModule: "#9cdcfe"),
 		Theme(name: "Light Modern", dark: false, editor: "#ffffff", text: "#3b3b3b", side: "#f8f8f8", activity: "#f8f8f8",
 			panel: "#f8f8f8", tabStrip: "#f8f8f8", tabIdle: "#f8f8f8", titleBar: "#f8f8f8",
 			statusBg: "#005fb8", statusFg: "#ffffff", muted: "#767676", accent: "#005fb8",
 			selection: "#e4e6f1", input: "#ffffff", button: "#e5e5e5", buttonText: "#3b3b3b", border: "#e5e5e5",
-			danger: "#e51400", warn: "#bf8803", good: "#388a34", gutter: "#8a8f98",
+			danger: "#e51400", warn: "#bf8803", good: "#388a34", gutter: "#8a8f98", gitNew: "#587c0c", gitMod: "#895503",
 			synKeyword: "#0000ff", synType: "#267f99", synString: "#a31515", synNumber: "#098658",
 			synComment: "#008000", synCall: "#795e26", synAtom: "#0070c1", synLiteral: "#0000ff", synModule: "#001080"),
 		Theme(name: "Monokai", dark: true, editor: "#272822", text: "#f8f8f2", side: "#1e1f1c", activity: "#272822",
 			panel: "#1e1f1c", tabStrip: "#1e1f1c", tabIdle: "#34352f", titleBar: "#1e1f1c",
 			statusBg: "#414339", statusFg: "#f8f8f2", muted: "#75715e", accent: "#a6e22e",
 			selection: "#414339", input: "#414339", button: "#414339", buttonText: "#f8f8f2", border: "#3e3d32",
-			danger: "#f92672", warn: "#e6db74", good: "#a6e22e", gutter: "#90908a",
+			danger: "#f92672", warn: "#e6db74", good: "#a6e22e", gutter: "#90908a", gitNew: "#a6e22e", gitMod: "#fd971f",
 			synKeyword: "#f92672", synType: "#66d9ef", synString: "#e6db74", synNumber: "#ae81ff",
 			synComment: "#75715e", synCall: "#a6e22e", synAtom: "#ae81ff", synLiteral: "#ae81ff", synModule: "#fd971f"),
 		Theme(name: "Dracula", dark: true, editor: "#282a36", text: "#f8f8f2", side: "#21222c", activity: "#343746",
 			panel: "#21222c", tabStrip: "#191a21", tabIdle: "#21222c", titleBar: "#21222c",
 			statusBg: "#bd93f9", statusFg: "#282a36", muted: "#6272a4", accent: "#bd93f9",
 			selection: "#44475a", input: "#343746", button: "#44475a", buttonText: "#f8f8f2", border: "#191a21",
-			danger: "#ff5555", warn: "#f1fa8c", good: "#50fa7b", gutter: "#6272a4",
+			danger: "#ff5555", warn: "#f1fa8c", good: "#50fa7b", gutter: "#6272a4", gitNew: "#50fa7b", gitMod: "#ffb86c",
 			synKeyword: "#ff79c6", synType: "#8be9fd", synString: "#f1fa8c", synNumber: "#bd93f9",
 			synComment: "#6272a4", synCall: "#50fa7b", synAtom: "#bd93f9", synLiteral: "#bd93f9", synModule: "#ffb86c"),
 		Theme(name: "Solarized Light", dark: false, editor: "#fdf6e3", text: "#586e75", side: "#eee8d5", activity: "#ddd6c1",
 			panel: "#eee8d5", tabStrip: "#d9d2c2", tabIdle: "#d3cbb7", titleBar: "#eee8d5",
 			statusBg: "#b58900", statusFg: "#fdf6e3", muted: "#93a1a1", accent: "#b58900",
 			selection: "#e3d9b5", input: "#fdf6e3", button: "#ddd6c1", buttonText: "#586e75", border: "#d3cbb7",
-			danger: "#dc322f", warn: "#cb4b16", good: "#859900", gutter: "#93a1a1",
+			danger: "#dc322f", warn: "#cb4b16", good: "#859900", gutter: "#93a1a1", gitNew: "#859900", gitMod: "#cb4b16",
 			synKeyword: "#859900", synType: "#b58900", synString: "#2aa198", synNumber: "#d33682",
 			synComment: "#93a1a1", synCall: "#268bd2", synAtom: "#6c71c4", synLiteral: "#cb4b16", synModule: "#cb4b16"),
 		Theme(name: "Nord", dark: true, editor: "#2e3440", text: "#d8dee9", side: "#2b303b", activity: "#262a33",
 			panel: "#2b303b", tabStrip: "#262a33", tabIdle: "#2b303b", titleBar: "#262a33",
 			statusBg: "#3b4252", statusFg: "#d8dee9", muted: "#7b88a1", accent: "#88c0d0",
 			selection: "#3b4252", input: "#3b4252", button: "#434c5e", buttonText: "#d8dee9", border: "#3b4252",
-			danger: "#bf616a", warn: "#ebcb8b", good: "#a3be8c", gutter: "#4c566a",
+			danger: "#bf616a", warn: "#ebcb8b", good: "#a3be8c", gutter: "#4c566a", gitNew: "#a3be8c", gitMod: "#ebcb8b",
 			synKeyword: "#81a1c1", synType: "#8fbcbb", synString: "#a3be8c", synNumber: "#b48ead",
 			synComment: "#616e88", synCall: "#88c0d0", synAtom: "#b48ead", synLiteral: "#81a1c1", synModule: "#d08770")
 	]
@@ -130,7 +132,7 @@ func css(t: Theme, fontSize: Int, tabSize: Int): Str {
 		variable("status-fg", t.statusFg) + variable("muted", t.muted) + variable("accent", t.accent) +
 		variable("selection", t.selection) + variable("input", t.input) + variable("button", t.button) +
 		variable("button-text", t.buttonText) + variable("border", t.border) + variable("danger", t.danger) +
-		variable("warn", t.warn) + variable("good", t.good) + variable("gutter", t.gutter) +
+		variable("warn", t.warn) + variable("good", t.good) + variable("gutter", t.gutter) + variable("git-new", t.gitNew) + variable("git-mod", t.gitMod) +
 		variable("syn-keyword", t.synKeyword) + variable("syn-type", t.synType) + variable("syn-string", t.synString) +
 		variable("syn-number", t.synNumber) + variable("syn-comment", t.synComment) + variable("syn-call", t.synCall) +
 		variable("syn-atom", t.synAtom) + variable("syn-literal", t.synLiteral) + variable("syn-module", t.synModule) +

@@ -17,12 +17,117 @@ import ./lib/highlight
 import ./lib/complete
 import ./lib/keys
 import ./lib/server
+import ./lib/git
+import ./lib/navigate
+import ./lib/process
+import ./lib/native.go
 
 // ── explorador ───────────────────────────────────────────────────────────
 
 proc reload(state: model.State): model.State {
 	mut next := state
 	next.tree = workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden)
+	return next
+}
+
+proc gitRefresh(state: model.State): model.State {
+	mut next := state
+	next.git = git.refresh(state.root, state.git)
+	return next
+}
+
+// Pede para a página focar um campo (`prompt`, `termInput`…) no próximo frame.
+func withFocus(state: model.State, target: Str): model.State {
+	mut next := state
+	next.focus = target
+	next.focusSerial = state.focusSerial + 1
+	return next
+}
+
+// ── terminal ─────────────────────────────────────────────────────────────
+
+// Lê o shell aos pedaços e entrega à janela até ele terminar.
+proc watchTerminal(db: hive.syslink.Address, session: Int): void {
+	for ;; {
+		text := native.read(session)
+		if text != "" {
+			async db(model.Cmd.Post(model.Msg.TermOutput(session, text)))
+		}
+		if !native.alive(session) {
+			rest := native.read(session)
+			if rest != "" {
+				async db(model.Cmd.Post(model.Msg.TermOutput(session, rest)))
+			}
+			async db(model.Cmd.Post(model.Msg.TermExited(session, native.code(session))))
+			return
+		}
+		hive.task.sleep(40)
+	}
+}
+
+// Abre o shell se ainda não houver um vivo.
+proc ensureTerminal(state: model.State, from: hive.syslink.Envelope): model.State {
+	mut next := state
+	if state.term.session != 0 && native.alive(state.term.session) {
+		return next
+	}
+	started := native.start(state.root)
+	if started is Result.Ok(session) {
+		next.term.session = session
+		async watchTerminal(hive.syslink.self(from), session)
+	} else if started is Result.Error(why) {
+		next.term.log = state.term.log + "não foi possível abrir o terminal: " + why + "\n"
+	}
+	return next
+}
+
+// Quanto do terminal fica guardado. É uma função e não um literal de
+// propósito: `len(text) > 200000` com `len(text) - 150000` logo depois faz o
+// hivec 0.2.8 travar na prova de limites.
+func logLimit(): Int {
+	return 200 * 1000
+}
+
+// O log do terminal guarda só o fim quando fica grande demais.
+func capLog(text: Str): Str {
+	size := len(text)
+	limit := logLimit()
+	if size > limit {
+		return complete.skip(text, size - limit / 4 * 3)
+	}
+	return text
+}
+
+// ── git ──────────────────────────────────────────────────────────────────
+
+// Relê do disco os documentos abertos de um arquivo que o git mudou.
+proc reloadDocsOf(state: model.State, rel: Str): model.State {
+	mut next := state
+	mut model.Doc[dyn] docs = state.docs
+	for i := 0; i < len(docs); i++ {
+		doc := docs[i]
+		if render.relPath(state, doc.path) == rel {
+			if hive.file.read(doc.path) is Result.Ok(raw) {
+				text := replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n")
+				mut fresh := doc
+				fresh.text = text
+				fresh.saved = text
+				fresh.html = highlightFor(doc.path, text)
+				docs[i] = fresh
+			}
+		}
+	}
+	next.docs = docs
+	next.textSerial = state.textSerial + 1
+	return next
+}
+
+proc afterGit(state: model.State, outcome: process.Output): model.State {
+	mut next := gitRefresh(reload(state))
+	if outcome.code != 0 {
+		next.status = "git: " + process.firstLine(outcome.text)
+		next.output = state.output + outcome.text
+	}
 	return next
 }
 
@@ -38,7 +143,7 @@ proc openRoot(state: model.State, folder: Str): model.State {
 	next.expanded = closed
 	next.selected = ""
 	next.status = "pasta {workspace.baseName(target)}"
-	return reload(next)
+	return gitRefresh(reload(next))
 }
 
 func isNot(candidate: Str, path: Str): Bool {
@@ -337,9 +442,155 @@ func clampInt(value: Int, low: Int, high: Int): Int {
 
 // ── a dobra ──────────────────────────────────────────────────────────────
 
+// Painel, terminal, git e navegação: separados da dobra principal para cada
+// proc continuar pequeno. `Error` quando a mensagem não é daqui.
+proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Envelope): Result<model.State, Bool> {
+	mut next := state
+	mut prefs := state.settings
+	if message is model.Msg.TogglePanelMax {
+		next.panelMax = !state.panelMax
+		next.panelOpen = true
+	} else if message is model.Msg.SetPanelHeight(height) {
+		prefs.panelHeight = clampInt(height, 80, 4000)
+		next = applySettings(state, prefs)
+		next.panelMax = false
+	} else if message is model.Msg.TermTyped(text) {
+		next.term.input = text
+	} else if message is model.Msg.TermSubmit(text) {
+		next = ensureTerminal(state, from)
+		if native.write(next.term.session, text + "\n") is Result.Error(why) {
+			next.term.log = capLog(next.term.log + "\n[não foi possível escrever no terminal: " + why + "]\n")
+		}
+		if !server.isWindows() {
+			next.term.log = capLog(next.term.log + text + "\n")
+		}
+		mut Str[dyn] history = state.term.history
+		if text != "" {
+			append(history, text)
+		}
+		next.term.history = history
+		next.term.historyAt = len(history)
+		next.term.input = ""
+	} else if message is model.Msg.TermHistory(delta) {
+		count := len(state.term.history)
+		at := clampInt(state.term.historyAt + delta, 0, count)
+		next.term.historyAt = at
+		next.term.input = ""
+		if state.term.history bounds at {
+			next.term.input = state.term.history[at]
+		}
+	} else if message is model.Msg.TermRestart {
+		if state.term.session != 0 {
+			_stopped := native.stop(state.term.session)
+		}
+		next.term.session = 0
+		next.term.log = capLog(state.term.log + "^C\n")
+		return Result.Ok(withFocus(ensureTerminal(next, from), "termInput"))
+	} else if message is model.Msg.TermClear {
+		next.term.log = ""
+	} else if message is model.Msg.TermOutput(session, text) {
+		if session == state.term.session {
+			next.term.log = capLog(state.term.log + text)
+		}
+	} else if message is model.Msg.TermExited(session, code) {
+		if session == state.term.session {
+			next.term.log = capLog(state.term.log + "\n[terminal encerrado, código {code}]\n")
+			next.term.session = 0
+		}
+		return Result.Ok(gitRefresh(reload(next)))
+	} else if message is model.Msg.GitPoll || message is model.Msg.GitRefresh {
+		return Result.Ok(gitRefresh(next))
+	} else if message is model.Msg.GitStage(path) {
+		return Result.Ok(afterGit(state, git.stage(state.git, path)))
+	} else if message is model.Msg.GitUnstage(path) {
+		return Result.Ok(afterGit(state, git.unstage(state.git, path)))
+	} else if message is model.Msg.GitStageAll {
+		return Result.Ok(afterGit(state, git.stageAll(state.git)))
+	} else if message is model.Msg.GitUnstageAll {
+		return Result.Ok(afterGit(state, git.unstageAll(state.git)))
+	} else if message is model.Msg.GitAskDiscard(path) {
+		next.git.confirm = path
+	} else if message is model.Msg.GitCancelConfirm {
+		next.git.confirm = ""
+	} else if message is model.Msg.GitDiscard(path) {
+		mut rel := ""
+		for each file in state.git.files {
+			if file.path == path {
+				rel = file.rel
+			}
+		}
+		next.git.confirm = ""
+		next = afterGit(next, git.discard(state.git, path))
+		return Result.Ok(reloadDocsOf(next, rel))
+	} else if message is model.Msg.GitMessageTyped(text) {
+		next.git.message = text
+	} else if message is model.Msg.GitCommit {
+		if state.git.message == "" || state.git.busy != "" || len(state.git.files) == 0 {
+			return Result.Ok(state)
+		}
+		if state.settings.saveBeforeRun {
+			next = saveAll(state)
+		}
+		next.git.busy = "commit"
+		async git.commitAsync(hive.syslink.self(from), state.git.top, state.git.message, git.count(state.git, true) == 0)
+	} else if message is model.Msg.GitPush {
+		if state.git.busy != "" || !state.git.repo {
+			return Result.Ok(state)
+		}
+		next.git.busy = "push"
+		Str[dyn] arguments = ["push", "-u", "origin", "HEAD"]
+		async git.runAsync(hive.syslink.self(from), state.git.top, "push", arguments)
+	} else if message is model.Msg.GitPull {
+		if state.git.busy != "" || !state.git.repo {
+			return Result.Ok(state)
+		}
+		next.git.busy = "pull"
+		Str[dyn] arguments = ["pull", "--ff-only"]
+		async git.runAsync(hive.syslink.self(from), state.git.top, "pull", arguments)
+	} else if message is model.Msg.GitInit {
+		return Result.Ok(afterGit(state, process.run("git", ["init"], state.root)))
+	} else if message is model.Msg.GitDone(command, output, ok) {
+		next.git.busy = ""
+		next.output = state.output + "$ git " + command + "\n" + output
+		if ok {
+			next.status = "git {command}: ok"
+			if command == "commit" {
+				next.git.message = ""
+			}
+		} else {
+			next.status = "git {command} falhou — veja SAÍDA"
+			next.pane = model.Pane.OutputPane()
+			next.panelOpen = true
+		}
+		return Result.Ok(gitRefresh(reload(next)))
+	} else if message is model.Msg.GotoDefinition(caret) {
+		if render.activeDoc(state) is Result.Ok(doc) {
+			located := navigate.locate(doc.path, doc.text, caret)
+			if located is Result.Ok(target) {
+				mut jumped := state
+				if workspace.tidy(target.file) != workspace.tidy(doc.path) {
+					jumped = openDoc(state, workspace.tidy(target.file))
+				}
+				jumped.caret = navigate.offsetOf(activeText(jumped), target.line, target.column)
+				jumped.textSerial = jumped.textSerial + 1
+				jumped.status = "definição: {workspace.baseName(target.file)}:{target.line}"
+				return Result.Ok(clearSuggestions(jumped))
+			} else if located is Result.Error(why) {
+				next.status = why
+			}
+		}
+	} else {
+		return Result.Error(false)
+	}
+	return Result.Ok(next)
+}
+
 proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope): model.State {
 	mut next := state
 	mut prefs := state.settings
+	if updateTools(state, message, from) is Result.Ok(done) {
+		return done
+	}
 	if message is model.Msg.Toggle(path) {
 		return toggle(state, path)
 	} else if message is model.Msg.Open(path) {
@@ -360,6 +611,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 		if prompt is model.Prompt.OpenFolderPrompt {
 			next.promptText = state.root
 		}
+		return withFocus(next, "prompt")
 	} else if message is model.Msg.PromptTyped(text) {
 		next.promptText = text
 	} else if message is model.Msg.PromptSubmit(text) {
@@ -431,8 +683,9 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 			}
 		}
 		next.docs = docs
+		return gitRefresh(next)
 	} else if message is model.Msg.SaveAll {
-		return saveAll(state)
+		return gitRefresh(saveAll(state))
 	} else if message is model.Msg.PinEntry {
 		if render.activeDoc(state) is Result.Ok(doc) {
 			next.entrypoint = doc.path
@@ -482,6 +735,9 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 	} else if message is model.Msg.ShowPane(pane) {
 		next.pane = pane
 		next.panelOpen = true
+		if pane is model.Pane.TerminalPane {
+			return withFocus(ensureTerminal(next, from), "termInput")
+		}
 	} else if message is model.Msg.TogglePanel {
 		next.panelOpen = !state.panelOpen
 	} else if message is model.Msg.ShowSide(side) {
@@ -555,9 +811,12 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 // o texto novo: é o `textSerial` que avisa.
 proc step(state: model.State, message: model.Msg, from: hive.syslink.Envelope): model.State {
 	mut next := update(state, message, from)
+	jumping := message is model.Msg.GotoDefinition(_)
 	if render.activePath(next) != render.activePath(state) {
 		next.textSerial = next.textSerial + 1
-		next.caret = 0
+		if !jumping {
+			next.caret = 0
+		}
 		next = clearSuggestions(next)
 	}
 	return next
@@ -615,6 +874,17 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 		return Result.Ok(model.Msg.TogglePreview())
 	} else if action == "check" || action == "run" || action == "test" || action == "build" {
 		return Result.Ok(model.Msg.Invoke(action))
+	} else if action == "terminal" {
+		if state.panelOpen && state.pane == model.Pane.TerminalPane() {
+			return Result.Ok(model.Msg.TogglePanel())
+		}
+		return Result.Ok(model.Msg.ShowPane(model.Pane.TerminalPane()))
+	} else if action == "maximizePanel" {
+		return Result.Ok(model.Msg.TogglePanelMax())
+	} else if action == "git" {
+		return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
+	} else if action == "definition" {
+		return Result.Ok(model.Msg.GotoDefinition(caret))
 	}
 	return Result.Error(false)
 }
@@ -622,6 +892,8 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 func escapeMsg(state: model.State): Result<model.Msg, Bool> {
 	if state.recording != "" {
 		return Result.Ok(model.Msg.CancelRecording())
+	} else if state.git.confirm != "" {
+		return Result.Ok(model.Msg.GitCancelConfirm())
 	} else if state.peekFile != "" {
 		return Result.Ok(model.Msg.ClosePeek())
 	} else if len(state.suggestions) > 0 {
@@ -660,8 +932,46 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 	} else if a == "side" {
 		if arg == "outline" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.OutlineSide()))
+		} else if arg == "git" {
+			return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
 		}
 		return Result.Ok(model.Msg.ShowSide(model.SideView.ExplorerSide()))
+	} else if a == "definition" {
+		return Result.Ok(model.Msg.GotoDefinition(event.caret))
+	} else if a == "panelMax" {
+		return Result.Ok(model.Msg.TogglePanelMax())
+	} else if a == "termSubmit" {
+		return Result.Ok(model.Msg.TermSubmit(event.text))
+	} else if a == "termHistory" {
+		return Result.Ok(model.Msg.TermHistory(numberOr(arg, 0)))
+	} else if a == "termRestart" {
+		return Result.Ok(model.Msg.TermRestart())
+	} else if a == "termClear" {
+		return Result.Ok(model.Msg.TermClear())
+	} else if a == "gitRefresh" {
+		return Result.Ok(model.Msg.GitRefresh())
+	} else if a == "gitStage" {
+		return Result.Ok(model.Msg.GitStage(arg))
+	} else if a == "gitUnstage" {
+		return Result.Ok(model.Msg.GitUnstage(arg))
+	} else if a == "gitStageAll" {
+		return Result.Ok(model.Msg.GitStageAll())
+	} else if a == "gitUnstageAll" {
+		return Result.Ok(model.Msg.GitUnstageAll())
+	} else if a == "gitAskDiscard" {
+		return Result.Ok(model.Msg.GitAskDiscard(arg))
+	} else if a == "gitDiscard" {
+		return Result.Ok(model.Msg.GitDiscard(arg))
+	} else if a == "gitCancel" {
+		return Result.Ok(model.Msg.GitCancelConfirm())
+	} else if a == "gitCommit" {
+		return Result.Ok(model.Msg.GitCommit())
+	} else if a == "gitPush" {
+		return Result.Ok(model.Msg.GitPush())
+	} else if a == "gitPull" {
+		return Result.Ok(model.Msg.GitPull())
+	} else if a == "gitInit" {
+		return Result.Ok(model.Msg.GitInit())
 	} else if a == "settings" {
 		return Result.Ok(model.Msg.OpenSettings())
 	} else if a == "closeSettings" {
@@ -669,6 +979,8 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 	} else if a == "pane" {
 		if arg == "problems" {
 			return Result.Ok(model.Msg.ShowPane(model.Pane.ProblemsPane()))
+		} else if arg == "terminal" {
+			return Result.Ok(model.Msg.ShowPane(model.Pane.TerminalPane()))
 		}
 		return Result.Ok(model.Msg.ShowPane(model.Pane.OutputPane()))
 	} else if a == "togglePanel" {
@@ -717,6 +1029,12 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.CompilerTyped(event.text))
 	} else if a == "browser" {
 		return Result.Ok(model.Msg.BrowserTyped(event.text))
+	} else if a == "termInput" {
+		return Result.Ok(model.Msg.TermTyped(event.text))
+	} else if a == "gitMessage" {
+		return Result.Ok(model.Msg.GitMessageTyped(event.text))
+	} else if a == "panelHeight" {
+		return Result.Ok(model.Msg.SetPanelHeight(numberOr(event.text, 260)))
 	}
 	return Result.Error(false)
 }
@@ -755,7 +1073,11 @@ proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope):
 		return next
 	} else if command is model.Cmd.Post(message) {
 		mut next := step(state, message, from)
-		next.pulse = state.pulse + 1
+		// A checagem periódica do git só redesenha quando algo mudou.
+		quiet := message is model.Msg.GitPoll
+		if !quiet || next.git != state.git {
+			next.pulse = state.pulse + 1
+		}
 		return next
 	} else if command is model.Cmd.Render {
 		hive.syslink.answer(from, model.Cmd.Reply(render.encodeFrame(state)))
@@ -765,6 +1087,14 @@ proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope):
 		hive.syslink.answer(from, model.Cmd.ClientsAre(state.clients))
 	}
 	return state
+}
+
+// Relê o git de tempos em tempos, para mudanças feitas fora do Hive Studio.
+proc watchGit(db: hive.syslink.Address): void {
+	for ;; {
+		hive.task.sleep(4000)
+		async db(model.Cmd.Post(model.Msg.GitPoll()))
+	}
 }
 
 func fallbackView(url: Str): hive.ui.View {
@@ -804,6 +1134,7 @@ proc main(): void {
 		ui.window("Hive Studio", fallbackView, fallbackUpdate, url)
 	}
 	hive.term.status("Hive Studio em {url} ({browser})")
+	async watchGit(db)
 	for ;; {
 		hive.task.sleep(60000)
 	}
@@ -935,4 +1266,72 @@ test "o frame desenha todas as telas sem erro" {
 	settingsPage := render.encodeFrame(state)
 	assert indexOf(settingsPage, "Atalhos de teclado") is Result.Ok(_)
 	assert indexOf(settingsPage, "Solarized Light") is Result.Ok(_)
+}
+
+test "git marca arquivo novo e editado, e commitado volta ao normal" {
+	folder := "./git-test"
+	if hive.file.makeDir(folder) is Result.Error(why) {
+		panic why
+	}
+	_reset := process.run("git", ["init", "-q"], folder)
+	_name := process.run("git", ["config", "user.email", "t@t"], folder)
+	_mail := process.run("git", ["config", "user.name", "t"], folder)
+	if hive.file.write(folder + "/a.hive", "proc main(): void \{}\n") is Result.Error(why) {
+		panic why
+	}
+	mut state := fresh(folder)
+	assert state.git.repo
+	assert render.gitKindOf(state, folder + "/a.hive") == "new"
+	state = afterGit(state, git.stageAll(state.git))
+	_commit := process.run("git", ["commit", "-q", "-m", "um"], folder)
+	state = gitRefresh(state)
+	assert render.gitKindOf(state, folder + "/a.hive") == ""
+	if hive.file.write(folder + "/a.hive", "proc main(): void \{ echo 1 }\n") is Result.Error(why) {
+		panic why
+	}
+	state = gitRefresh(state)
+	assert render.gitKindOf(state, folder + "/a.hive") == "modified"
+	state.side = model.SideView.GitSide()
+	page := render.sidePanel(state)
+	assert indexOf(page, "ALTERAÇÕES") is Result.Ok(_)
+	assert indexOf(page, "g-mod") is Result.Ok(_)
+	_undo := process.run("git", ["checkout", "--", "a.hive"], folder)
+}
+
+test "ir para a definição no mesmo arquivo move o cursor e reenvia o texto" {
+	folder := scratch()
+	mut state := fresh(folder)
+	source := "proc helper(): void \{\n}\n\nproc main(): void \{\n\thelper()\n}\n"
+	if hive.file.write(folder + "/nav.hive", source) is Result.Error(why) {
+		panic why
+	}
+	state = openDoc(state, folder + "/nav.hive")
+	serial := state.textSerial
+	caret := navigate.offsetOf(source, 5, 3)
+	if navigate.locate(folder + "/nav.hive", source, caret) is Result.Ok(target) {
+		assert target.line == 1
+		assert navigate.offsetOf(source, target.line, target.column) == 5
+	} else {
+		assert false
+	}
+	assert serial == state.textSerial
+}
+
+test "o terminal roda um comando e devolve a saída" {
+	started := native.start(".")
+	if started is Result.Ok(session) {
+		_w := native.write(session, "echo hive-terminal-ok\n")
+		mut seen := ""
+		for attempt := 0; attempt < 50; attempt++ {
+			hive.task.sleep(100)
+			seen = seen + native.read(session)
+			if indexOf(seen, "hive-terminal-ok\n") is Result.Ok(_) {
+				break
+			}
+		}
+		assert indexOf(seen, "hive-terminal-ok") is Result.Ok(_)
+		_s := native.stop(session)
+	} else {
+		assert false
+	}
 }

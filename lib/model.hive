@@ -52,14 +52,51 @@ type Suggestion {
 	detail: Str
 }
 
+// Um arquivo que o git vê diferente do último commit. `path` é relativo ao
+// topo do repositório e `rel` à pasta aberta (vazio quando fica fora dela).
+// `index` e `work` são as duas letras do `git status --porcelain`.
+type GitFile {
+	path:  Str
+	rel:   Str
+	index: Str
+	work:  Str
+}
+
+type GitInfo {
+	repo:    Bool
+	top:     Str
+	prefix:  Str
+	branch:  Str
+	ahead:   Int
+	behind:  Int
+	files:   GitFile[dyn]
+	log:     Str[dyn]
+	message: Str
+	busy:    Str
+	confirm: Str
+}
+
+// O terminal do painel: um shell de verdade (cmd.exe ou $SHELL) aberto por
+// lib/native.go. `session` é o número da sessão lá (0 = nenhuma); `log` é o
+// que o shell escreveu até agora.
+type Terminal {
+	session:   Int
+	log:       Str
+	input:     Str
+	history:   Str[dyn]
+	historyAt: Int
+}
+
 type Pane {
 	OutputPane
 	ProblemsPane
+	TerminalPane
 }
 
 type SideView {
 	ExplorerSide
 	OutlineSide
+	GitSide
 }
 
 type EditorView {
@@ -123,6 +160,31 @@ type Msg {
 	ClearOutput
 	Connected
 	Disconnected
+	TogglePanelMax
+	SetPanelHeight   { height: Int }
+	TermTyped        { text: Str }
+	TermSubmit       { text: Str }
+	TermHistory      { step: Int }
+	TermRestart
+	TermClear
+	TermOutput       { session: Int, text: Str }
+	TermExited       { session: Int, code: Int }
+	GotoDefinition   { caret: Int }
+	GitPoll
+	GitRefresh
+	GitStage         { path: Str }
+	GitUnstage       { path: Str }
+	GitStageAll
+	GitUnstageAll
+	GitAskDiscard    { path: Str }
+	GitDiscard       { path: Str }
+	GitCancelConfirm
+	GitMessageTyped  { text: Str }
+	GitCommit
+	GitPush
+	GitPull
+	GitInit
+	GitDone          { command: Str, output: Str, ok: Bool }
 }
 
 type State {
@@ -156,6 +218,11 @@ type State {
 	status:        Str
 	pulse:         Int
 	clients:       Int
+	panelMax:      Bool
+	git:           GitInfo
+	term:          Terminal
+	focus:         Str
+	focusSerial:   Int
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -189,6 +256,10 @@ type Frame {
 	panel:     Bool
 	popup:     Bool
 	numbers:   Bool
+	panelHeight: Int
+	panelMax:  Bool
+	focus:     Str
+	focusSerial: Int
 	recording: Bool
 	title:     Str
 }
@@ -241,8 +312,24 @@ func initial(root: Str, prefs: settings.Settings): State {
 		peekText: "",
 		status: "pronto",
 		pulse: 0,
-		clients: 0
+		clients: 0,
+		panelMax: false,
+		git: emptyGit(),
+		term: emptyTerminal(),
+		focus: "",
+		focusSerial: 0
 	)
+}
+
+func emptyGit(): GitInfo {
+	GitFile[dyn] files = []
+	Str[dyn] log = []
+	return GitInfo(false, "", "", "", 0, 0, files, log, "", "", "")
+}
+
+func emptyTerminal(): Terminal {
+	Str[dyn] history = []
+	return Terminal(0, "", "", history, 0)
 }
 
 func dirty(doc: Doc): Bool {

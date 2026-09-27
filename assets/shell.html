@@ -67,8 +67,39 @@ button,input,select{font:inherit}
 #welcome h1{color:var(--text);font-weight:500;margin:0}
 #welcome table{margin-top:18px;border-collapse:collapse}
 #welcome td{padding:4px 12px}
-#panel{height:230px;flex:none;background:var(--panel);border-top:1px solid var(--border);display:flex;flex-direction:column}
-#app.nopanel #panel{display:none}
+#panel{height:260px;flex:none;background:var(--panel);border-top:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+#app.nopanel #panel,#app.nopanel #grip{display:none}
+#grip{height:5px;margin-top:-3px;position:relative;z-index:5;cursor:ns-resize;flex:none}
+#grip:hover,#grip.drag{background:color-mix(in srgb,var(--accent) 70%,transparent)}
+#app.panelmax #work,#app.panelmax #tabs,#app.panelmax #crumbs{display:none}
+#app.panelmax #panel{flex:1;height:auto!important}
+body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
+#code.ctrl #ta{cursor:pointer}
+.g-new{color:var(--git-new)!important}
+.g-mod{color:var(--git-mod)!important}
+.g-del{color:var(--danger)!important;text-decoration:line-through}
+.gb{margin-left:auto;font-size:11px;font-weight:700;padding-left:8px;min-width:14px;text-align:right}
+.row .dirty+.gb{margin-left:6px}
+.gitrow .dir{color:var(--muted);font-size:11px;margin-left:6px;overflow:hidden;text-overflow:ellipsis}
+.gitrow .grow{flex:1}
+.gitrow .gb{margin-left:4px}
+.gitrow .acts{display:none;gap:2px}
+.gitrow:hover .acts{display:flex}
+.hdr.sub{padding-top:14px}
+.branch{padding:2px 14px 8px;font-size:12px;display:flex;gap:8px;align-items:center}
+.muted{color:var(--muted)}
+.commitbox{padding:0 12px 6px 14px;display:flex;flex-direction:column;gap:6px}
+.commitbox textarea{resize:vertical;min-height:54px;font:inherit}
+.logline{padding:2px 14px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.logline .hash{font-family:var(--mono);color:var(--accent)}
+.btn.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+#activity .ai{position:relative}
+#activity .count{position:absolute;right:6px;bottom:6px;background:var(--accent);color:var(--status-fg);font-size:10px;line-height:15px;min-width:15px;padding:0 3px;border-radius:8px;text-align:center;font-weight:700}
+#panel .termbody{display:flex;flex-direction:column;padding:0;white-space:normal}
+.term{margin:0;flex:1;overflow:auto;padding:6px 14px;font-family:var(--mono);font-size:var(--font-size);line-height:1.45;white-space:pre-wrap;word-break:break-all}
+.termline{display:flex;align-items:center;gap:6px;padding:4px 14px 8px;border-top:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+.termline .tp{color:var(--accent);font-family:var(--mono)}
+.termin{flex:1;background:transparent;border:0;outline:none;color:var(--text);font-family:var(--mono);font-size:var(--font-size)}
 #panel .head{display:flex;align-items:center;gap:18px;padding:6px 14px;flex:none}
 #panel .ptab{font-size:11px;letter-spacing:.06em;color:var(--muted);cursor:pointer;padding:4px 0;border-bottom:1px solid transparent}
 #panel .ptab.on{color:var(--text);border-bottom-color:var(--accent)}
@@ -187,6 +218,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 				<div id="settings"></div>
 				<div id="welcome"></div>
 			</div>
+			<div id="grip" title="Arraste para redimensionar — duplo clique maximiza"></div>
 			<div id="panel"></div>
 		</div>
 	</div>
@@ -203,7 +235,10 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	var code = document.getElementById("code");
 	var popup = document.getElementById("popup");
 	var sheet = document.getElementById("theme");
+	var panel = document.getElementById("panel");
+	var grip = document.getElementById("grip");
 	var ws = null, cache = {}, serial = -1, keys = [], popupOpen = false, recording = false, charWidth = 0;
+	var focusSerial = 0, dragging = null;
 
 	function send(event) {
 		if (ws && ws.readyState === 1) { ws.send(JSON.stringify(event)); }
@@ -222,24 +257,41 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		if (key) {
 			var again = el.querySelector('[data-input="' + key + '"]');
 			if (again) { again.focus(); try { again.setSelectionRange(from, to); } catch (e) {} }
-		} else {
-			var auto = el.querySelector("[data-autofocus]");
-			if (auto) { auto.focus(); if (auto.select) { auto.select(); } }
+		}
+		var scrolled = el.querySelectorAll("[data-autoscroll]");
+		for (var i = 0; i < scrolled.length; i++) { scrolled[i].scrollTop = scrolled[i].scrollHeight; }
+	}
+
+	// Leva o cursor do editor para a vista, alguns linhas abaixo do topo.
+	function reveal(caret) {
+		var line = ta.value.slice(0, caret).split("\n").length - 1;
+		var height = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+		var top = line * height, visible = ta.clientHeight;
+		if (top < ta.scrollTop || top > ta.scrollTop + visible - height * 2) {
+			ta.scrollTop = Math.max(0, top - visible / 3);
 		}
 	}
 
 	function apply(frame) {
 		if (sheet.textContent !== frame.css) { sheet.textContent = frame.css; charWidth = 0; }
 		document.title = frame.title;
-		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") + (frame.numbers ? "" : " nonumbers");
+		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") +
+			(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "");
+		if (!dragging) { panel.style.height = frame.panelHeight + "px"; }
 		for (var i = 0; i < frame.regions.length; i++) { region(frame.regions[i].id, frame.regions[i].html); }
 		keys = frame.keys; recording = frame.recording; popupOpen = frame.popup;
 		popup.classList.toggle("open", popupOpen);
 		if (frame.serial !== serial) {
 			serial = frame.serial;
 			ta.value = frame.text;
-			try { ta.setSelectionRange(frame.caret, frame.caret); } catch (e) {}
 			if (frame.layout === "edit" || frame.layout === "split") { ta.focus(); }
+			try { ta.setSelectionRange(frame.caret, frame.caret); } catch (e) {}
+			reveal(frame.caret);
+		}
+		if (frame.focusSerial !== focusSerial) {
+			focusSerial = frame.focusSerial;
+			var wanted = document.querySelector('[data-input="' + frame.focus + '"]');
+			if (wanted) { wanted.focus(); if (frame.focus === "prompt" && wanted.select) { wanted.select(); } }
 		}
 		sync();
 		if (popupOpen) { place(); }
@@ -293,12 +345,50 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 
 	ta.addEventListener("scroll", function () { sync(); if (popupOpen) { place(); } });
 	ta.addEventListener("input", function () { send({ kind: "edit", text: ta.value, caret: ta.selectionStart }); });
-	ta.addEventListener("mouseup", function () { if (popupOpen) { send({ kind: "act", act: "closeSuggest" }); } });
+	ta.addEventListener("mouseup", function (e) {
+		if (e.ctrlKey || e.metaKey) { send({ kind: "act", act: "definition", caret: ta.selectionStart }); return; }
+		if (popupOpen) { send({ kind: "act", act: "closeSuggest" }); }
+	});
+
+	document.addEventListener("keyup", function (e) { if (e.key === "Control" || e.key === "Meta") { code.classList.remove("ctrl"); } });
+	window.addEventListener("blur", function () { code.classList.remove("ctrl"); });
+
+	// O painel de baixo muda de altura arrastando a borda de cima.
+	grip.addEventListener("mousedown", function (e) {
+		e.preventDefault();
+		dragging = { y: e.clientY, height: panel.getBoundingClientRect().height };
+		grip.classList.add("drag"); document.body.classList.add("dragging");
+	});
+	grip.addEventListener("dblclick", function () { send({ kind: "act", act: "panelMax" }); });
+	document.addEventListener("mousemove", function (e) {
+		if (!dragging) { return; }
+		var height = Math.max(80, Math.min(window.innerHeight - 160, dragging.height + dragging.y - e.clientY));
+		panel.style.height = height + "px";
+	});
+	document.addEventListener("mouseup", function () {
+		if (!dragging) { return; }
+		dragging = null;
+		grip.classList.remove("drag"); document.body.classList.remove("dragging");
+		send({ kind: "field", act: "panelHeight", text: String(Math.round(panel.getBoundingClientRect().height)) });
+	});
 
 	document.addEventListener("keydown", function (e) {
+		if (e.key === "Control" || e.key === "Meta") { code.classList.add("ctrl"); }
 		if (["Control", "Shift", "Alt", "Meta"].indexOf(e.key) >= 0) { return; }
 		var combo = comboOf(e);
 		if (recording) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart }); return; }
+		var field = e.target;
+		if (field.dataset && field.dataset.history) {
+			if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+				e.preventDefault(); send({ kind: "act", act: "termHistory", arg: e.key === "ArrowUp" ? "-1" : "1" }); return;
+			}
+			if (combo === "Ctrl+C" && field.selectionStart === field.selectionEnd) {
+				e.preventDefault(); send({ kind: "act", act: "termRestart" }); return;
+			}
+		}
+		if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && field.dataset && field.dataset.ctrlsubmit) {
+			e.preventDefault(); send({ kind: "act", act: field.dataset.ctrlsubmit }); return;
+		}
 		var navigation = ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"];
 		if (popupOpen && e.target === ta && !e.ctrlKey && navigation.indexOf(e.key) >= 0) {
 			e.preventDefault(); send({ kind: "popup", text: e.key }); return;
@@ -326,6 +416,11 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	document.addEventListener("click", function (e) {
 		var link = e.target.closest("a");
 		if (link && link.closest("#preview")) { e.preventDefault(); }
+		var focusTarget = e.target.closest("[data-focus]");
+		if (focusTarget && !window.getSelection().toString()) {
+			var input = document.querySelector('[data-input="' + focusTarget.dataset.focus + '"]');
+			if (input) { input.focus(); }
+		}
 		var el = e.target.closest("[data-act]");
 		if (!el) { return; }
 		if (el.tagName !== "INPUT") { e.preventDefault(); }

@@ -11,10 +11,11 @@ type Settings {
 	autocomplete:  Bool -- Default as true;
 	keymap:        Str  -- Default as "";
 	browser:       Str  -- Default as "";
+	panelHeight:   Int  -- JSON as panel_height; Default as 260;
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "")
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260)
 }
 
 func envOr(name: Str, fallback: Str): Str {
@@ -63,7 +64,7 @@ func save(value: Settings): Result<Bool, Str> {
 }
 
 test "configurações vão e voltam em JSON, com padrões para o que falta" {
-	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "")
+	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300)
 	text := encode(custom, hive.json.codec())
 	if Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
 		assert back == custom
