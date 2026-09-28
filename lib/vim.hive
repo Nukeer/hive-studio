@@ -929,6 +929,28 @@ func matchesOf(text: Str, pattern: Str, whole: Bool, limit: Int): Int[dyn] {
 }
 
 // `n` e `N`: a próxima ocorrência da última busca, dando a volta no texto.
+// A última posição de `found` (em ordem) antes de `p`, ou -1.
+func lastBefore(found: Int[], p: Int): Int {
+	mut next := -1
+	for each m in found {
+		if m >= p {
+			break
+		}
+		next = m
+	}
+	return next
+}
+
+// A primeira posição de `found` depois de `p`, ou -1.
+func firstAfter(found: Int[], p: Int): Int {
+	for each m in found {
+		if m > p {
+			return m
+		}
+	}
+	return -1
+}
+
 func searchTarget(ed: Editor, chars: Str[], reverse: Bool, count: Int): Target {
 	pattern := ed.vim.pattern
 	if pattern == "" {
@@ -944,21 +966,13 @@ func searchTarget(ed: Editor, chars: Str[], reverse: Bool, count: Int): Target {
 	for n := 0; n < count; n++ {
 		mut next := -1
 		if backward {
-			for each m in found {
-				if m < p {
-					next = m
-				}
-			}
+			next = lastBefore(found, p)
 			if next < 0 {
 				wrapped = true
 				next = atInt(found, len(found) - 1)
 			}
 		} else {
-			for each m in found {
-				if m > p && next < 0 {
-					next = m
-				}
-			}
+			next = firstAfter(found, p)
 			if next < 0 {
 				wrapped = true
 				next = atInt(found, 0)
@@ -1327,6 +1341,9 @@ proc effect(ed: mut Editor, message: model.Msg): void {
 
 // Guarda as teclas da alteração para o `.`.
 proc recorded(ed: mut Editor, keys: Str[dyn]): void {
+	if ed.vim.repeating {
+		return
+	}
 	ed.vim.change = keys
 	ed.vim.typed = ""
 }
@@ -1576,29 +1593,39 @@ func insertedText(base: Str, offset: Int, now: Str): Result<Str, Bool> {
 
 // `Esc` no modo de inserção: repete o que foi digitado se houve contagem, guarda
 // para o `.` (com `record`) e volta ao modo normal um caractere para trás.
+// O texto digitado de novo `left` vezes (o `3` de `3ihi<Esc>`); depois de
+// `o` e `O`, cada vez numa linha nova.
+func insertedAgain(text: Str, caret: Int, piece: Str, left: Int, command: Str): complete.TextEdit {
+	if left <= 0 {
+		return complete.TextEdit(text, caret)
+	}
+	mut into := text
+	mut pos := caret
+	if command == "o" || command == "O" {
+		opened := openLine(text, caret, command == "o")
+		into = opened.text
+		pos = opened.caret
+	}
+	return insertedAgain(insertAt(into, pos, piece), pos + len(piece), piece, left - 1, command)
+}
+
 proc leaveInsert(ed: mut Editor, record: Bool): void {
 	base := ed.vim.insertBase
 	offset := ed.vim.insertAt
 	times := ed.vim.count
-	keys := ed.vim.insertKeys
 	mut text := ed.text
 	mut caret := ed.caret
 	typed := insertedText(base, offset, ed.text)
 	if typed is Result.Ok(piece) {
 		if piece != "" && times > 1 {
-			command := at(keys, len(keys) - 1)
-			for n := 1; n < times; n++ {
-				if command == "o" || command == "O" {
-					opened := openLine(text, caret, command == "o")
-					text = opened.text
-					caret = opened.caret
-				}
-				text = insertAt(text, caret, piece)
-				caret = caret + len(piece)
-			}
+			command := at(ed.vim.insertKeys, len(ed.vim.insertKeys) - 1)
+			again := insertedAgain(text, caret, piece, times - 1, command)
+			text = again.text
+			caret = again.caret
 		}
-		if record {
-			ed.vim.change = keys
+		if record && !ed.vim.repeating {
+			Str[dyn] none = []
+			ed.vim.change = ed.vim.insertKeys + none
 			ed.vim.typed = piece
 		}
 	}
@@ -2020,36 +2047,35 @@ proc insertStep(ed: mut Editor, chars: Str[], k: Str, keys: Str[dyn], count: Int
 
 // `.`: repete a última alteração (com outra contagem, se houver uma).
 proc repeatChange(ed: mut Editor, count: Int, hasCount: Bool): void {
-	change := ed.vim.change
-	typed := ed.vim.typed
-	if len(change) == 0 {
+	if len(ed.vim.change) == 0 {
 		return
 	}
-	mut Str[dyn] keys = []
+	typed := ed.vim.typed
+	// Com contagem, ela troca a que a alteração tinha.
+	mut start := 0
+	mut countText := ""
 	if hasCount {
-		keys = split("{count}", "")
-	}
-	mut counting := true
-	for each k in change {
-		if counting && digitOf(k) >= 0 {
-			if !hasCount {
-				append(keys, k)
+		countText = "{count}"
+		for ; start < len(ed.vim.change); start++ {
+			if digitOf(at(ed.vim.change, start)) < 0 {
+				break
 			}
-		} else {
-			counting = false
-			append(keys, k)
 		}
 	}
 	Str[dyn] none = []
 	ed.vim.pending = none
-	_outcome := normalStep(ed, keys)
+	ed.vim.repeating = true
+	if ed.vim.change bounds start {
+		_outcome := normalStep(ed, split(countText, "") + ed.vim.change[start:])
+	} else {
+		_counted := normalStep(ed, split(countText, ""))
+	}
 	if ed.vim.mode == model.VimMode.InsertMode() {
 		ed.text = insertAt(ed.text, ed.caret, typed)
 		ed.caret = ed.caret + len(typed)
 		leaveInsert(ed, false)
 	}
-	ed.vim.change = change
-	ed.vim.typed = typed
+	ed.vim.repeating = false
 }
 
 // As teclas pendentes no modo normal.
@@ -2639,6 +2665,17 @@ func lastCommand(history: Str[]): Str {
 // `@a` repete as teclas gravadas em `a`, `count` vezes; `@@` repete a última
 // macro e `@:` o último comando. Para no primeiro erro, como no Vim — é o que
 // faz `100@a` parar no fim do arquivo.
+// As teclas de uma macro, uma vez; `#Fail` na primeira que falhar.
+proc playOnce(ed: mut Editor, tokens: mut Str[dyn]): Atom {
+	for each token in tokens {
+		step := keyStep(ed, token)
+		if step.status == #Fail {
+			return #Fail
+		}
+	}
+	return #Done
+}
+
 proc playMacro(ed: mut Editor, reg: Str, count: Int): Outcome {
 	mut name := search.lower(reg)
 	if reg == "@" {
@@ -2671,14 +2708,7 @@ proc playMacro(ed: mut Editor, reg: Str, count: Int): Outcome {
 	ed.vim.replaying = depth + 1
 	mut status := #Done
 	for n := 0; n < count && status != #Fail; n++ {
-		for each token in tokens {
-			if status != #Fail {
-				step := keyStep(ed, token)
-				if step.status == #Fail {
-					status = #Fail
-				}
-			}
-		}
+		status = playOnce(ed, tokens)
 	}
 	ed.vim.replaying = depth
 	return Outcome(status, true)
@@ -3238,7 +3268,7 @@ proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): vo
 			}
 			i++
 		} else if c == "&" {
-			append(pieces, join(current, ""))
+			append(pieces, highlight.joined(current, ""))
 			Str[dyn] fresh = []
 			current = fresh
 		} else {
@@ -3308,7 +3338,7 @@ func replacedIn(line: Str, found: Int[], size: Int, pieces: Str[]): Str {
 	mut previous := 0
 	for each p in found {
 		append(out, slice(line, previous, p))
-		append(out, join(pieces, slice(line, p, p + size)))
+		append(out, highlight.joined(pieces, slice(line, p, p + size)))
 		previous = p + size
 	}
 	append(out, complete.skip(line, previous))
@@ -3317,6 +3347,12 @@ func replacedIn(line: Str, found: Int[], size: Int, pieces: Str[]): Str {
 
 // `:m` (mover) e `:t` (copiar) as linhas `from`–`to` para depois de `after`
 // (-1 = antes da primeira).
+proc appendLines(out: mut Str[dyn], lines: mut Str[dyn]): void {
+	for each line in lines {
+		append(out, line)
+	}
+}
+
 proc moveLines(ed: mut Editor, from: Int, to: Int, after: Int, moving: Bool): void {
 	if moving && after >= from && after < to {
 		say(ed, "E134: Não dá para mover linhas para dentro delas mesmas", "", true)
@@ -3330,9 +3366,7 @@ proc moveLines(ed: mut Editor, from: Int, to: Int, after: Int, moving: Bool): vo
 	mut Str[dyn] out = []
 	mut lastMoved := 0
 	if after < 0 {
-		for each b in block {
-			append(out, b)
-		}
+		appendLines(out, block)
 		lastMoved = len(out) - 1
 	}
 	for l := 0; l < len(lines); l++ {
@@ -3340,9 +3374,7 @@ proc moveLines(ed: mut Editor, from: Int, to: Int, after: Int, moving: Bool): vo
 			append(out, lineText(lines, l))
 		}
 		if l == after {
-			for each b in block {
-				append(out, b)
-			}
+			appendLines(out, block)
 			lastMoved = len(out) - 1
 		}
 	}
@@ -3476,6 +3508,16 @@ func specialKeys(): Str[dyn] {
 }
 
 // "d2w<Esc>" → ["d", "2", "w", "<Esc>"].
+// O nome entre `<` e `>` que começa em `i` (`<Esc>`, `<C-r>`…), ou "".
+func specialAt(text: Str, i: Int): Str {
+	for each name in specialKeys() {
+		if slice(text, i, i + len(name)) == name {
+			return name
+		}
+	}
+	return ""
+}
+
 func tokens(text: Str): Str[dyn] {
 	chars := split(text, "")
 	mut Str[dyn] out = []
@@ -3483,11 +3525,7 @@ func tokens(text: Str): Str[dyn] {
 	for ; i < len(chars); {
 		mut matched := ""
 		if at(chars, i) == "<" {
-			for each name in specialKeys() {
-				if matched == "" && slice(text, i, i + len(name)) == name {
-					matched = name
-				}
-			}
+			matched = specialAt(text, i)
 		}
 		if matched == "" {
 			append(out, at(chars, i))

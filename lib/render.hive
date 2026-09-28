@@ -1685,7 +1685,7 @@ func frame(state: model.State): model.Frame {
 		clip: state.vim.clip,
 		clipSerial: state.vim.clipSerial,
 		vimAck: state.vim.acked,
-		agentSessions: agentSessions(state),
+		agentSessions: agentSessions(state.agents.sessions),
 		agentShown: agentShown(state),
 		agentKeys: agentKeys(prefs.keymap),
 		textQuiet: state.textSerial == state.quietSerial,
@@ -1736,9 +1736,9 @@ func sentText(has: Bool, text: Str): Str {
 
 // Os terminais de agente que a página mantém conectados (inclusive os que
 // terminaram, para a última tela continuar à vista).
-func agentSessions(state: model.State): Int[dyn] {
+func agentSessions(sessions: model.AgentSession[]): Int[dyn] {
 	mut Int[dyn] found = []
-	for each s in state.agents.sessions {
+	for each s in sessions {
 		if s.session != 0 {
 			append(found, s.session)
 		}

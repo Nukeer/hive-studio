@@ -250,6 +250,8 @@ type Vim {
 	lastMacro:    Str
 	replaying:    Int
 	promptFrom:   Str
+	// O `.` está repetindo a última alteração: ela não é regravada.
+	repeating:    Bool
 }
 
 type Pane {
@@ -714,7 +716,8 @@ func emptyVim(): Vim {
 		macros: hive.map.new(),
 		lastMacro: "",
 		replaying: 0,
-		promptFrom: ""
+		promptFrom: "",
+		repeating: false
 	)
 }
 

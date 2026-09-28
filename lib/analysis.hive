@@ -55,6 +55,11 @@ type AnalyzeReport {
 	spots: model.Hotspot[dyn]
 }
 
+// Uma linha de detalhe do analyze, sem as crases.
+func detailOf(parts: Str[]): Str {
+	return replaceAll(join(parts, " "), "`", "")
+}
+
 func parseAnalyze(output: Str): AnalyzeReport {
 	mut Str[dyn] head = []
 	mut model.Hotspot[dyn] spots = []
@@ -77,7 +82,7 @@ func parseAnalyze(output: Str): AnalyzeReport {
 			continue
 		} else if spots bounds last {
 			if indent >= 10 && spots[last].detail == "" {
-				spots[last].detail = replaceAll(highlight.joined(parts, " "), "`", "")
+				spots[last].detail = detailOf(parts)
 			}
 		} else {
 			append(head, highlight.joined(parts, " "))
