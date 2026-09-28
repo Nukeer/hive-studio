@@ -25,6 +25,35 @@ hivec test studio.hive             # testes, com cobertura
   substituem os atalhos do navegador.
 - **Idioma da interface**: Português (Brasil), English ou Español, em
   Configurações → Aparência; muda na hora.
+- **Modo Vim** (Configurações → Editor → *Usar as teclas do Vim no editor*,
+  ou menu **Editar → Modo Vim**; ligado, o `VIM` da barra de status mostra o
+  modo e desliga com um clique): modos normal, inserção, visual e visual de linha, com
+  cursor em bloco e a linha do Vim embaixo do editor (modo, mensagens e teclas
+  pendentes).
+  - Movimentos: `h j k l`, `w W b B e E ge`, `0 ^ $ g_`, `gg G`, `f t F T ; ,`,
+    `%`, `{ }`, `H M L`, `n N * #`, com contagem (`3w`, `5G`).
+  - Operadores `d c y > < g~ gu gU` com movimentos e objetos de texto
+    (`iw aw iW i" a' i( a) i{ aB i[ i< ip ap`), dobrados (`dd`, `>>`, `gUU`);
+    `x X s S D C Y p P J gJ r ~ i a I A o O`, `u` / `Ctrl+R`, `.`,
+    `Ctrl+A` / `Ctrl+X`, `Ctrl+D` / `Ctrl+U` / `Ctrl+E` / `Ctrl+Y`, `zz zt zb`.
+    `gd` vai para a definição; `gt` / `gT` trocam de aba.
+  - Busca com `/` e `?`, realçando enquanto se digita, até `:noh`.
+  - Macros: `qa` grava em `a` (a barra mostra *gravando @a*), `q` para, `qA`
+    acrescenta; `@a` repete (com contagem), `@@` repete a última e `@:` o
+    último comando. A repetição para no primeiro erro, então `100@a` para no
+    fim do arquivo. O que se digita na inserção e na linha de comando entra
+    na macro.
+  - Linha de comando (`:`), com `↑`/`↓` no histórico e intervalos (`%`, `.`,
+    `$`, `'<,'>`, `N,M`, `.+2`): `:w :wa :q :q! :wq :x :qa :e arquivo :e! :N
+    :s/a/b/g :noh :set nu / nonu / ts=4 :d :y :> :< :j :m :t :sort :bn :bp`, e
+    os da IDE: `:check` (diagnósticos), `:make` (build), `:run`, `:test`,
+    `:term`, `:!comando` (no terminal). `:Ex` (e `:Sex`, `:Vex`, `:Lex`,
+    `:e .`, `:Ex pasta`) abre o explorador com o arquivo atual selecionado e
+    põe o foco nele; com o explorador já aberto, `:Ex` (sem pasta) o fecha e
+    volta ao código.
+  - O que `y` copia vai também para a área de transferência; `Ctrl+C` e
+    `Ctrl+V` continuam valendo. As teclas mortas do ABNT2 (`~`, `^`) funcionam
+    no modo normal. Os atalhos da IDE (`Ctrl+S`, `F5`…) valem em todos os modos.
 
 - **Editor com realce de sintaxe Hive** (palavras-chave, tipos, textos,
   números, comentários, chamadas, átomos, `hive`), numeração de linhas, fonte
@@ -38,7 +67,10 @@ hivec test studio.hive             # testes, com cobertura
   listas (inclusive de tarefas), citações, tabelas, links, imagens e blocos de
   código (com realce quando a linguagem é `hive`).
 - **Explorador em árvore** estilo VS Code, abas, breadcrumb, estrutura do
-  arquivo, barra de status (Ln/Col, linguagem, tema).
+  arquivo, barra de status (Ln/Col, linguagem, tema). Com o foco nele (um
+  clique, ou `:Ex` no modo Vim), `↑`/`↓` andam, `→`/`←` abrem e fecham pastas,
+  `Enter` abre, `Home`/`End`; no modo Vim também `j k l h o gg G`, contagens,
+  `:` para a linha de comando e `Esc` de volta ao editor.
 - **Cores do git** no explorador e nas abas: arquivo novo em verde (`U`/`A`),
   editado em amarelo/laranja (`M`), removido em vermelho (`D`); commitado fica na
   cor normal. Pastas levam a cor do que têm dentro.
@@ -54,6 +86,29 @@ hivec test studio.hive             # testes, com cobertura
   de verdade, com histórico nas setas; ■ ou `Ctrl+C` encerram o processo e
   reabrem o shell. O painel **muda de altura arrastando a borda** (a altura é
   lembrada), duplo clique ou `Ctrl+Shift+M` maximiza.
+- **Agentes no painel AGENTE** (`Ctrl+Shift+A`, menu **Terminal**): o **Claude
+  Code**, o **Codex** e o **OpenCode** que você instalou, cada um num terminal
+  de verdade (PTY no Linux e no macOS, ConPTY no Windows) aberto na pasta do
+  projeto, com as cores e o tamanho do painel. Cada agente guarda a própria
+  sessão ao trocar entre eles; ↻ reinicia. **O login é o de cada programa** —
+  `/login` no Claude Code (a sua assinatura Pro/Max vale, sem chave de API),
+  "Sign in with ChatGPT" no Codex… — e o Hive Studio nunca vê nem guarda
+  credenciais. Com o foco no agente, as teclas são dele (`Esc`, `Ctrl+C`,
+  `Ctrl+R`…); só `Ctrl+Shift+A` (fecha o painel), mostrar/ocultar e maximizar o
+  painel saem dele. O comando de cada um fica em Configurações → Agentes
+  (com argumentos, ex.: `npx @anthropic-ai/claude-code`). No modo Vim:
+  `:Claude`, `:Codex`, `:OpenCode`, `:Agent`.
+- **Mudanças no disco aparecem na hora** (um agente editou, criou ou apagou
+  arquivos; um `git checkout`; outro editor): o arquivo aberto é relido sem
+  tirar o foco de onde você está nem mexer na rolagem, e arquivos e pastas
+  criados ou apagados entram e saem da árvore, com as cores do git em dia. Um
+  arquivo com alteração por salvar não é tocado — a barra de status avisa que
+  ele mudou no disco. Um arquivo aberto que é apagado fica na aba, riscado;
+  salvar o cria de novo. No modo Vim, `u` desfaz a mudança relida. O Hive
+  Studio vigia só a raiz, as pastas expandidas e as dos arquivos abertos
+  (inotify / kqueue / ReadDirectoryChangesW, pela
+  [fsnotify](https://github.com/fsnotify/fsnotify)); onde o sistema não avisa
+  (pastas de rede, `/mnt` no WSL) ele relê a cada três segundos.
 - **Ir para a definição**: segurando `Ctrl`, o nome sob o mouse fica sublinhado
   **só quando há para onde ir**; `Ctrl+clique` ou `F12` vão até lá.
   Declarações do arquivo, variantes (`model.Msg.Toggle`), variáveis locais e
@@ -82,6 +137,7 @@ hivec test studio.hive             # testes, com cobertura
 | Maximizar painel | `Ctrl+Shift+M` | Abrir arquivo / pasta | `Ctrl+O` / `Ctrl+Alt+O` |
 | Sair | `Ctrl+Q` | Buscar no arquivo | `Ctrl+F` |
 | Buscar no projeto | `Ctrl+Shift+F` | Ir para arquivo | `Ctrl+P` |
+| Agente (Claude Code, Codex, OpenCode) | `Ctrl+Shift+A` | | |
 
 `Ctrl+`` ` é a tecla à esquerda do `1`, em qualquer layout (no ABNT2 é a do `'`).
 
@@ -105,9 +161,16 @@ se existir, vence o compilador configurado.
 - O estado mora num serviço `hive.syslink`; cada evento da página vira uma
   `Msg`, a dobra produz o próximo estado e a resposta é o frame desenhado
   (regiões HTML + CSS do tema). A página só troca as regiões que mudaram.
-- A única parte em Go é `lib/native.go`, importado pelo Hive: roda processos
+- As partes em Go são `lib/native.go`, importado pelo Hive, que roda processos
   sem abrir janela de console (git, hivec) e mantém o shell do terminal vivo,
-  lendo a saída aos pedaços. Hive não tem API de processo interativo.
+  lendo a saída aos pedaços — Hive não tem API de processo interativo —, e
+  `lib/pty.go`, o pseudoterminal dos agentes, sobre a
+  [go-pty](https://github.com/aymanbagabas/go-pty), e `lib/watch.go`, que vigia
+  o disco pela fsnotify (o `hivec` baixa as duas com `go mod tidy` na primeira
+  compilação).
+- O terminal de um agente não passa pelo estado: a página abre um WebSocket
+  próprio (`/pty?session=N`) e o [xterm.js](https://xtermjs.org) desenha o que
+  chega, em base64 (`assets/vendor/`, embutido em `lib/assets.hive`).
 - Realce, markdown, autocomplete, atalhos, git e temas são Hive
   (`lib/highlight`, `lib/markdown`, `lib/complete`, `lib/keys`, `lib/theme`).
   O JavaScript da página só manda eventos e aplica o que recebe.
@@ -139,6 +202,11 @@ se existir, vence o compilador configurado.
 | `lib/navigate.hive` | ir para a definição |
 | `lib/process.hive` | executar programas sem console (via `native.go`) |
 | `lib/native.go` | processos ocultos e sessões de shell (Go) |
+| `lib/pty.go` | pseudoterminal dos agentes: PTY / ConPTY (Go) |
+| `lib/watch.go` | vigia as pastas abertas e avisa das mudanças no disco (Go) |
+| `lib/agents.hive` | os agentes (Claude Code, Codex, OpenCode) e seus comandos |
+| `lib/vim.hive` | modo Vim: teclas → movimentos, operadores, macros e linha de comando |
+| `assets/vendor/` | xterm.js e o addon fit (MIT, `LICENSE-xterm.txt`) |
 | `assets/shell.html` → `lib/assets.hive` | a página da janela |
 
 ## Releases
@@ -177,10 +245,14 @@ git config core.hooksPath .githooks
   ícone do hivec 0.2.8 não compila com Go 32 bits (`windows/386`); por isso o
   desenho está em `assets/logo.png`. Com Go 64 bits, renomeie para `icon.png`.
 
-- O terminal não é um PTY: programas de tela cheia (vim, less, htop) e prompts
-  que leem direto do console não funcionam; `Ctrl+C` reinicia o shell em vez de
-  mandar um sinal.
+- O painel TERMINAL não é um PTY: programas de tela cheia (vim, less, htop) e
+  prompts que leem direto do console não funcionam nele; `Ctrl+C` reinicia o
+  shell em vez de mandar um sinal. O painel AGENTE é um terminal de verdade.
+- O ConPTY (os agentes no Windows) precisa do Windows 10 1809 ou mais novo.
 - `Run` mostra a saída quando o programa termina.
 - O autocomplete conta a posição em caracteres; um emoji antes do cursor
   (fora do plano básico) desloca o encaixe.
 - Fechar com alterações não salvas não pede confirmação.
+- No modo Vim, `/` e `:s` buscam texto literal (o Hive não tem expressões
+  regulares em tempo de execução), com smartcase; não há registradores
+  nomeados, marcas, macros nem visual de bloco.

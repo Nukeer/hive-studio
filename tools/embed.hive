@@ -2,6 +2,9 @@
 // o executável os carregue dentro dele. Rode depois de editar um deles:
 //
 //     cd tools && hivec run embed.hive
+//
+// Os de assets/vendor/ (o xterm.js do painel AGENTE) vão em base64: não são
+// nossos, e podem ter crases.
 
 type Asset {
 	source: Str
@@ -20,7 +23,19 @@ func asFunction(asset: Asset, content: Str): Str {
 	return "// " + asset.source + "\nfunc " + asset.name + "(): Str \{\n\treturn " + "`" + "\n" + join(lines, "\n") + "\n\t" + "`" + "\n}\n"
 }
 
+// Um arquivo de terceiros vira `func <name>(): Str`, em base64 partido em
+// linhas curtas — base64 não tem chaves nem crases, e o diff fica legível.
+func asBase64Function(asset: Asset, content: Str): Str {
+	encoded := hive.crypto.base64Encode(content)
+	mut Str[dyn] lines = []
+	for each row in toTable(split(encoded, ""), 100) {
+		append(lines, "\t\t" + join(row, ""))
+	}
+	return "// " + asset.source + " (base64)\nfunc " + asset.name + "(): Str \{\n\treturn replaceAll(" + "`" + "\n" + join(lines, "\n") + "\n\t" + "`" + ", \"\\n\", \"\")\n}\n"
+}
+
 proc main(): void {
+	vendor := [Asset("assets/vendor/xterm.js", "vendorXtermJs"), Asset("assets/vendor/xterm.css", "vendorXtermCss"), Asset("assets/vendor/addon-fit.js", "vendorFitJs")]
 	assets := [Asset("assets/shell.html", "shell"), Asset("assets/pick.ps1", "pickScript")]
 	target := "../lib/assets.hive"
 	mut Str[dyn] parts = ["// Gerado por tools/embed.hive a partir de assets/. Não edite à mão.\n"]
@@ -39,10 +54,20 @@ proc main(): void {
 			append(parts, asFunction(asset, clean))
 		}
 	}
+	for each asset in vendor {
+		read := hive.file.read("../" + asset.source)
+		if read is Result.Error(why) {
+			echo "não foi possível ler {asset.source}: {why.message}"
+			hive.term.exit(1)
+		}
+		if read is Result.Ok(content) {
+			append(parts, asBase64Function(asset, content))
+		}
+	}
 	body := join(parts, "\n")
 	if hive.file.write(target, body) is Result.Error(why) {
 		echo "não foi possível escrever {target}: {why.message}"
 		hive.term.exit(1)
 	}
-	echo "escrito {target} ({len(assets)} arquivos)"
+	echo "escrito {target} ({len(assets) + len(vendor)} arquivos)"
 }

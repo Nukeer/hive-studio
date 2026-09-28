@@ -6,17 +6,95 @@
 
 import ./model
 import ./assets
+import ./pty.go
 
 func hasToken(url: Str, token: Str): Bool {
 	return indexOf(url, "token=" + token) is Result.Ok(_)
+}
+
+// Os arquivos de terceiros da página — o xterm.js do painel AGENTE —, que
+// ficam em base64 dentro do executável (tools/embed.hive).
+func vendorFile(name: Str): Result<hive.net.HttpResponse, Bool> {
+	mut encoded := ""
+	mut kind := "text/javascript; charset=utf-8"
+	if name == "xterm.js" {
+		encoded = assets.vendorXtermJs()
+	} else if name == "addon-fit.js" {
+		encoded = assets.vendorFitJs()
+	} else if name == "xterm.css" {
+		encoded = assets.vendorXtermCss()
+		kind = "text/css; charset=utf-8"
+	} else {
+		return Result.Error(false)
+	}
+	if hive.crypto.base64Decode(encoded) is Result.Ok(body) {
+		return Result.Ok(hive.net.HttpResponse(200, [["Content-Type", kind], ["Cache-Control", "no-store"]], body))
+	}
+	return Result.Error(false)
 }
 
 proc page(token: Str, wsPort: Int, request: hive.net.HttpRequest): hive.net.HttpResponse {
 	if !hasToken(request.url, token) {
 		return hive.net.HttpResponse(403, [], "forbidden")
 	}
-	html := replaceAll(assets.shell(), "__WSPORT__", "{wsPort}")
+	if request.url is "/vendor/{name}?{query}" {
+		if vendorFile(name) is Result.Ok(file) {
+			return file
+		}
+		return hive.net.HttpResponse(404, [], "not found")
+	}
+	html := replaceAll(replaceAll(assets.shell(), "__WSPORT__", "{wsPort}"), "__TOKEN__", token)
 	return hive.net.HttpResponse(200, [["Content-Type", "text/html; charset=utf-8"], ["Cache-Control", "no-store"]], html)
+}
+
+// ── o terminal de um agente ──────────────────────────────────────────────
+//
+// `/pty?session=N` liga um terminal da página (xterm.js) ao programa rodando
+// no pseudoterminal. Da página vêm `i<texto digitado>`, `b<bytes em base64>`
+// e `r<colunas> <linhas>`; para ela vão `o<saída em base64>` e, quando o
+// programa termina, `x<código>`. Nada disso passa pelo estado da janela.
+
+proc ptyOutput(conn: hive.net.WsConnection, session: Int): void {
+	for ;; {
+		chunk := pty.read(session, 40)
+		if chunk != "" {
+			if hive.net.wsSend(conn, "o" + chunk) is Result.Error(_) {
+				return
+			}
+		}
+		if !pty.alive(session) {
+			rest := pty.read(session, 0)
+			if rest != "" {
+				_last := hive.net.wsSend(conn, "o" + rest)
+			}
+			_ended := hive.net.wsSend(conn, "x{pty.code(session)}")
+			return
+		}
+	}
+}
+
+proc ptyClient(conn: hive.net.WsConnection, session: Int): void {
+	async ptyOutput(conn, session)
+	for ;; {
+		received := hive.net.wsReceive(conn)
+		if received is Result.Ok(message) {
+			if message is "i{typed}" {
+				_typed := pty.write(session, typed)
+			} else if message is "b{encoded}" {
+				if hive.crypto.base64Decode(encoded) is Result.Ok(raw) {
+					_raw := pty.write(session, raw)
+				}
+			} else if message is "r{cols} {rows}" {
+				if hive.conv.sti(cols) is Result.Ok(width) {
+					if hive.conv.sti(rows) is Result.Ok(height) {
+						_resized := pty.resize(session, width, height)
+					}
+				}
+			}
+		} else {
+			return
+		}
+	}
 }
 
 // Manda um frame novo sempre que algo mudou sem a página pedir — um build que
@@ -60,7 +138,15 @@ proc closeIfIdle(db: hive.syslink.Address): void {
 }
 
 proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): void {
-	if !hasToken(hive.net.wsRequest(conn).url, token) {
+	url := hive.net.wsRequest(conn).url
+	if !hasToken(url, token) {
+		hive.net.wsClose(conn)
+		return
+	}
+	if url is "/pty?session={number}&{rest}" {
+		if hive.conv.sti(number) is Result.Ok(session) {
+			ptyClient(conn, session)
+		}
 		hive.net.wsClose(conn)
 		return
 	}
