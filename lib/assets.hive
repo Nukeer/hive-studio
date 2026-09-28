@@ -44,10 +44,10 @@ func shell(): Str {
 		.mi:hover .mk\{color:inherit}
 		.msep\{height:1px;background:var(--border);margin:4px 6px}
 		.tools\{display:flex;gap:2px}
-		.tb\{background:transparent;border:1px solid transparent;color:var(--text);border-radius:4px;padding:2px 10px;cursor:pointer;font-size:12px;font-family:inherit}
-		.tb:hover:not(:disabled)\{background:var(--selection)}
-		.tb:disabled\{opacity:.4;cursor:default}
-		.tb.run\{color:var(--good)}
+		button.tb\{background:transparent;border:1px solid transparent;color:var(--text);border-radius:4px;padding:2px 10px;cursor:pointer;font-size:12px;font-family:inherit}
+		button.tb:hover:not(:disabled)\{background:var(--selection)}
+		button.tb:disabled\{opacity:.4;cursor:default}
+		button.tb.run\{color:var(--good)}
 		#welcome .big svg\{width:76px;height:76px}
 		.msg .big svg\{width:56px;height:56px}
 		.about-name\{font-size:18px;font-weight:600;margin:8px 0 4px}
