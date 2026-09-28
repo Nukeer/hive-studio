@@ -113,6 +113,8 @@ button,input,select{font:inherit}
 #code{position:relative;flex:1;min-width:0}
 #hl,#ta{position:absolute;inset:0;margin:0;padding:8px 16px 8px 4px;font-family:var(--mono);font-size:var(--font-size);line-height:var(--line);tab-size:var(--tab);-moz-tab-size:var(--tab);white-space:pre;overflow:auto;border:0;letter-spacing:0;font-variant-ligatures:none}
 #hl{pointer-events:none;color:var(--text);overflow:hidden}
+#hll>div{min-height:var(--line)}
+#hl .pad{height:calc(var(--line) * 3)}
 #ta{background:transparent;color:transparent;caret-color:var(--text);resize:none;outline:none}
 #ta::selection{background:color-mix(in srgb,var(--accent) 30%,transparent);color:transparent}
 .tk{color:var(--syn-keyword)}.tt{color:var(--syn-type)}.ts{color:var(--syn-string)}.tn{color:var(--syn-number)}
@@ -329,7 +331,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 				<div id="editor">
 					<pre id="gutter"></pre>
 					<div id="code">
-						<pre id="hl"></pre>
+						<pre id="hl"><div id="hll"></div><div class="pad"></div></pre>
 						<textarea id="ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
 						<div id="marks"></div>
 						<div id="link"></div>
@@ -359,6 +361,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	var ta = document.getElementById("ta");
 	var hl = document.getElementById("hl");
 	var gutter = document.getElementById("gutter");
+	var hll = document.getElementById("hll");
 	var code = document.getElementById("code");
 	var popup = document.getElementById("popup");
 	var sheet = document.getElementById("theme");
@@ -371,6 +374,11 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	// página estiver atrás, as teclas vão para ele em vez de virarem texto aqui.
 	var vimMode = "", vimSerial = -1, vimCaret = 0, vimApplied = [0, 0], vimSent = 0, vimAck = 0;
 	var clipSerial = -1, composing = null;
+	// O realce: o que o programa já coloriu (hlHtml, uma entrada por linha) e
+	// o texto a que ele corresponde (hlSrc); shown é o que está desenhado.
+	// Uma linha digitada aparece na hora, sem cor, até o realce dela chegar.
+	// sent é o texto que o programa tem, para mandar só a diferença.
+	var hlHtml = [], hlSrc = [], hlVersion = -1, shown = [], shownLines = -1, sent = "", lastSeq = -1, resyncing = false;
 	var vimCursor = document.getElementById("vimcur");
 	var side = document.getElementById("side");
 	// Os terminais dos agentes (Claude Code, Codex, OpenCode): um xterm.js por
@@ -457,7 +465,84 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		}
 	}
 
+	function escapeHtml(text) {
+		return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+	}
+
+	function resync() {
+		if (!resyncing) { resyncing = true; send({ kind: "resync" }); }
+	}
+
+	function applyHl(u) {
+		if (!u) { return; }
+		if (u.mode === "full") {
+			hlHtml = u.lines.slice(); hlSrc = u.source.slice(); hlVersion = u.version; resyncing = false;
+		} else if (u.mode === "none") {
+			hlHtml = []; hlSrc = []; hlVersion = -1;
+		} else if (u.mode === "patch" && hlVersion === u.version - 1) {
+			hlHtml.splice.apply(hlHtml, [u.from, u.remove].concat(u.lines));
+			hlSrc.splice.apply(hlSrc, [u.from, u.remove].concat(u.source));
+			hlVersion = u.version;
+		} else if (hlVersion !== u.version) {
+			resync();
+		}
+	}
+
+	// Desenha o texto do editor: as linhas iguais ao que o programa coloriu vêm
+	// coloridas, as outras (acabaram de ser digitadas) vêm puras. Só as linhas
+	// que mudaram desde o último desenho são trocadas.
+	function paint() {
+		var lines = ta.value.split("\n"), n = lines.length, m = hlSrc.length, p = 0, s = 0, i;
+		while (p < n && p < m && lines[p] === hlSrc[p]) { p++; }
+		while (s < n - p && s < m - p && lines[n - 1 - s] === hlSrc[m - 1 - s]) { s++; }
+		var target = new Array(n);
+		for (i = 0; i < p; i++) { target[i] = hlHtml[i]; }
+		for (i = p; i < n - s; i++) { target[i] = escapeHtml(lines[i]); }
+		for (i = n - s; i < n; i++) { target[i] = hlHtml[m - (n - i)]; }
+		var k = shown.length, a = 0, b = 0;
+		while (a < n && a < k && target[a] === shown[a]) { a++; }
+		while (b < n - a && b < k - a && target[n - 1 - b] === shown[k - 1 - b]) { b++; }
+		if (a < k - b || a < n - b) {
+			var nodes = hll.children, after = nodes[k - b] || null;
+			for (i = k - b - 1; i >= a; i--) { hll.removeChild(nodes[i]); }
+			var box = document.createElement("div"), html = "";
+			for (i = a; i < n - b; i++) { html += "<div>" + target[i] + "</div>"; }
+			box.innerHTML = html;
+			var bundle = document.createDocumentFragment();
+			while (box.firstChild) { bundle.appendChild(box.firstChild); }
+			hll.insertBefore(bundle, after);
+		}
+		shown = target;
+		if (n !== shownLines) {
+			shownLines = n;
+			var numbers = [];
+			for (i = 1; i <= n; i++) { numbers.push(i); }
+			gutter.textContent = numbers.join("\n") + "\n\n\n";
+		}
+	}
+
+	// A edição mandada como diferença do que o programa já tem.
+	function sendEdit() {
+		var text = ta.value, caret = ta.selectionStart, p = 0, s = 0;
+		var limit = Math.min(text.length, sent.length);
+		while (p < limit && text.charCodeAt(p) === sent.charCodeAt(p)) { p++; }
+		while (s < limit - p && text.charCodeAt(text.length - 1 - s) === sent.charCodeAt(sent.length - 1 - s)) { s++; }
+		// Índices do JavaScript contam metades de caractere; com emoji e afins
+		// antes da mudança, vai o texto inteiro.
+		if (/[\uD800-\uDFFF]/.test(text.slice(0, p + 1)) || /[\uD800-\uDFFF]/.test(sent.slice(p, sent.length - s))) {
+			send({ kind: "edit", text: text, caret: caret });
+		} else {
+			send({ kind: "edit", at: p, cut: sent.length - s - p, arg: text.slice(p, text.length - s), caret: caret, seen: serial });
+		}
+		sent = text;
+	}
+
 	function apply(frame) {
+		if (frame.seq !== undefined) {
+			if (frame.seq <= lastSeq) { return; }
+			lastSeq = frame.seq;
+		}
+		applyHl(frame.hl);
 		if (sheet.textContent !== frame.css) { sheet.textContent = frame.css; charWidth = 0; restyleAgents(); }
 		document.title = frame.title;
 		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") +
@@ -480,6 +565,8 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		if (vimAck > vimSent) { vimSent = vimAck; }
 		code.classList.toggle("vimblock", vimMode !== "" && vimMode !== "insert");
 		var textChanged = frame.serial !== serial;
+		if (textChanged && !frame.hasText) { textChanged = false; resync(); }
+		if (textChanged) { sent = frame.text; }
 		if (textChanged && frame.textQuiet) {
 			// Relido do disco (um agente mudou o arquivo): troca o texto sem tirar o
 			// foco de ninguém e sem mexer na rolagem nem no cursor.
@@ -537,6 +624,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			clipSerial = frame.clipSerial;
 		}
 		syncAgents(frame);
+		paint();
 		sync();
 		if (popupOpen) { place(); }
 	}
@@ -789,7 +877,8 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	ta.addEventListener("scroll", function () { sync(); if (popupOpen) { place(); } });
 	ta.addEventListener("input", function () {
 		if (composing) { return; }
-		send({ kind: "edit", text: ta.value, caret: ta.selectionStart });
+		paint();
+		sendEdit();
 	});
 	// ── Ctrl + mouse: sublinha o nome sob o mouse quando dá para ir à definição ──
 	var link = document.getElementById("link");

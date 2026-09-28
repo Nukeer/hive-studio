@@ -117,9 +117,8 @@ proc reloadDocsOf(state: model.State, rel: Str): model.State {
 			if hive.file.read(doc.path) is Result.Ok(raw) {
 				text := replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n")
 				mut fresh := doc
-				fresh.text = text
+				retext(fresh, text)
 				fresh.saved = text
-				fresh.html = highlightFor(doc.path, text)
 				docs[i] = fresh
 			}
 		}
@@ -166,9 +165,8 @@ proc refreshFromDisk(state: model.State): model.State {
 						}
 					}
 					model.Snapshot[dyn] none = []
-					fresh.text = text
+					retext(fresh, text)
 					fresh.saved = text
-					fresh.html = highlightFor(doc.path, text)
 					fresh.undo = undo
 					fresh.redo = none
 					if docs bounds i {
@@ -314,11 +312,14 @@ func targetFolder(state: model.State): Str {
 
 // ── documentos ───────────────────────────────────────────────────────────
 
-func highlightFor(path: Str, text: Str): Str {
-	if path is "{stem}.hive" || path is "{stem}.go" {
-		return highlight.highlight(text)
-	}
-	return highlight.escape(text)
+// Troca o texto de um documento refazendo o realce só das linhas que mudaram;
+// a página recebe só essas linhas (`patch`, sobre a versão anterior).
+proc retext(doc: mut model.Doc, text: Str): void {
+	done := highlight.rehighlight(doc.hl, doc.text, text, model.colored(doc.path))
+	doc.hl = done.result
+	doc.patch = done.patch
+	doc.version = doc.version + 1
+	doc.text = text
 }
 
 func findDoc(docs: model.Doc[], path: Str): Result<Int, Bool> {
@@ -350,7 +351,7 @@ proc openDoc(state: model.State, path: Str): model.State {
 			mode = "preview"
 		}
 		mut model.Doc[dyn] docs = state.docs
-		append(docs, model.newDoc(path, workspace.baseName(path), text, eol, highlightFor(path, text), mode))
+		append(docs, model.newDoc(path, workspace.baseName(path), text, eol, mode))
 		next.docs = docs
 		next.active = len(docs) - 1
 		next.status = render.tx(state, "aberto") + " {workspace.baseName(path)}"
@@ -474,10 +475,7 @@ proc withText(state: model.State, text: Str): model.State {
 	index := state.active
 	mut model.Doc[dyn] docs = state.docs
 	if docs bounds index {
-		mut doc := docs[index]
-		doc.text = text
-		doc.html = highlightFor(doc.path, text)
-		docs[index] = doc
+		retext(docs[index], text)
 	}
 	next.docs = docs
 	return next
@@ -654,8 +652,7 @@ proc vimApply(state: model.State, out: vim.Editor, from: hive.syslink.Envelope):
 	if docs bounds index {
 		mut doc := docs[index]
 		if doc.text != out.text {
-			doc.text = out.text
-			doc.html = highlightFor(doc.path, out.text)
+			retext(doc, out.text)
 			next.textSerial = state.textSerial + 1
 		}
 		doc.undo = out.undo
@@ -1992,7 +1989,14 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 }
 
 func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
-	if event.kind == "edit" {
+	if event.kind == "edit" && event.at >= 0 {
+		// Só a diferença: vale se foi feita sobre o texto que o programa tem.
+		if event.seen != state.textSerial {
+			return Result.Error(false)
+		}
+		text := activeText(state)
+		return Result.Ok(model.Msg.EditAt(complete.take(text, event.at) + event.arg + complete.skip(text, event.at + event.cut), event.caret))
+	} else if event.kind == "edit" {
 		return Result.Ok(model.Msg.EditAt(event.text, event.caret))
 	} else if event.kind == "popup" {
 		return Result.Ok(model.Msg.PopupKey(event.text))
@@ -2024,7 +2028,6 @@ func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 
 proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope): model.State {
 	if command is model.Cmd.Ui(text) {
-		mut next := state
 		decoded := model.Event.decode(text, hive.json.codec())
 		if decoded is Result.Ok(hovered) {
 			if hovered.kind == "hover" {
@@ -2037,12 +2040,14 @@ proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope):
 			}
 		}
 		if decoded is Result.Ok(event) {
+			if event.kind == "resync" || event.kind == "hello" {
+				return reply(resynced(state), from)
+			}
 			if toMsg(state, event) is Result.Ok(message) {
-				next = step(state, message, from)
+				return reply(step(state, message, from), from)
 			}
 		}
-		hive.syslink.answer(from, model.Cmd.Reply(render.encodeFrame(next)))
-		return next
+		return reply(state, from)
 	} else if command is model.Cmd.Post(message) {
 		mut next := step(state, message, from)
 		// As checagens periódicas (git, arquivos no disco) só redesenham quando algo mudou.
@@ -2053,13 +2058,43 @@ proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope):
 		}
 		return next
 	} else if command is model.Cmd.Render {
-		hive.syslink.answer(from, model.Cmd.Reply(render.encodeFrame(state)))
+		return reply(state, from)
 	} else if command is model.Cmd.Pulse {
 		hive.syslink.answer(from, model.Cmd.PulseIs(state.pulse))
 	} else if command is model.Cmd.Clients {
 		hive.syslink.answer(from, model.Cmd.ClientsAre(state.clients))
 	}
 	return state
+}
+
+// Manda o frame de agora e lembra o que a página passou a ter: o próximo frame
+// só leva o texto e o realce se eles mudarem.
+proc reply(state: model.State, from: hive.syslink.Envelope): model.State {
+	hive.syslink.answer(from, model.Cmd.Reply(render.encodeFrame(state)))
+	return delivered(state)
+}
+
+func delivered(state: model.State): model.State {
+	mut next := state
+	next.clientSerial = state.textSerial
+	next.frameSeq = state.frameSeq + 1
+	next.clientHv = -1
+	next.clientHvPath = ""
+	if render.activeDoc(state) is Result.Ok(doc) {
+		next.clientHv = doc.version
+		next.clientHvPath = doc.path
+	}
+	return next
+}
+
+// A página se perdeu (um frame chegou fora de ordem, outra janela…): o
+// próximo frame leva o texto e o realce inteiros.
+func resynced(state: model.State): model.State {
+	mut next := state
+	next.clientSerial = -1
+	next.clientHv = -1
+	next.clientHvPath = ""
+	return next
 }
 
 // Sai do programa pouco depois, dando tempo para a página fechar a janela.
@@ -2142,7 +2177,7 @@ proc fresh(folder: Str): model.State {
 }
 
 func event(kind: Str, act: Str, arg: Str, text: Str, caret: Int): model.Event {
-	return model.Event(kind, act, arg, text, caret)
+	return model.Event(kind, act, arg, text, caret, -1, 0, -1)
 }
 
 test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {
@@ -2154,7 +2189,7 @@ test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {
 	if render.activeDoc(state) is Result.Ok(doc) {
 		assert doc.eol == "\r\n"
 		assert indexOf(doc.text, "\r") is Result.Error(_)
-		assert indexOf(doc.html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+		assert indexOf(join(doc.hl.lines, "\n"), "<span class=\"tk\">proc</span>") is Result.Ok(_)
 	}
 	state = withText(state, "proc main(): void \{\n\techo 2\n}\n")
 	assert model.anyDirty(state.docs)
@@ -2388,7 +2423,7 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 }
 
 // Manda um evento ao serviço, como a página faz, e lê o frame que volta.
-proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
+proc answer(db: hive.syslink.Address, sent: model.Event): model.Frame {
 	answered := db(model.Cmd.Ui(encode(sent, hive.json.codec())))
 	if answered is Result.Ok(reply) {
 		if reply is model.Cmd.Reply(text) {
@@ -2398,6 +2433,35 @@ proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
 		}
 	}
 	panic "o serviço não respondeu com um frame"
+}
+
+// O frame depois de `sent`, sempre com o texto: quando nada mudou o frame não
+// o traz (a página já tem), e aqui ele é pedido de novo, como a página faria
+// se o tivesse perdido.
+proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
+	frame := answer(db, sent)
+	if frame.hasText {
+		return frame
+	}
+	return answer(db, event("resync", "", "", "", 0))
+}
+
+test "o frame só leva o texto e o realce que a página ainda não tem" {
+	folder := scratch()
+	db := hive.syslink.spawn(serve, openDoc(fresh(folder), folder + "/main.hive"))
+	first := answer(db, event("hello", "", "", "", 0))
+	assert first.hasText && first.text == "proc main(): void \{\n\techo 1\n}\n"
+	assert first.hl.mode == "full" && len(first.hl.lines) == 4 && first.lineCount == 4
+	typed := answer(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
+	assert !typed.hasText && typed.text == ""
+	assert typed.hl.mode == "patch" && typed.hl.from == 0 && typed.hl.remove == 1
+	assert typed.hl.source == ["xproc main(): void \{"] && typed.hl.version == first.hl.version + 1
+	quiet := answer(db, event("caret", "", "", "", 3))
+	assert !quiet.hasText && quiet.hl.mode == "keep"
+	stale := answer(db, model.Event("edit", "", "y", "", 1, 0, 0, first.serial + 7))
+	assert stale.hl.mode == "keep"
+	again := answer(db, event("resync", "", "", "", 0))
+	assert again.hasText && again.text == "xproc main(): void \{\n\techo 1\n}\n" && again.hl.mode == "full"
 }
 
 // Teclas do Vim, uma por evento, como a página manda.

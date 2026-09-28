@@ -3,6 +3,7 @@
 
 import ./settings
 import ./i18n
+import ./highlight
 
 // Um item do explorador: arquivo ou pasta.
 type Entry {
@@ -37,7 +38,9 @@ type Doc {
 	text:  Str
 	saved: Str
 	eol:   Str
-	html:  Str
+	hl:    highlight.Highlighted
+	version: Int
+	patch: highlight.Patch
 	mode:  Str
 	undo:  Snapshot[dyn]
 	redo:  Snapshot[dyn]
@@ -425,17 +428,42 @@ type State {
 	treeKeys:      Str
 	agents:        Agents
 	quietSerial:   Int
+	clientHv:      Int
+	clientHvPath:  Str
+	clientSerial:  Int
+	frameSeq:      Int
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
 
 // Um evento da página, em JSON. `kind` diz o que foi; o resto depende dele.
+// Uma edição pode vir como diferença: a partir de `at`, saem `cut` caracteres e
+// entra `arg` (`at` = -1: o texto inteiro vem em `text`). `seen` é o `serial`
+// do texto sobre o qual a diferença foi feita: se o programa trocou o texto
+// nesse meio-tempo, a diferença não vale mais e é ignorada.
 type Event {
 	kind:  Str
 	act:   Str -- Default as "";
 	arg:   Str -- Default as "";
 	text:  Str -- Default as "";
 	caret: Int -- Default as 0;
+	at:    Int -- Default as -1;
+	cut:   Int -- Default as 0;
+	seen:  Int -- Default as -1;
+}
+
+// O realce que vai no frame: `none` (sem documento), `keep` (a página já tem),
+// `patch` (troca as linhas de `from` a `from + remove` por `lines`, sobre a
+// versão `version - 1`) ou `full` (o documento todo).
+// `source` é o texto puro das mesmas linhas, para a página saber a que texto
+// aquele realce corresponde e mostrar na hora o que ainda não voltou colorido.
+type HlUpdate {
+	mode:    Str
+	from:    Int
+	remove:  Int
+	lines:   Str[dyn]
+	source:  Str[dyn]
+	version: Int
 }
 
 // Um pedaço da página, trocado inteiro quando muda.
@@ -452,6 +480,10 @@ type Frame {
 	regions:   Region[dyn]
 	css:       Str
 	text:      Str
+	hasText:   Bool
+	seq:       Int
+	hl:        HlUpdate
+	lineCount: Int
 	serial:    Int
 	caret:     Int
 	keys:      Str[dyn]
@@ -555,7 +587,11 @@ func initial(root: Str, prefs: settings.Settings): State {
 		vim: emptyVim(),
 		treeKeys: "",
 		agents: emptyAgents(),
-		quietSerial: -1
+		quietSerial: -1,
+		clientHv: -1,
+		clientHvPath: "",
+		clientSerial: -1,
+		frameSeq: 0
 	)
 }
 
@@ -609,10 +645,15 @@ func emptyVim(): Vim {
 	)
 }
 
+// Arquivos Hive e Go ganham cores; o resto é só texto.
+func colored(path: Str): Bool {
+	return path is "{stem}.hive" || path is "{stem}.go"
+}
+
 // Um documento recém-aberto, sem nada para desfazer.
-func newDoc(path: Str, name: Str, text: Str, eol: Str, html: Str, mode: Str): Doc {
+func newDoc(path: Str, name: Str, text: Str, eol: Str, mode: Str): Doc {
 	Snapshot[dyn] none = []
-	return Doc(path, name, text, text, eol, html, mode, none, none, false)
+	return Doc(path, name, text, text, eol, highlight.highlightText(text, colored(path)), 0, highlight.noPatch(), mode, none, none, false)
 }
 
 func emptySearch(): SearchPanel {
