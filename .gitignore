@@ -5,6 +5,8 @@
 .hivedocs/
 studio-test/
 tree-test/
+lens-test/
+lens-test-copia/
 *.exe~
 studio-*-*
 dist/

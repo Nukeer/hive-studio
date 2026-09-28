@@ -156,6 +156,13 @@ button.tb.run{color:var(--good)}
 body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
 #code.linkable #ta{cursor:pointer}
 #marks{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+#lens{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+#lens .lb{position:absolute;left:0;right:0}
+#lens .lb.error{background:color-mix(in srgb,var(--danger) 14%,transparent)}
+#lens .lb.warning{background:color-mix(in srgb,var(--warn) 10%,transparent)}
+#lens .lm{position:absolute;white-space:pre;font-family:var(--mono);font-size:var(--font-size);font-style:italic}
+#lens .lm.error{color:var(--danger)}
+#lens .lm.warning{color:var(--warn)}
 #marks i{position:absolute;background:color-mix(in srgb,var(--warn) 30%,transparent);border-radius:2px}
 #marks i.cur{background:color-mix(in srgb,var(--accent) 50%,transparent);box-shadow:0 0 0 1px var(--accent)}
 #find:empty{display:none}
@@ -337,6 +344,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 				<div id="editor">
 					<pre id="gutter"></pre>
 					<div id="code">
+						<div id="lens"></div>
 						<pre id="hl"><div id="hll"></div><div class="pad"></div></pre>
 						<textarea id="ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
 						<div id="marks"></div>
@@ -385,6 +393,8 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	// Uma linha digitada aparece na hora, sem cor, até o realce dela chegar.
 	// sent é o texto que o programa tem, para mandar só a diferença.
 	var hlHtml = [], hlSrc = [], hlVersion = -1, shown = [], shownLines = -1, sent = "", lastSeq = -1, resyncing = false;
+	// Error Lens: as marcas que o programa mandou e as linhas do último desenho.
+	var lens = [], lensLayer = document.getElementById("lens"), painted = [];
 	var vimCursor = document.getElementById("vimcur");
 	var side = document.getElementById("side");
 	// Os terminais dos agentes (Claude Code, Codex, OpenCode): um xterm.js por
@@ -536,6 +546,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	// que mudaram desde o último desenho são trocadas.
 	function paint() {
 		var lines = ta.value.split("\n"), n = lines.length, m = hlSrc.length, p = 0, s = 0, i;
+		painted = lines;
 		while (p < n && p < m && lines[p] === hlSrc[p]) { p++; }
 		while (s < n - p && s < m - p && lines[n - 1 - s] === hlSrc[m - 1 - s]) { s++; }
 		var target = new Array(n);
@@ -562,6 +573,48 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			for (i = 1; i <= n; i++) { numbers.push(i); }
 			gutter.textContent = numbers.join("\n") + "\n\n\n";
 		}
+		drawLens();
+	}
+
+	// Onde a marca está agora: a linha dela, se ainda tem o mesmo texto, ou a
+	// mais próxima com esse texto (linhas entraram ou saíram antes dela). Se a
+	// linha foi editada, a marca some até o próximo check.
+	function lensRow(mark) {
+		var row = mark.line - 1;
+		if (painted[row] === mark.source) { return row; }
+		if (mark.source === "") { return -1; }
+		for (var d = 1; d <= 300; d++) {
+			if (painted[row - d] === mark.source) { return row - d; }
+			if (painted[row + d] === mark.source) { return row + d; }
+		}
+		return -1;
+	}
+
+	function drawLens() {
+		var editing = app.classList.contains("l-edit") || app.classList.contains("l-split");
+		if (!lens.length || !editing) { if (lensLayer.firstChild) { lensLayer.innerHTML = ""; } return; }
+		var style = getComputedStyle(ta), height = parseFloat(style.lineHeight), width = measure();
+		var tab = parseInt(style.tabSize, 10) || 4, padLeft = parseFloat(style.paddingLeft), padTop = parseFloat(style.paddingTop);
+		var rows = {}, order = [];
+		for (var i = 0; i < lens.length; i++) {
+			var row = lensRow(lens[i]);
+			if (row < 0) { continue; }
+			if (!rows[row]) { rows[row] = { severity: lens[i].severity, messages: [] }; order.push(row); }
+			if (lens[i].severity === "error") { rows[row].severity = "error"; }
+			rows[row].messages.push(lens[i].message);
+		}
+		var first = Math.floor(ta.scrollTop / height) - 1, last = first + Math.ceil(ta.clientHeight / height) + 2, html = "";
+		for (var k = 0; k < order.length; k++) {
+			var at = order[k];
+			if (at < first || at > last) { continue; }
+			var item = rows[at], line = painted[at] || "", top = padTop + at * height - ta.scrollTop;
+			var left = padLeft + (visualColumn(line, line.length, tab) + 3) * width - ta.scrollLeft;
+			var text = item.messages.join("  ·  ");
+			if (text.length > 240) { text = text.slice(0, 240) + "…"; }
+			html += '<div class="lb ' + item.severity + '" style="top:' + top + 'px;height:' + height + 'px"></div>' +
+				'<span class="lm ' + item.severity + '" style="left:' + left + 'px;top:' + top + 'px;line-height:' + height + 'px">' + escapeHtml(text) + '</span>';
+		}
+		lensLayer.innerHTML = html;
 	}
 
 	// A edição mandada como diferença do que o programa já tem.
@@ -580,18 +633,31 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		sent = text;
 	}
 
+	function keepPicked(list, item) {
+		if (!list || !item) { return; }
+		var box = list.getBoundingClientRect(), row = item.getBoundingClientRect();
+		if (row.top < box.top) { list.scrollTop -= box.top - row.top; }
+		else if (row.bottom > box.bottom) { list.scrollTop += row.bottom - box.bottom; }
+	}
+
 	function apply(frame) {
 		if (frame.seq !== undefined) {
 			if (frame.seq <= lastSeq) { return; }
 			lastSeq = frame.seq;
 		}
 		applyHl(frame.hl);
+		lens = frame.lens || [];
 		if (sheet.textContent !== frame.css) { sheet.textContent = frame.css; charWidth = 0; restyleAgents(); }
 		document.title = frame.title;
 		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") +
 			(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "") + (frame.agentShown ? " agentpane" : "");
 		if (!dragging) { panel.style.height = frame.panelHeight + "px"; }
+		var paletteBefore = cache.palette, popupBefore = cache.popup;
 		for (var i = 0; i < frame.regions.length; i++) { region(frame.regions[i].id, frame.regions[i].html); }
+		// A lista do Ctrl+P e a das sugestões são redesenhadas a cada seta, e a
+		// rolagem volta ao topo: o item escolhido volta para a vista.
+		if (cache.palette !== paletteBefore) { keepPicked(document.querySelector("#palette .pl"), document.querySelector("#palette .pi.on")); }
+		if (cache.popup !== popupBefore) { keepPicked(popup, popup.querySelector(".sg.on")); }
 		if (document.activeElement === side) {
 			var chosen = side.querySelector(".row.focus");
 			if (chosen) { chosen.scrollIntoView({ block: "nearest" }); }
@@ -748,6 +814,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	function sync() {
 		hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gutter.scrollTop = ta.scrollTop;
 		drawMarks();
+		drawLens();
 		drawCursor();
 	}
 

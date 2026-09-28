@@ -65,6 +65,17 @@ type Hotspot {
 	detail: Str
 }
 
+// Uma marca do Error Lens numa linha do documento à vista: `error` (do
+// compilador) ou `warning` (do último Analyze). `source` é o texto da linha
+// quando a marca foi feita — a página só a mostra enquanto a linha continua
+// igual, e a acha de novo se ela mudou de lugar.
+type LensMark {
+	line:     Int
+	severity: Str
+	message:  Str
+	source:   Str
+}
+
 // Uma declaração de topo do arquivo ativo, para o painel de estrutura.
 type Symbol {
 	kind: Str
@@ -303,6 +314,8 @@ type Msg {
 	Invoke           { command: Str }
 	Finished         { command: Str, output: Str, ok: Bool }
 	OpenReport
+	LensDue          { n: Int }
+	LensDone         { output: Str }
 	ShowPane         { pane: Pane }
 	TogglePanel
 	ShowSide         { side: SideView }
@@ -448,6 +461,9 @@ type State {
 	analysisHead:  Str[dyn]
 	hotspots:      Hotspot[dyn]
 	analysisReport: Str
+	lensDue:       Int
+	lensRunning:   Bool
+	lensAgain:     Bool
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -530,6 +546,7 @@ type Frame {
 	agentShown:    Int
 	agentKeys:     Str[dyn]
 	textQuiet:     Bool
+	lens:          LensMark[dyn]
 }
 
 // A resposta a "dá para ir à definição do nome em `caret`?", mandada enquanto
@@ -610,7 +627,10 @@ func initial(root: Str, prefs: settings.Settings): State {
 		frameSeq: 0,
 		analysisHead: [],
 		hotspots: [],
-		analysisReport: ""
+		analysisReport: "",
+		lensDue: 0,
+		lensRunning: false,
+		lensAgain: false
 	)
 }
 

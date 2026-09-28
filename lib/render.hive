@@ -999,6 +999,8 @@ func settingsPage(state: model.State): Str {
 		item(tx(state, "Números de linha"), "", check("lineNumbers", tx(state, "Mostrar números de linha"), prefs.lineNumbers)) +
 		item(tx(state, "Autocomplete"), tx(state, "Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita."),
 			check("autocomplete", tx(state, "Sugerir enquanto digito"), prefs.autocomplete)) +
+		item(tx(state, "Error Lens"), tx(state, "Confere o código pouco depois de você parar de digitar (e a cada Check, Run, Test e Build) e mostra o erro na própria linha, em vermelho; as funções caras do último Analyze aparecem em amarelo."),
+			check("errorLens", tx(state, "Mostrar erros e avisos na linha"), prefs.errorLens)) +
 		item(tx(state, "Largura do tab"), tx(state, "Quantos espaços um tab ocupa na tela."), select("tabSize", ["2", "4", "8"], "{prefs.tabSize}")) +
 		item(tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
 			check("vim", tx(state, "Usar as teclas do Vim no editor"), prefs.vim)) +
@@ -1582,8 +1584,47 @@ func frame(state: model.State): model.Frame {
 		agentSessions: agentSessions(state),
 		agentShown: agentShown(state),
 		agentKeys: agentKeys(prefs.keymap),
-		textQuiet: state.textSerial == state.quietSerial
+		textQuiet: state.textSerial == state.quietSerial,
+		lens: lensMarks(state)
 	)
+}
+
+// As marcas do Error Lens no documento à vista: os erros do último check e,
+// como aviso, as funções que o último Analyze achou caras.
+func lensMarks(state: model.State): model.LensMark[dyn] {
+	mut model.LensMark[dyn] marks = []
+	if !state.settings.errorLens {
+		return marks
+	}
+	if activeDoc(state) is Result.Ok(doc) {
+		path := workspace.normalize(doc.path)
+		mut Str[dyn] lines = []
+		for each d in state.diagnostics {
+			if workspace.normalize(d.file) == path {
+				if len(lines) == 0 {
+					lines = split(doc.text, "\n")
+				}
+				append(marks, model.LensMark(d.line, "error", d.message, lineOf(lines, d.line)))
+			}
+		}
+		for each spot in state.hotspots {
+			if spot.score <= 30 && workspace.normalize(spot.file) == path {
+				if len(lines) == 0 {
+					lines = split(doc.text, "\n")
+				}
+				append(marks, model.LensMark(spot.line, "warning", tx(state, "custo") + " {spot.score}/100 — " + spot.detail, lineOf(lines, spot.line)))
+			}
+		}
+	}
+	return marks
+}
+
+func lineOf(lines: Str[], line: Int): Str {
+	index := line - 1
+	if lines bounds index {
+		return lines[index]
+	}
+	return ""
 }
 
 func sentText(has: Bool, text: Str): Str {

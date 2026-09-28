@@ -17,10 +17,11 @@ type Settings {
 	claudeCommand:   Str -- JSON as claude_command; Default as "claude";
 	codexCommand:    Str -- JSON as codex_command; Default as "codex";
 	opencodeCommand: Str -- JSON as opencode_command; Default as "opencode";
+	errorLens:     Bool -- JSON as error_lens; Default as true;
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false, "claude", "codex", "opencode")
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false, "claude", "codex", "opencode", true)
 }
 
 func envOr(name: Str, fallback: Str): Str {
@@ -69,7 +70,7 @@ func save(value: Settings): Result<Bool, Str> {
 }
 
 test "configurações vão e voltam em JSON, com padrões para o que falta" {
-	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true, "npx @anthropic-ai/claude-code", "codex", "opencode")
+	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true, "npx @anthropic-ai/claude-code", "codex", "opencode", false)
 	text := encode(custom, hive.json.codec())
 	if Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
 		assert back == custom
@@ -78,6 +79,7 @@ test "configurações vão e voltam em JSON, com padrões para o que falta" {
 	}
 	if Settings.decode(`\{"theme": "Dracula"}`, hive.json.codec()) is Result.Ok(partial) {
 		assert partial.theme == "Dracula"
+		assert partial.errorLens
 		assert partial.lineNumbers
 		assert partial.compiler == "hivec"
 		assert partial.fontSize == 14

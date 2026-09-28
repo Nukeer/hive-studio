@@ -545,6 +545,8 @@ proc toggleSetting(state: model.State, name: Str): model.State {
 		prefs.autocomplete = !prefs.autocomplete
 	} else if name == "vim" {
 		prefs.vim = !prefs.vim
+	} else if name == "errorLens" {
+		prefs.errorLens = !prefs.errorLens
 	}
 	mut next := applySettings(state, prefs)
 	if name == "showHidden" {
@@ -561,13 +563,77 @@ proc toggleSetting(state: model.State, name: Str): model.State {
 	return next
 }
 
+// ── Error Lens ───────────────────────────────────────────────────────────
+
+// Pede um check para quando a digitação parar (o último pedido vence).
+proc lensSoon(state: model.State, from: hive.syslink.Address): model.State {
+	if !state.settings.errorLens || render.targetOf(state) == "" {
+		return state
+	}
+	mut next := state
+	next.lensDue = state.lensDue + 1
+	async toolchain.lensTimer(from, next.lensDue)
+	return next
+}
+
+proc startLens(state: model.State, from: hive.syslink.Address): model.State {
+	mut next := state
+	target := render.targetOf(state)
+	if target == "" {
+		return next
+	}
+	mut toolchain.Overlay[dyn] overlays = []
+	for each doc in state.docs {
+		if model.dirty(doc) {
+			append(overlays, toolchain.Overlay(doc.path, doc.text))
+		}
+	}
+	next.lensRunning = true
+	next.lensAgain = false
+	async toolchain.lensCheck(from, state.settings.compiler, state.root, target, overlays)
+	return next
+}
+
+// Os erros do compilador no arquivo e na linha onde estão de fato.
+proc located(state: model.State, found: model.Diagnostic[]): model.Diagnostic[dyn] {
+	target := render.targetOf(state)
+	modules := importedModules(state, target)
+	mut model.Diagnostic[dyn] out = []
+	for each d in found {
+		where := analysis.locate(d.message)
+		mut file := d.file
+		if where.module != "" {
+			file = moduleFile(target, modules, where.module)
+		}
+		mut line := d.line
+		if where.name != "" {
+			line = analysis.refineLine(textOf(state, file), d.line, where.message)
+		}
+		append(out, model.Diagnostic(file, line, where.message))
+	}
+	return out
+}
+
+// O texto de um arquivo como o editor o tem (aberto) ou como está no disco.
+proc textOf(state: model.State, path: Str): Str {
+	for each doc in state.docs {
+		if workspace.normalize(doc.path) == workspace.normalize(path) {
+			return doc.text
+		}
+	}
+	if hive.file.read(path) is Result.Ok(raw) {
+		return replaceAll(raw, "\r", "")
+	}
+	return ""
+}
+
 // O resultado do `hivec analyze` vai para o painel ANÁLISE: cada função com o
 // arquivo onde ela está, para o clique abrir na linha certa.
 proc withAnalysis(state: model.State, output: Str): model.State {
 	mut next := state
 	target := render.targetOf(state)
 	report := analysis.parseAnalyze(output)
-	modules := importedModules(target)
+	modules := importedModules(state, target)
 	mut model.Hotspot[dyn] spots = []
 	for each spot in report.spots {
 		mut found := spot
@@ -588,18 +654,31 @@ proc withAnalysis(state: model.State, output: Str): model.State {
 	return next
 }
 
-// Os `import ./caminho` do arquivo de entrada, como "módulo=arquivo".
-proc importedModules(target: Str): Str[dyn] {
+// Os módulos do programa, como "módulo=arquivo": os imports do arquivo de
+// entrada e, em cadeia, os deles (com o texto do editor, se estiver aberto).
+proc importedModules(state: model.State, target: Str): Str[dyn] {
 	mut Str[dyn] found = []
-	if hive.file.read(target) is Result.Ok(text) {
-		folder := workspace.parentOf(target)
-		for each raw in split(replaceAll(text, "\r", ""), "\n") {
-			if raw is "import ./{path}" {
-				if path is "{stem}.go" {
-					continue
-				}
-				append(found, workspace.baseName(path) + "=" + folder + "/" + path + ".hive")
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	mut Str[dyn] pending = [target]
+	mut visited := 0
+	for ; len(pending) > 0 && visited < 500; {
+		last := len(pending) - 1
+		mut file := ""
+		if pending bounds last {
+			file = pending[last]
+			drop(pending, last, last)
+		}
+		if file == "" || hive.map.has(seen, file) {
+			continue
+		}
+		hive.map.set(seen, file, true)
+		visited++
+		for each i in analysis.importsOf(textOf(state, file), workspace.parentOf(file)) {
+			if i.path is "{stem}.go" {
+				continue
 			}
+			append(found, i.name + "=" + i.path)
+			append(pending, i.path)
 		}
 	}
 	return found
@@ -1615,7 +1694,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Address):
 		next.status = "{command} {workspace.baseName(target)}…"
 		async toolchain.invoke(from, state.settings.compiler, command, target)
 	} else if message is model.Msg.Finished(command, output, ok) {
-		found := analysis.parseDiagnostics(output)
+		found := located(state, analysis.parseDiagnostics(output))
 		next.running = ""
 		next.output = state.output + output
 		next.diagnostics = found
@@ -1626,6 +1705,22 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Address):
 		if len(found) > 0 {
 			next.pane = model.Pane.ProblemsPane()
 			next.panelOpen = true
+		}
+	} else if message is model.Msg.LensDue(n) {
+		if n == state.lensDue && state.settings.errorLens {
+			if state.lensRunning {
+				next.lensAgain = true
+			} else {
+				return startLens(state, from)
+			}
+		}
+	} else if message is model.Msg.LensDone(output) {
+		next.lensRunning = false
+		if state.settings.errorLens && state.running == "" {
+			next.diagnostics = located(state, analysis.parseDiagnostics(output))
+		}
+		if state.lensAgain {
+			return startLens(next, from)
 		}
 	} else if message is model.Msg.OpenReport {
 		if state.analysisReport != "" && hive.file.exists(state.analysisReport) {
@@ -1723,6 +1818,10 @@ proc step(state: model.State, message: model.Msg, from: hive.syslink.Address): m
 	// fechado: as pastas vigiadas acompanham.
 	if next.root != state.root || next.expanded != state.expanded || len(next.docs) != len(state.docs) {
 		_watching := watch.set(watchedFolders(next))
+	}
+	// O Error Lens confere de novo quando o texto à vista muda ou outro arquivo aparece.
+	if activeText(next) != activeText(state) || render.activePath(next) != render.activePath(state) {
+		next = lensSoon(next, from)
 	}
 	return next
 }
@@ -2131,7 +2230,7 @@ proc serve(state: mut model.State, command: model.Cmd, from: hive.syslink.Addres
 	} else if command is model.Cmd.Post(message) {
 		mut next := step(current, message, from)
 		// As checagens periódicas (git, arquivos no disco) só redesenham quando algo mudou.
-		quiet := message is model.Msg.GitPoll || message is model.Msg.DiskPoll
+		quiet := message is model.Msg.GitPoll || message is model.Msg.DiskPoll || message is model.Msg.LensDue(_)
 		if !quiet || next.git != current.git || next.textSerial != current.textSerial || next.status != current.status ||
 			next.tree != current.tree || next.docs != current.docs {
 			next.pulse = current.pulse + 1
@@ -2280,6 +2379,32 @@ test "o analyze enche o painel ANÁLISE e cada função aponta para o arquivo de
 	assert next.analysisReport == folder + "/main-analysis.html"
 	assert indexOf(render.panel(next), "util.dobro") is Result.Ok(_)
 	assert indexOf(render.titleBar(next), "Analyze") is Result.Ok(_)
+}
+
+test "o Error Lens põe o erro de um módulo no arquivo e na linha dele" {
+	folder := scratch()
+	if hive.file.write(folder + "/lib/util.hive", "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n\nfunc ruim(v: Int[dyn]): Int \{\n\tmut t := 0\n\tt = v[3]\n\treturn t\n}\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/main.hive", "import ./lib/util\n\nproc main(): void \{\n\techo util.dobro(2)\n}\n") is Result.Error(why) {
+		panic why
+	}
+	mut state := openDoc(fresh(folder), folder + "/lib/util.hive")
+	state.entrypoint = folder + "/main.hive"
+	output := folder + "/main.hive:5: in `util_0_ruim`: cannot prove `3` is in range: `v` has no length\n"
+	found := located(state, analysis.parseDiagnostics(output))
+	assert found == [model.Diagnostic(folder + "/lib/util.hive", 7, "ruim: cannot prove `3` is in range: `v` has no length")]
+	state.diagnostics = found
+	assert render.lensMarks(state) == [model.LensMark(7, "error", "ruim: cannot prove `3` is in range: `v` has no length", "\tt = v[3]")]
+	mut spot := model.Hotspot(0, "util.dobro", "func", folder + "/lib/util.hive", 1, "a copy")
+	state.hotspots = [spot]
+	marks := render.lensMarks(state)
+	assert len(marks) == 2
+	if marks bounds 1 {
+		assert marks[1].severity == "warning" && marks[1].line == 1 && marks[1].source == "func dobro(n: Int): Int \{"
+	}
+	state.settings.errorLens = false
+	assert len(render.lensMarks(state)) == 0
 }
 
 test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {

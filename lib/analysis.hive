@@ -1,6 +1,8 @@
 // Lê o que o compilador diz e o que o arquivo declara.
 
 import ./model
+import ./highlight
+import ./workspace
 
 func trimLeft(text: Str): Str {
 	mut rest := text
@@ -84,6 +86,142 @@ func parseAnalyze(output: Str): AnalyzeReport {
 	return AnalyzeReport(head, spots)
 }
 
+// Um erro depois do parser vem na linha da declaração, como "in `f`: …", e,
+// num programa com imports, no arquivo de entrada — mas o nome diz de onde:
+// `util_0_ruim` é `ruim` do módulo `util`. `module` fica "" no próprio arquivo.
+type Located {
+	module:  Str
+	name:    Str
+	message: Str
+}
+
+func locate(message: Str): Located {
+	if message is "in `{callable}`: {rest}" {
+		if callable is "{module}_{digits is (\d+)}_{name}" {
+			return Located(module, name, name + ": " + rest)
+		}
+		return Located("", callable, callable + ": " + rest)
+	}
+	return Located("", "", message)
+}
+
+// Os trechos entre crases da mensagem, que costumam ser código da linha
+// errada (`3` em "cannot prove `3` is in range").
+func fragments(message: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	parts := split(message, "`")
+	for i := 1; i < len(parts); i = i + 2 {
+		if parts bounds i {
+			mut piece := parts[i]
+			// `settings_0_Settings` é `Settings` no código.
+			if piece is "{module}_{digits is (\d+)}_{name}" {
+				piece = name
+			}
+			if piece != "" && len(piece) <= 40 && indexOf(piece, "...") is Result.Error(_) && indexOf(piece, "…") is Result.Error(_) {
+				append(found, piece)
+			}
+		}
+	}
+	return found
+}
+
+// Um trecho que não é só um nome (tem número, símbolo) aponta melhor a linha.
+func weight(piece: Str): Int {
+	for each c in split(piece, "") {
+		if !highlight.isIdent(c) || highlight.isDigit(c) {
+			return 2
+		}
+	}
+	return 1
+}
+
+// A linha do corpo da declaração (começando em `line`) com mais trechos da
+// mensagem; sem nenhum, a própria linha da declaração.
+func refineLine(text: Str, line: Int, message: Str): Int {
+	pieces := fragments(message)
+	if len(pieces) == 0 {
+		return line
+	}
+	lines := split(text, "\n")
+	mut best := line
+	mut bestScore := 0
+	for row := line; row < len(lines); row++ {
+		if lines bounds row {
+			current := lines[row]
+			if current == "}" {
+				break
+			}
+			mut score := 0
+			for each piece in pieces {
+				if indexOf(current, piece) is Result.Ok(_) {
+					score = score + weight(piece)
+				}
+			}
+			if score > bestScore {
+				best = row + 1
+				bestScore = score
+			}
+		}
+	}
+	return best
+}
+
+// Um `import` de arquivo: o nome pelo qual o módulo é chamado (o do arquivo,
+// ou o do `as`) e o caminho, resolvido a partir da pasta de quem importa.
+type ModuleRef {
+	name: Str
+	path: Str
+}
+
+func isLocal(spec: Str): Bool {
+	if spec is "./{rest}" {
+		return true
+	}
+	if spec is "../{rest}" {
+		return true
+	}
+	return false
+}
+
+// Os imports de arquivo (`./` e `../`, com ou sem aspas e `as`) de um texto;
+// os da biblioteca padrão e os de um repositório git ficam de fora.
+func importsOf(text: Str, folder: Str): ModuleRef[dyn] {
+	mut ModuleRef[dyn] found = []
+	for each raw in split(replaceAll(text, "\r", ""), "\n") {
+		if raw is "import {rest}" {
+			mut spec := ""
+			mut alias := ""
+			if rest is "\"{quoted}\"{tail}" {
+				spec = quoted
+				if tail is " as {name}" {
+					alias = name
+				}
+			} else {
+				parts := words(rest)
+				if parts is [first, ...others] {
+					spec = first
+					if others is ["as", name] {
+						alias = name
+					}
+				}
+			}
+			if isLocal(spec) {
+				mut file := spec + ".hive"
+				mut base := workspace.baseName(spec)
+				if spec is "{stem}.go" {
+					file = spec
+					base = workspace.baseName(stem)
+				}
+				if alias != "" {
+					base = alias
+				}
+				append(found, ModuleRef(base, workspace.tidy(folder + "/" + file)))
+			}
+		}
+	}
+	return found
+}
+
 // O módulo de `vim.keyStep` é `vim`; o de `update` é o próprio arquivo ("").
 func moduleOf(name: Str): Str {
 	if name is "{module}.{rest}" {
@@ -132,6 +270,29 @@ test "a saída do analyze vira resumo e funções" {
 		assert report.spots[1].name == "serve" && report.spots[1].detail == "a copy"
 	}
 	assert moduleOf("vim.playMacro") == "vim" && moduleOf("serve") == ""
+}
+
+test "erro de módulo importado volta para o arquivo e a linha certos" {
+	far := locate("in `util_0_ruim`: cannot prove `3` is in range: `v` has no length")
+	assert far.module == "util" && far.name == "ruim"
+	assert far.message == "ruim: cannot prove `3` is in range: `v` has no length"
+	own := locate("in `main`: `z` holds 2, so `5` is not a position it has")
+	assert own.module == "" && own.message == "main: `z` holds 2, so `5` is not a position it has"
+	assert locate("expected `)` but found `}`").module == ""
+	body := "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n\nfunc ruim(v: Int[dyn]): Int \{\n\tmut t := 0\n\tt = v[3]\n\treturn t\n}\n"
+	assert refineLine(body, 5, far.message) == 7
+	main := "proc main(): void \{\n\tz := [1, 2]\n\techo z[5]\n}\n"
+	assert refineLine(main, 1, own.message) == 3
+	assert refineLine(main, 1, "main: sem trecho nenhum") == 1
+	assert fragments("`settings_0_Settings` has 17 fields") == ["Settings"]
+}
+
+test "os imports de arquivo, com as, aspas e ../" {
+	text := "import hive.ui\nimport ./lib/util\nimport ./lib/native.go\nimport ../comum/texto as txt\nimport \"./lib/com espaço\" as esp\nimport https://github.com/a/b/c\n\tfalso := \"import ./nao\"\n"
+	found := importsOf(text, "C:/p")
+	assert found == [ModuleRef("util", "C:/p/lib/util.hive"), ModuleRef("native", "C:/p/lib/native.go"),
+		ModuleRef("txt", "C:/comum/texto.hive"), ModuleRef("esp", "C:/p/lib/com espaço.hive")]
+	assert importsOf("import ./b", "lib") == [ModuleRef("b", "lib/b.hive")]
 }
 
 func countLines(text: Str): Int {
