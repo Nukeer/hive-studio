@@ -259,6 +259,16 @@ func offsetOf(text: Str, line: Int, column: Int): Int {
 	return offset + column
 }
 
+// A declaração do campo `name` no arquivo `file`, se ela está lá.
+proc fieldIn(file: Str, name: Str): Result<Target, Bool> {
+	if hive.file.read(file) is Result.Ok(content) {
+		if lineOf(content, isField(name, _)) is Result.Ok(line) {
+			return Result.Ok(Target(file, line, columnOf(content, line, name)))
+		}
+	}
+	return Result.Error(false)
+}
+
 proc locate(path: Str, text: Str, caret: Int): Result<Target, Str> {
 	word := wordAt(text, caret)
 	if word.name == "" || highlight.isDigit(complete.take(word.name, 1)) {
@@ -308,10 +318,8 @@ proc locate(path: Str, text: Str, caret: Int): Result<Target, Str> {
 		return Result.Ok(Target(path, line, columnOf(text, line, word.name)))
 	}
 	for each file in hiveImports(text, path) {
-		if hive.file.read(file) is Result.Ok(content) {
-			if lineOf(content, isField(word.name, _)) is Result.Ok(line) {
-				return Result.Ok(Target(file, line, columnOf(content, line, word.name)))
-			}
+		if fieldIn(file, word.name) is Result.Ok(target) {
+			return Result.Ok(target)
 		}
 	}
 	return Result.Error("não achei a definição de {word.qualifier}.{word.name}")

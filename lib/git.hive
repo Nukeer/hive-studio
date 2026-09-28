@@ -29,22 +29,20 @@ func numberIn(text: Str): Int {
 	return 0
 }
 
-func withBranch(info: model.GitInfo, header: Str): model.GitInfo {
-	mut next := info
+proc withBranch(info: mut model.GitInfo, header: Str): void {
 	if header is "No commits yet on {name}" {
-		next.branch = name
+		info.branch = name
 	} else if header is "{name}...{rest}" {
-		next.branch = name
+		info.branch = name
 		if rest is "{a}ahead {n is (\d+)}{b}" {
-			next.ahead = numberIn(n)
+			info.ahead = numberIn(n)
 		}
 		if rest is "{a}behind {n is (\d+)}{b}" {
-			next.behind = numberIn(n)
+			info.behind = numberIn(n)
 		}
 	} else {
-		next.branch = header
+		info.branch = header
 	}
-	return next
 }
 
 func parseFile(line: Str, prefix: Str): Result<model.GitFile, Bool> {
@@ -71,14 +69,20 @@ func parseFile(line: Str, prefix: Str): Result<model.GitFile, Bool> {
 
 // Lê o estado do repositório que contém `root`. O rascunho da mensagem de
 // commit e o que estiver em andamento sobrevivem à releitura.
-proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
-	mut info := model.emptyGit()
-	info.message = previous.message
-	info.busy = previous.busy
-	info.confirm = previous.confirm
+proc refresh(root: Str, info: mut model.GitInfo): void {
+	model.GitFile[dyn] noFiles = []
+	Str[dyn] noLog = []
+	info.repo = false
+	info.top = ""
+	info.prefix = ""
+	info.branch = ""
+	info.ahead = 0
+	info.behind = 0
+	info.files = noFiles
+	info.log = noLog
 	top := process.run("git", ["rev-parse", "--show-toplevel"], root)
 	if top.code != 0 {
-		return info
+		return
 	}
 	info.repo = true
 	info.top = process.firstLine(top.text)
@@ -87,7 +91,7 @@ proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
 	mut model.GitFile[dyn] files = []
 	for each line in split(replaceAll(status.text, "\r", ""), "\n") {
 		if line is "## {header}" {
-			info = withBranch(info, header)
+			withBranch(info, header)
 		} else if parseFile(line, info.prefix) is Result.Ok(file) {
 			append(files, file)
 		}
@@ -103,7 +107,6 @@ proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
 		}
 		info.log = log
 	}
-	return info
 }
 
 func kindOf(file: model.GitFile): Str {
@@ -459,9 +462,12 @@ test "um diff vira arquivos com linhas numeradas nos dois lados" {
 }
 
 test "o cabeçalho diz o branch e quanto está à frente" {
-	info := withBranch(model.emptyGit(), "main...origin/main [ahead 2, behind 1]")
+	mut info := model.emptyGit()
+	withBranch(info, "main...origin/main [ahead 2, behind 1]")
 	assert info.branch == "main" && info.ahead == 2 && info.behind == 1
-	assert withBranch(model.emptyGit(), "No commits yet on main").branch == "main"
+	mut empty := model.emptyGit()
+	withBranch(empty, "No commits yet on main")
+	assert empty.branch == "main"
 }
 
 test "pastas herdam a cor dos arquivos" {

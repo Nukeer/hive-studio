@@ -2,6 +2,12 @@
 
 import ./model
 import ./process
+import ./settings
+import ./search
+import ./workspace
+import ./complete
+import ./analysis
+import ./native.go
 
 // `HIVEC` no ambiente (ou num `.env` ao lado) vence a configuração.
 func compilerPath(configured: Str): Str {
@@ -24,4 +30,312 @@ proc invoke(window: hive.syslink.Address, compiler: Str, command: Str, entrypoin
 		output = "não foi possível iniciar {compilerPath(compiler)}: {result.text}\nInstale o Hive ou ajuste o compilador nas Configurações."
 	}
 	async window(model.Cmd.Post(model.Msg.Finished(command, output, result.code == 0)))
+}
+
+// Um documento com alterações por salvar: o check do Error Lens usa o texto dele.
+type Overlay {
+	path: Str
+	text: Str
+}
+
+// Os documentos com alterações por salvar, como JSON: um texto atravessa
+// para a thread do check sem ser copiado.
+type Overlays {
+	items: Overlay[dyn]
+}
+
+func packOverlays(docs: model.Doc[]): Str {
+	mut Overlay[dyn] items = []
+	for each doc in docs {
+		if model.dirty(doc) {
+			append(items, Overlay(doc.path, doc.text))
+		}
+	}
+	return encode(Overlays(items), hive.json.codec())
+}
+
+// Onde fica a cópia do projeto que o Error Lens confere.
+func lensFolder(): Str {
+	return settings.folder() + "/lens"
+}
+
+// `path` relativo a `root`, ou "" quando está fora dela.
+func inside(root: Str, path: Str): Str {
+	base := workspace.normalize(root) + "/"
+	clean := workspace.normalize(path)
+	if complete.startsWith(clean, base) {
+		return complete.skip(clean, len(base))
+	}
+	return ""
+}
+
+// Um arquivo na cópia do Error Lens: o carimbo (tamanho e data) de quando
+// foi copiado — "overlay" quando veio do editor — e os arquivos que ele importa.
+type Copied {
+	rel:     Str
+	stamp:   Str
+	imports: Str[dyn]
+}
+
+func manifestText(entries: Copied[]): Str {
+	mut Str[dyn] lines = []
+	for each e in entries {
+		append(lines, manifestLine(e))
+	}
+	return join(lines, "\n")
+}
+
+func manifestLine(e: Copied): Str {
+	return e.rel + "\t" + e.stamp + "\t" + join(e.imports, "|")
+}
+
+func depsOf(deps: Str): Str[dyn] {
+	mut Str[dyn] imports = []
+	if deps != "" {
+		imports = split(deps, "|")
+	}
+	return imports
+}
+
+func parseManifest(text: Str): hive.map.Map<Str, Copied> {
+	mut hive.map.Map<Str, Copied> found = hive.map.new()
+	for each line in split(text, "\n") {
+		if line is "{rel}\t{stamp}\t{deps}" {
+			hive.map.set(found, rel, Copied(rel, stamp, depsOf(deps)))
+		}
+	}
+	return found
+}
+
+func relOf(path: Str): Str {
+	if path is "./{rest}" {
+		return rest
+	}
+	return path
+}
+
+// Os arquivos (relativos à pasta do projeto) que `rel` importa; os de fora
+// da pasta ficam de fora da cópia.
+func localImports(text: Str, rel: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	for each i in analysis.importsOf(text, workspace.parentOf(rel)) {
+		path := relOf(i.path)
+		if !complete.startsWith(path, "../") {
+			append(found, path)
+		}
+	}
+	return found
+}
+
+proc put(copy: Str, text: Str): void {
+	_made := hive.file.makeDir(workspace.parentOf(copy))
+	_written := hive.file.write(copy, text)
+}
+
+// O que `syncOne` fez com um arquivo: o carimbo dele e o que ele importa —
+// ou `reused`, quando não mudou desde a última cópia e os imports são os que
+// o registro já tem.
+type Synced {
+	stamp:   Str
+	imports: Str[dyn]
+	reused:  Bool
+}
+
+// Um arquivo do programa na cópia: o texto do editor (se tem alterações por
+// salvar), ou o do disco, que só é relido e regravado se mudou de tamanho ou
+// de data (`previous` é o carimbo da última cópia). `Error` quando ele não
+// existe mais.
+
+proc syncOne(mirror: Str, root: Str, rel: Str, overlay: Result<Str, Bool>, previous: Str): Result<Synced, Bool> {
+	copy := mirror + "/" + rel
+	Str[dyn] none = []
+	if overlay is Result.Ok(text) {
+		put(copy, text)
+		return Result.Ok(Synced("overlay", localImports(text, rel), false))
+	}
+	path := workspace.joinPath(root, rel)
+	if native.stamp(path) is Result.Ok(current) {
+		if previous == current {
+			return Result.Ok(Synced(current, none, true))
+		}
+		mut Str[dyn] imports = []
+		if hive.file.read(path) is Result.Ok(content) {
+			put(copy, content)
+			if rel is "{stem}.hive" {
+				imports = localImports(content, rel)
+			}
+		}
+		return Result.Ok(Synced(current, imports, false))
+	}
+	return Result.Error(false)
+}
+
+proc remove(path: Str): void {
+	_gone := hive.file.delete(path)
+}
+
+// Os carimbos do registro anterior, por arquivo.
+func stampsOf(before: hive.map.Map<Str, Copied>): hive.map.Map<Str, Str> {
+	mut hive.map.Map<Str, Str> stamps = hive.map.new()
+	for each rel in hive.map.keys(before) {
+		if hive.map.get(before, rel) is Result.Ok(old) {
+			hive.map.set(stamps, rel, old.stamp)
+		}
+	}
+	return stamps
+}
+
+proc queue(pending: mut Str[dyn], files: Str[]): void {
+	for each f in files {
+		append(pending, f)
+	}
+}
+
+// Apaga da cópia os arquivos da lista que não fazem mais parte do programa.
+proc dropStale(mirror: Str, files: Str[], kept: hive.map.Map<Str, Bool>): void {
+	for each rel in files {
+		if !hive.map.has(kept, rel) {
+			remove(mirror + "/" + rel)
+		}
+	}
+}
+
+// Deixa em `mirror` só o programa que `target` importa, em cadeia, com o texto
+// não salvo dos documentos abertos. Um arquivo que não mudou desde a última
+// vez (mesmo tamanho e data) não é relido nem regravado; o que saiu do
+// programa, ou do disco, sai da cópia. Devolve `target` relativo à pasta, ou
+// "" quando ele está fora dela.
+proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
+	targetRel := inside(root, target)
+	if targetRel == "" {
+		return ""
+	}
+	manifest := mirror + "/.copiados"
+	read := hive.file.read(manifest)
+	first := read is Result.Error(_)
+	mut text := ""
+	if read is Result.Ok(saved) {
+		text = saved
+	}
+	before := parseManifest(text)
+	mut hive.map.Map<Str, Str> edited = hive.map.new()
+	for each o in overlays {
+		rel := inside(root, o.path)
+		if rel != "" {
+			hive.map.set(edited, rel, o.text)
+		}
+	}
+	mut Copied[dyn] now = []
+	mut hive.map.Map<Str, Bool> kept = hive.map.new()
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	stamps := stampsOf(before)
+	mut Str[dyn] pending = [targetRel]
+	for next := 0; next < len(pending) && len(now) < 5000; next++ {
+		mut rel := ""
+		if pending bounds next {
+			rel = pending[next]
+		}
+		if rel == "" || hive.map.has(seen, rel) {
+			continue
+		}
+		hive.map.set(seen, rel, true)
+		mut previous := ""
+		if hive.map.get(stamps, rel) is Result.Ok(stamp) {
+			previous = stamp
+		}
+		if syncOne(mirror, root, rel, hive.map.get(edited, rel), previous) is Result.Ok(synced) {
+			hive.map.set(kept, rel, true)
+			if synced.reused {
+				if hive.map.get(before, rel) is Result.Ok(old) {
+					append(now, old)
+					queue(pending, old.imports)
+				}
+			} else {
+				append(now, Copied(rel, synced.stamp, synced.imports))
+				queue(pending, synced.imports)
+			}
+		}
+	}
+	dropStale(mirror, hive.map.keys(before), kept)
+	// Sem registro (a primeira vez, ou uma cópia antiga): o que sobrar sai.
+	if first {
+		mut Str[dyn] copies = []
+		for each rel in search.allFiles(mirror, true, 20000) {
+			if rel is "{stem}.hive" || rel is "{stem}.go" {
+				append(copies, rel)
+			}
+		}
+		dropStale(mirror, copies, kept)
+	}
+	_made := hive.file.makeDir(mirror)
+	_saved := hive.file.write(manifest, manifestText(now))
+	return targetRel
+}
+
+// O check do Error Lens: confere a cópia do programa (ver `lensSync`), com o
+// texto ainda não salvo — assim o erro aparece enquanto se digita, sem salvar
+// nada. A saída volta com os caminhos do projeto.
+proc lensCheck(window: hive.syslink.Address, compiler: Str, root: Str, target: Str, packed: Str): void {
+	mirror := lensFolder()
+	mut rel := ""
+	if Overlays.decode(packed, hive.json.codec()) is Result.Ok(overlays) {
+		rel = lensSync(mirror, root, target, overlays.items)
+	}
+	mut output := ""
+	if rel != "" {
+		result := process.run(compilerPath(compiler), ["check", mirror + "/" + rel], "")
+		output = replaceAll(replaceAll(result.text, "\\", "/"), mirror + "/", workspace.normalize(root) + "/")
+	}
+	async window(model.Cmd.Post(model.Msg.LensDone(output)))
+}
+
+// Espera a digitação parar: só o último pedido (`n`) vira um check.
+proc lensTimer(window: hive.syslink.Address, n: Int): void {
+	hive.task.sleep(700)
+	async window(model.Cmd.Post(model.Msg.LensDue(n)))
+}
+
+test "a cópia do Error Lens tem só o programa, e só regrava o que mudou" {
+	root := "./lens-test"
+	mirror := "./lens-test-copia"
+	_made := hive.file.makeDir(root + "/lib")
+	_a := hive.file.write(root + "/main.hive", "import ./lib/util\n\nproc main(): void \{\n\techo util.dobro(2)\n}\n")
+	_b := hive.file.write(root + "/lib/util.hive", "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n")
+	_c := hive.file.write(root + "/solto.hive", "proc main(): void \{\n}\n")
+	Overlay[dyn] none = []
+	assert lensSync(mirror, root, root + "/main.hive", none) == "main.hive"
+	assert hive.file.exists(mirror + "/main.hive") && hive.file.exists(mirror + "/lib/util.hive")
+	assert !hive.file.exists(mirror + "/solto.hive")
+	if hive.file.read(mirror + "/.copiados") is Result.Ok(text) {
+		entries := parseManifest(text)
+		if hive.map.get(entries, "main.hive") is Result.Ok(main) {
+			assert main.imports == ["lib/util.hive"]
+		} else {
+			assert false
+		}
+	} else {
+		assert false
+	}
+	// A cópia não é regravada se o arquivo não mudou: um texto trocado só na cópia fica.
+	_touched := hive.file.write(mirror + "/lib/util.hive", "copia")
+	_again := lensSync(mirror, root, root + "/main.hive", none)
+	if hive.file.read(mirror + "/lib/util.hive") is Result.Ok(kept) {
+		assert kept == "copia"
+	}
+	// O texto não salvo que para de importar o módulo tira o módulo da cópia.
+	_edited := lensSync(mirror, root, root + "/main.hive", [Overlay(root + "/main.hive", "proc main(): void \{\n}\n")])
+	assert !hive.file.exists(mirror + "/lib/util.hive")
+	if hive.file.read(mirror + "/main.hive") is Result.Ok(copied) {
+		assert copied == "proc main(): void \{\n}\n"
+	}
+	// Voltou a ser o do disco: é copiado de novo.
+	_back := lensSync(mirror, root, root + "/main.hive", none)
+	assert hive.file.exists(mirror + "/lib/util.hive")
+	assert lensSync(mirror, root, "C:/fora/main.hive", none) == ""
+}
+
+test "um caminho relativo à pasta do projeto" {
+	assert inside("C:/p", "C:/p/lib/a.hive") == "lib/a.hive"
+	assert inside("C:/p/", "C:/p/a.hive") == "a.hive"
+	assert inside("C:/p", "C:/outra/a.hive") == ""
 }

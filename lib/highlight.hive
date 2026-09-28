@@ -79,6 +79,118 @@ func span(cls: Str, text: Str): Str {
 	return "<span class=\"{cls}\">{escape(text)}</span>"
 }
 
+// Pequenas utilidades de texto que os outros módulos usam dentro de laços.
+func has(text: Str, part: Str): Bool {
+	return indexOf(text, part) is Result.Ok(_)
+}
+
+// Onde `part` aparece em `text`, ou -1.
+func position(text: Str, part: Str): Int {
+	if indexOf(text, part) is Result.Ok(at) {
+		return at
+	}
+	return -1
+}
+
+func joined(parts: Str[], separator: Str): Str {
+	return join(parts, separator)
+}
+
+func tagged(html: Str, tag: Str): Str {
+	return replaceAll(html, tag, "<span class=\"td\">" + tag + "</span>")
+}
+
+// Um comentário, com TODO, FIXME, HACK e XXX em destaque.
+func commentSpan(text: Str): Str {
+	html := tagged(tagged(tagged(tagged(escape(text), "TODO"), "FIXME"), "HACK"), "XXX")
+	return "<span class=\"tc\">" + html + "</span>"
+}
+
+func charOf(chars: Str[], i: Int): Str {
+	if chars bounds i {
+		return chars[i]
+	}
+	return ""
+}
+
+// Onde termina o texto entre aspas cujo conteúdo começa em `from`.
+func quotedEnd(chars: Str[], from: Int): Int {
+	mut j := from
+	for ; j < len(chars); j++ {
+		c := charOf(chars, j)
+		if c == "\\" {
+			j++
+		} else if c == "\"" {
+			return j + 1
+		}
+	}
+	return j
+}
+
+// O primeiro `stop` a partir de `from`; com `past`, a posição logo depois dele.
+func untilChar(chars: Str[], from: Int, stop: Str, past: Bool): Int {
+	for j := from; j < len(chars); j++ {
+		if charOf(chars, j) == stop {
+			if past {
+				return j + 1
+			}
+			return j
+		}
+	}
+	return len(chars)
+}
+
+func identEnd(chars: Str[], from: Int): Int {
+	for j := from; j < len(chars); j++ {
+		if !isIdent(charOf(chars, j)) {
+			return j
+		}
+	}
+	return len(chars)
+}
+
+// Um número do Hive (com `.` e `_`) ou do JSON (com expoente e sinal).
+func numberEnd(chars: Str[], from: Int, json: Bool): Int {
+	for j := from; j < len(chars); j++ {
+		d := charOf(chars, j)
+		mut part := isDigit(d) || d == "."
+		if json {
+			part = part || d == "e" || d == "E" || d == "+" || d == "-"
+		} else {
+			part = part || d == "_"
+		}
+		if !part {
+			return j
+		}
+	}
+	return len(chars)
+}
+
+// Onde termina o token do Hive que começa em `i`.
+func tokenEnd(chars: Str[], i: Int): Int {
+	c := charOf(chars, i)
+	after := charOf(chars, i + 1)
+	if c == "/" && after == "/" {
+		return untilChar(chars, i + 1, "\n", false)
+	}
+	if c == "\"" {
+		return quotedEnd(chars, i + 1)
+	}
+	if c == "`" {
+		return untilChar(chars, i + 1, "`", true)
+	}
+	if c == "#" && isUpper(after) {
+		return identEnd(chars, i + 1)
+	}
+	if isDigit(c) {
+		return numberEnd(chars, i + 1, false)
+	}
+	if isIdentStart(c) {
+		return identEnd(chars, i + 1)
+	}
+	return i + 1
+}
+
 // O primeiro caractere que não é espaço a partir de `from`.
 func nextVisible(chars: Str[], from: Int): Str {
 	for k := from; k < len(chars); k++ {
@@ -98,74 +210,18 @@ func highlight(text: Str): Str {
 	mut Str[dyn] out = []
 	mut i := 0
 	for ; i < total; {
-		mut c := ""
-		if chars bounds i {
-			c = chars[i]
-		}
-		mut after := ""
-		ahead := i + 1
-		if chars bounds ahead {
-			after = chars[ahead]
-		}
-		mut j := i + 1
+		c := charOf(chars, i)
+		after := charOf(chars, i + 1)
+		j := tokenEnd(chars, i)
 		if c == "/" && after == "/" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "\n" {
-						break
-					}
-				}
-			}
-			append(out, span("tc", piece(chars, i, j)))
-		} else if c == "\"" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "\\" {
-						j++
-					} else if chars[j] == "\"" {
-						j++
-						break
-					}
-				}
-			}
-			append(out, span("ts", piece(chars, i, j)))
-		} else if c == "`" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "`" {
-						j++
-						break
-					}
-				}
-			}
+			append(out, commentSpan(piece(chars, i, j)))
+		} else if c == "\"" || c == "`" {
 			append(out, span("ts", piece(chars, i, j)))
 		} else if c == "#" && isUpper(after) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if !isIdent(chars[j]) {
-						break
-					}
-				}
-			}
 			append(out, span("ta", piece(chars, i, j)))
 		} else if isDigit(c) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					d := chars[j]
-					if !(isDigit(d) || d == "." || d == "_") {
-						break
-					}
-				}
-			}
 			append(out, span("tn", piece(chars, i, j)))
 		} else if isIdentStart(c) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if !isIdent(chars[j]) {
-						break
-					}
-				}
-			}
 			word := piece(chars, i, j)
 			append(out, span(wordClass(word, nextVisible(chars, j)), word))
 		} else {
@@ -185,10 +241,14 @@ type HlLine {
 	carry: Int
 }
 
-// O realce de um texto, uma entrada por linha.
+// O que o programa guarda do realce de um texto: quantas linhas ele tem e as
+// linhas que terminam com um texto aberto (`open`, em pares linha, carry, em
+// ordem) — quase sempre nenhuma. O HTML das linhas não fica guardado: sai na
+// hora para as que mudaram (`rehighlight`) ou para o texto todo (`htmlLines`),
+// e o documento fica leve de copiar mesmo com centenas de milhares de linhas.
 type Highlighted {
-	lines: Str[dyn]
-	carry: Int[dyn]
+	count: Int
+	open:  Int[dyn]
 }
 
 // O que mudou no realce: a partir da linha `from`, sai `remove` e entra `lines`.
@@ -278,27 +338,128 @@ func leftOpen(line: Str): Int {
 	return open
 }
 
-func highlightText(text: Str, colored: Bool): Highlighted {
-	mut Str[dyn] lines = []
-	mut Int[dyn] carry = []
-	mut open := 0
-	for each line in split(text, "\n") {
-		if colored {
-			done := highlightLine(line, open)
-			append(lines, done.html)
-			append(carry, done.carry)
-			open = done.carry
+// Uma linha de JSON: chaves, textos, números e true/false/null.
+func jsonLine(line: Str): Str {
+	chars := split(line, "")
+	total := len(chars)
+	mut Str[dyn] out = []
+	mut i := 0
+	for ; i < total; {
+		c := charOf(chars, i)
+		after := charOf(chars, i + 1)
+		if c == "\"" {
+			j := quotedEnd(chars, i + 1)
+			mut cls := "ts"
+			if nextVisible(chars, j) == ":" {
+				cls = "tt"
+			}
+			append(out, span(cls, piece(chars, i, j)))
+			i = j
+		} else if isDigit(c) || (c == "-" && isDigit(after)) {
+			j := numberEnd(chars, i + 1, true)
+			append(out, span("tn", piece(chars, i, j)))
+			i = j
+		} else if isIdentStart(c) {
+			j := identEnd(chars, i + 1)
+			word := piece(chars, i, j)
+			if word == "true" || word == "false" || word == "null" {
+				append(out, span("tb", word))
+			} else {
+				append(out, escape(word))
+			}
+			i = j
 		} else {
-			append(lines, escape(line))
-			append(carry, 0)
+			append(out, escape(c))
+			i++
 		}
 	}
-	return Highlighted(lines, carry)
+	return join(out, "")
+}
+
+// Uma linha sem o realce do Hive: JSON, ou só texto.
+func plainLine(line: Str, lang: Str): Str {
+	if lang == "json" {
+		return jsonLine(line)
+	}
+	return escape(line)
+}
+
+// O texto que a linha seguinte herda, sem montar o HTML desta.
+func carryAfter(line: Str, carry: Int): Int {
+	mut rest := line
+	if carry != 0 {
+		chars := split(line, "")
+		at := closingAt(chars, carry)
+		if at < 0 {
+			return carry
+		}
+		rest = piece(chars, at + 1, len(chars))
+	}
+	return leftOpen(rest)
+}
+
+// O texto aberto no fim da linha `line` (a partir de 0; -1 é antes da primeira).
+func carryAt(h: Highlighted, line: Int): Int {
+	mut low := 0
+	mut high := len(h.open) / 2 - 1
+	for ; low <= high; {
+		mid := (low + high) / 2
+		at := mid * 2
+		next := at + 1
+		if h.open bounds at && h.open bounds next {
+			found := h.open[at]
+			if found == line {
+				return h.open[next]
+			} else if found < line {
+				low = mid + 1
+			} else {
+				high = mid - 1
+			}
+		} else {
+			return 0
+		}
+	}
+	return 0
+}
+
+func highlightText(text: Str, lang: Str): Highlighted {
+	lines := split(text, "\n")
+	mut Int[dyn] open = []
+	if lang == "hive" {
+		mut carry := 0
+		for i := 0; i < len(lines); i++ {
+			if lines bounds i {
+				carry = carryAfter(lines[i], carry)
+				if carry != 0 {
+					append(open, i)
+					append(open, carry)
+				}
+			}
+		}
+	}
+	return Highlighted(len(lines), open)
+}
+
+// O HTML de todas as linhas de um texto (ao abrir, ou quando a página pede tudo).
+func htmlLines(text: Str, lang: Str): Str[dyn] {
+	mut Str[dyn] out = []
+	mut carry := 0
+	for each line in split(text, "\n") {
+		if lang == "hive" {
+			done := highlightLine(line, carry)
+			append(out, done.html)
+			carry = done.carry
+		} else {
+			append(out, plainLine(line, lang))
+		}
+	}
+	return out
 }
 
 // Refaz o realce só das linhas que mudaram entre `before` e `after`, e segue
-// adiante enquanto um texto entre crases aberto ou fechado mudar o que vem depois.
-func rehighlight(old: Highlighted, before: Str, after: Str, colored: Bool): Rehighlight {
+// adiante enquanto um texto entre crases ou aspas aberto ou fechado mudar o que
+// vem depois.
+func rehighlight(old: Highlighted, before: Str, after: Str, lang: Str): Rehighlight {
 	oldLines := split(before, "\n")
 	newLines := split(after, "\n")
 	oldCount := len(oldLines)
@@ -321,11 +482,7 @@ func rehighlight(old: Highlighted, before: Str, after: Str, colored: Bool): Rehi
 			}
 		}
 	}
-	mut open := 0
-	back := prefix - 1
-	if old.carry bounds back {
-		open = old.carry[back]
-	}
+	mut open := carryAt(old, prefix - 1)
 	mut Str[dyn] changed = []
 	mut Str[dyn] changedSource = []
 	mut Int[dyn] changedCarry = []
@@ -334,25 +491,20 @@ func rehighlight(old: Highlighted, before: Str, after: Str, colored: Bool): Rehi
 	for i := prefix; i < newEnd; i++ {
 		if newLines bounds i {
 			append(changedSource, newLines[i])
-			if colored {
+			if lang == "hive" {
 				done := highlightLine(newLines[i], open)
 				append(changed, done.html)
 				append(changedCarry, done.carry)
 				open = done.carry
 			} else {
-				append(changed, escape(newLines[i]))
+				append(changed, plainLine(newLines[i], lang))
 				append(changedCarry, 0)
 			}
 		}
 	}
 	// Se o estado no fim do trecho mudou, as linhas seguintes também mudam.
-	for ; colored && newEnd < newCount && oldEnd < oldCount; {
-		mut was := 0
-		prev := oldEnd - 1
-		if old.carry bounds prev {
-			was = old.carry[prev]
-		}
-		if was == open {
+	for ; lang == "hive" && newEnd < newCount && oldEnd < oldCount; {
+		if carryAt(old, oldEnd - 1) == open {
 			break
 		}
 		if newLines bounds newEnd {
@@ -365,27 +517,57 @@ func rehighlight(old: Highlighted, before: Str, after: Str, colored: Bool): Rehi
 		newEnd++
 		oldEnd++
 	}
-	mut Str[dyn] lines = []
-	mut Int[dyn] carry = []
-	for i := 0; i < prefix; i++ {
-		if old.lines bounds i && old.carry bounds i {
-			append(lines, old.lines[i])
-			append(carry, old.carry[i])
+	// As linhas abertas: as de antes do trecho, as do trecho e as de depois,
+	// deslocadas pelo que o trecho cresceu ou encolheu.
+	mut Int[dyn] kept = []
+	shift := newEnd - oldEnd
+	for k := 0; k + 1 < len(old.open); k = k + 2 {
+		next := k + 1
+		if old.open bounds k && old.open bounds next {
+			if old.open[k] < prefix {
+				append(kept, old.open[k])
+				append(kept, old.open[next])
+			}
 		}
 	}
-	for i := 0; i < len(changed); i++ {
+	for i := 0; i < len(changedCarry); i++ {
 		if changedCarry bounds i {
-			append(lines, changed[i])
-			append(carry, changedCarry[i])
+			if changedCarry[i] != 0 {
+				append(kept, prefix + i)
+				append(kept, changedCarry[i])
+			}
 		}
 	}
-	for i := oldEnd; i < oldCount; i++ {
-		if old.lines bounds i && old.carry bounds i {
-			append(lines, old.lines[i])
-			append(carry, old.carry[i])
+	for k := 0; k + 1 < len(old.open); k = k + 2 {
+		next := k + 1
+		if old.open bounds k && old.open bounds next {
+			if old.open[k] >= oldEnd {
+				append(kept, old.open[k] + shift)
+				append(kept, old.open[next])
+			}
 		}
 	}
-	return Rehighlight(Highlighted(lines, carry), Patch(prefix, oldEnd - prefix, changed, changedSource))
+	return Rehighlight(Highlighted(newCount, kept), Patch(prefix, oldEnd - prefix, changed, changedSource))
+}
+
+// O HTML de `lines` com o patch aplicado (para os testes conferirem).
+// O texto das linhas depois do patch, uma por linha.
+func patched(lines: Str[], patch: Patch): Str {
+	mut Str[dyn] out = []
+	for i := 0; i < patch.from && i < len(lines); i++ {
+		if lines bounds i {
+			append(out, lines[i])
+		}
+	}
+	for each line in patch.lines {
+		append(out, line)
+	}
+	for i := patch.from + patch.remove; i < len(lines); i++ {
+		if lines bounds i {
+			append(out, lines[i])
+		}
+	}
+	return join(out, "\n")
 }
 
 test "realce por linha carrega o texto entre crases" {
@@ -407,20 +589,30 @@ test "realce por linha carrega o texto entre crases" {
 test "rehighlight muda só as linhas editadas e devolve o patch" {
 	before := "proc a(): void \{\n\techo 1\n}\n"
 	after := "proc a(): void \{\n\techo 2\n\techo 3\n}\n"
-	old := highlightText(before, true)
-	done := rehighlight(old, before, after, true)
+	old := highlightText(before, "hive")
+	done := rehighlight(old, before, after, "hive")
 	assert done.patch.from == 1
 	assert done.patch.remove == 1
 	assert len(done.patch.lines) == 2
-	assert done.result.lines == highlightText(after, true).lines
+	assert patched(htmlLines(before, "hive"), done.patch) == join(htmlLines(after, "hive"), "\n")
+	assert done.result == highlightText(after, "hive")
 	opening := "a\nb := `x\nc\nd` + 1\n"
-	closed := highlightText(opening, true)
-	edited := rehighlight(closed, opening, replaceAll(opening, "`x", "x"), true)
-	assert edited.result.lines == highlightText(replaceAll(opening, "`x", "x"), true).lines
+	closed := highlightText(opening, "hive")
+	assert closed.open == [1, 1, 2, 1] && carryAt(closed, 2) == 1 && carryAt(closed, 3) == 0 && carryAt(closed, -1) == 0
+	closedAfter := replaceAll(opening, "`x", "x")
+	edited := rehighlight(closed, opening, closedAfter, "hive")
+	assert patched(htmlLines(opening, "hive"), edited.patch) == join(htmlLines(closedAfter, "hive"), "\n")
+	assert edited.result == highlightText(closedAfter, "hive")
 	quoted := "a\nb := \"x\nc\nd\" + 1\n"
-	quotedBefore := highlightText(quoted, true)
-	unquoted := rehighlight(quotedBefore, quoted, replaceAll(quoted, "\"x", "x"), true)
-	assert unquoted.result.lines == highlightText(replaceAll(quoted, "\"x", "x"), true).lines
+	quotedAfter := replaceAll(quoted, "\"x", "x")
+	unquoted := rehighlight(highlightText(quoted, "hive"), quoted, quotedAfter, "hive")
+	assert patched(htmlLines(quoted, "hive"), unquoted.patch) == join(htmlLines(quotedAfter, "hive"), "\n")
+	assert unquoted.result == highlightText(quotedAfter, "hive")
+	// Linhas abertas depois do trecho são deslocadas quando ele cresce.
+	shifted := "x := 1\nb := `y\nz`\n"
+	grown := "x := 1\nnova\noutra\nb := `y\nz`\n"
+	moved := rehighlight(highlightText(shifted, "hive"), shifted, grown, "hive")
+	assert moved.result == highlightText(grown, "hive") && moved.result.open == [3, 1]
 }
 
 test "palavras-chave, tipos, textos e comentários ganham classes" {
@@ -431,6 +623,17 @@ test "palavras-chave, tipos, textos e comentários ganham classes" {
 	assert indexOf(html, "<span class=\"tc\">// oi</span>") is Result.Ok(_)
 	assert indexOf(html, "<span class=\"ts\">&quot;a&lt;b&quot;</span>") is Result.Ok(_)
 	assert indexOf(html, "<span class=\"tn\">1</span>") is Result.Ok(_)
+}
+
+test "JSON ganha cores de chave, texto, número e literal; TODO se destaca no comentário" {
+	line := jsonLine("  \"nome\": \"Ada\", \"n\": -3.5, \"ok\": true, \"x\": null")
+	assert indexOf(line, "<span class=\"tt\">&quot;nome&quot;</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"ts\">&quot;Ada&quot;</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"tn\">-3.5</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"tb\">true</span>") is Result.Ok(_)
+	assert htmlLines("\{\"a\": 1}", "json") == ["\{<span class=\"tt\">&quot;a&quot;</span>: <span class=\"tn\">1</span>}"]
+	assert htmlLines("x <y>", "") == ["x &lt;y&gt;"]
+	assert indexOf(highlight("x := 1 // TODO: isto"), "<span class=\"tc\">// <span class=\"td\">TODO</span>: isto</span>") is Result.Ok(_)
 }
 
 test "tipos, átomos e o módulo hive" {

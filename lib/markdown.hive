@@ -171,12 +171,46 @@ func indented(line: Str): Bool {
 	return line is " {rest}" || line is "\t{rest}"
 }
 
+// Uma tabela: o HTML e a linha logo depois dela.
+type Block {
+	html: Str
+	next: Int
+}
+
+func rowHtml(row: Str, tag: Str): Str {
+	mut Str[dyn] out = []
+	for each cell in cells(row) {
+		append(out, "<" + tag + ">" + inline(cell) + "</" + tag + ">")
+	}
+	return join(out, "")
+}
+
+// A tabela que começa no cabeçalho `head`; as linhas do corpo vêm de `from`
+// (depois da linha de separação) até a primeira que não é de tabela.
+func tableAt(lines: Str[], head: Str, from: Int): Block {
+	mut Str[dyn] table = ["<table><thead><tr>", rowHtml(head, "th"), "</tr></thead><tbody>"]
+	mut i := from
+	for ; i < len(lines); i++ {
+		mut row := ""
+		if lines bounds i {
+			row = lines[i]
+		}
+		if row is "{a}|{b}" {
+			append(table, "<tr>" + rowHtml(row, "td") + "</tr>")
+		} else {
+			break
+		}
+	}
+	append(table, "</tbody></table>")
+	return Block(join(table, ""), i)
+}
+
 func render(text: Str): Str {
 	lines := split(replaceAll(text, "\r", ""), "\n")
 	mut Str[dyn] out = []
 	mut Str[dyn] paragraph = []
 	mut list := ""
-	mut pending := ""
+	mut Str[dyn] pending = []
 	mut hasItem := false
 	mut fence := false
 	mut fenceLang := ""
@@ -191,7 +225,7 @@ func render(text: Str): Str {
 
 		if fence {
 			if trimSpaces(line) is "```{rest}" {
-				body := join(code, "\n")
+				body := highlight.joined(code, "\n")
 				if fenceLang == "hive" {
 					append(out, "<pre class=\"md-code\"><code>" + highlight.highlight(body) + "</code></pre>")
 				} else {
@@ -213,20 +247,21 @@ func render(text: Str): Str {
 
 		// Uma linha indentada logo depois de um item continua esse item.
 		if hasItem && !blank && !isItem && indented(line) {
-			pending = pending + " " + trimBoth(line)
+			append(pending, trimBoth(line))
 			continue
 		}
 
 		// Fecha o que estiver aberto quando a linha não continua aquilo.
 		if len(paragraph) > 0 && (blank || isItem || line is "#{rest}" || line is ">{rest}" || line is "```{rest}" || line is "|{rest}" || isRule(line)) {
-			append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
+			append(out, "<p>" + inline(highlight.joined(paragraph, " ")) + "</p>")
 			Str[dyn] none = []
 			paragraph = none
 		}
 		if hasItem {
-			append(out, itemHtml(list, pending))
+			append(out, itemHtml(list, highlight.joined(pending, " ")))
 			hasItem = false
-			pending = ""
+			Str[dyn] none = []
+			pending = none
 		}
 		if list != "" && !isItem {
 			append(out, "</" + list + ">")
@@ -266,7 +301,7 @@ func render(text: Str): Str {
 				append(out, "<ul>")
 				list = "ul"
 			}
-			pending = content
+			pending = [content]
 			hasItem = true
 			continue
 		}
@@ -278,7 +313,7 @@ func render(text: Str): Str {
 				append(out, "<ol>")
 				list = "ol"
 			}
-			pending = content
+			pending = [content]
 			hasItem = true
 			continue
 		}
@@ -287,45 +322,24 @@ func render(text: Str): Str {
 			next = lines[i]
 		}
 		if line is "{lead}|{rest}" && isTableSeparator(next) {
-			i++
-			mut Str[dyn] table = ["<table><thead><tr>"]
-			for each cell in cells(line) {
-				append(table, "<th>" + inline(cell) + "</th>")
-			}
-			append(table, "</tr></thead><tbody>")
-			for ; i < len(lines); {
-				mut row := ""
-				if lines bounds i {
-					row = lines[i]
-				}
-				if row is "{a}|{b}" {
-					append(table, "<tr>")
-				} else {
-					break
-				}
-				for each cell in cells(row) {
-					append(table, "<td>" + inline(cell) + "</td>")
-				}
-				append(table, "</tr>")
-				i++
-			}
-			append(table, "</tbody></table>")
-			append(out, join(table, ""))
+			read := tableAt(lines, line, i + 1)
+			append(out, read.html)
+			i = read.next
 			continue
 		}
 		append(paragraph, trimBoth(line))
 	}
 	if len(paragraph) > 0 {
-		append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
+		append(out, "<p>" + inline(highlight.joined(paragraph, " ")) + "</p>")
 	}
 	if hasItem {
-		append(out, itemHtml(list, pending))
+		append(out, itemHtml(list, highlight.joined(pending, " ")))
 	}
 	if list != "" {
 		append(out, "</" + list + ">")
 	}
 	if fence {
-		append(out, "<pre class=\"md-code\"><code>" + esc(join(code, "\n")) + "</code></pre>")
+		append(out, "<pre class=\"md-code\"><code>" + esc(highlight.joined(code, "\n")) + "</code></pre>")
 	}
 	return join(out, "\n")
 }

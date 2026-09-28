@@ -49,7 +49,7 @@ func members(module: Str): Str[dyn] {
 			"socketConnect", "socketServe", "socketSend", "socketReceive", "socketReceiveLine", "socketPeer", "socketClose",
 			"resolve", "localAddress", "urlEncode", "queryParamsCodec", "HttpRequest", "HttpResponse", "HttpError", "WsConnection", "WsError"]
 	} else if module == "syslink" {
-		return ["spawn", "register", "at", "on", "self", "answer", "monitor", "stop", "listen", "node", "peers", "Address", "Envelope", "SyslinkError"]
+		return ["spawn", "spawnAddressed", "register", "at", "on", "monitor", "stop", "listen", "node", "peers", "Address", "SyslinkError"]
 	} else if module == "task" {
 		return ["sleep", "TimeoutError"]
 	} else if module == "time" {
@@ -76,7 +76,41 @@ func memberKind(word: Str): Str {
 	return "func"
 }
 
+// Os últimos (no máximo) `size` caracteres antes de `caret`, e onde eles começam.
+type Window {
+	text:  Str
+	start: Int
+}
+
+func before(text: Str, caret: Int, size: Int): Window {
+	if caret <= size {
+		return Window(take(text, caret), 0)
+	}
+	from := caret - size
+	return Window(take(skip(text, from), size), from)
+}
+
+// O texto perto do cursor (`radius` caracteres para cada lado), para ler os
+// nomes de um arquivo grande sem passar por ele todo.
+func around(text: Str, caret: Int, radius: Int): Str {
+	if len(text) <= radius * 2 {
+		return text
+	}
+	mut from := caret - radius
+	if from < 0 {
+		from = 0
+	}
+	return take(skip(text, from), radius * 2)
+}
+
 func context(text: Str, caret: Int): Context {
+	// Um nome, com o que vem antes do ponto, cabe folgado em 200 caracteres.
+	window := before(text, caret, 200)
+	found := contextIn(window.text, len(window.text))
+	return Context(found.prefix, found.qualifier, found.start + window.start)
+}
+
+func contextIn(text: Str, caret: Int): Context {
 	chars := split(text, "")
 	mut i := caret - 1
 	for ; chars bounds i; i-- {
@@ -102,6 +136,19 @@ func context(text: Str, caret: Int): Context {
 	return Context(prefix, qualifier, start)
 }
 
+test "o contexto do cursor só lê o fim do texto antes dele" {
+	mut long := ""
+	for i := 0; i < 300; i++ {
+		long = long + "x "
+	}
+	text := long + "hive.file.re"
+	ctx := context(text, len(text))
+	assert ctx.prefix == "re" && ctx.qualifier == "hive.file" && ctx.start == len(text) - 2
+	short := context("ab cd", 5)
+	assert short.prefix == "cd" && short.start == 3
+	assert around("abcdef", 3, 10) == "abcdef" && around("abcdefghij", 5, 2) == "defg"
+}
+
 func startsWith(word: Str, prefix: Str): Bool {
 	if prefix == "" {
 		return true
@@ -123,27 +170,47 @@ func wordsIn(text: Str, prefix: Str, limit: Int): Str[dyn] {
 	mut Str[dyn] found = []
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	for each line in split(text, "\n") {
-		if indexOf(line, prefix) is Result.Ok(_) {
-			mut Str[dyn] current = []
-			for each c in split(line + " ", "") {
-				if highlight.isIdent(c) {
-					append(current, c)
-				} else if len(current) > 0 {
-					word := join(current, "")
-					if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
-						hive.map.set(seen, word, true)
-						append(found, word)
-						if len(found) >= limit {
-							return found
-						}
-					}
-					Str[dyn] reset = []
-					current = reset
-				}
-			}
+		if len(found) >= limit {
+			break
+		}
+		if highlight.has(line, prefix) {
+			wordsOf(line, prefix, limit, found, seen)
 		}
 	}
 	return found
+}
+
+// Os nomes de uma linha que começam com `prefix`, sem repetir, até `limit`.
+proc wordsOf(line: Str, prefix: Str, limit: Int, found: mut Str[dyn], seen: mut hive.map.Map<Str, Bool>): void {
+	for each word in namesIn(line) {
+		if len(found) >= limit {
+			return
+		}
+		if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
+			hive.map.set(seen, word, true)
+			append(found, word)
+		}
+	}
+}
+
+// Os nomes de uma linha, na ordem.
+func namesIn(line: Str): Str[dyn] {
+	chars := split(line, "")
+	mut Str[dyn] names = []
+	mut start := -1
+	for i := 0; i <= len(chars); i++ {
+		mut ident := false
+		if chars bounds i {
+			ident = highlight.isIdent(chars[i])
+		}
+		if ident && start < 0 {
+			start = i
+		} else if !ident && start >= 0 {
+			append(names, highlight.piece(chars, start, i))
+			start = -1
+		}
+	}
+	return names
 }
 
 // O que a linguagem oferece no ponto do cursor, antes dos nomes do arquivo.
@@ -203,7 +270,9 @@ func suggest(text: Str, caret: Int, limit: Int): model.Suggestion[dyn] {
 	if ctx.qualifier != "" {
 		return found
 	}
-	for each symbol in analysis.outline(text) {
+	// Num arquivo grande, os nomes vêm do trecho em volta do cursor.
+	nearby := around(text, caret, 200000)
+	for each symbol in analysis.outline(nearby) {
 		if len(found) >= limit {
 			return found
 		}
@@ -215,7 +284,7 @@ func suggest(text: Str, caret: Int, limit: Int): model.Suggestion[dyn] {
 	if ctx.prefix == "" {
 		return found
 	}
-	for each w in wordsIn(text, ctx.prefix, limit + len(found)) {
+	for each w in wordsIn(nearby, ctx.prefix, limit + len(found)) {
 		if len(found) >= limit {
 			return found
 		}

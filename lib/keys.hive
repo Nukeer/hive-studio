@@ -33,6 +33,7 @@ func actions(): Action[dyn] {
 		Action("explorer", "Explorador", "Ctrl+Shift+E"),
 		Action("git", "Controle de código (git)", "Ctrl+Shift+G"),
 		Action("outline", "Estrutura", "Ctrl+Shift+O"),
+		Action("todo", "TODO do projeto", ""),
 		Action("settings", "Configurações", "Ctrl+,"),
 		Action("find", "Buscar no arquivo", "Ctrl+F"),
 		Action("searchProject", "Buscar no projeto", "Ctrl+Shift+F"),

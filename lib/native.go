@@ -149,6 +149,32 @@ func environment() []string {
 // Run executa um programa até o fim, sem janela de console. A resposta abre
 // com o código de saída numa linha própria, seguido de tudo o que o programa
 // escreveu (saída e erro juntos). Um erro só quando nem deu para começar.
+// Stamp diz o tamanho e a hora da última mudança de um arquivo ("tamanho:ns"),
+// para saber se ele mudou sem precisar lê-lo.
+func Stamp(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10), nil
+}
+
+// IsDir diz se o caminho é uma pasta, sem precisar listá-la.
+func IsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra
+// por outra: o texto continua com o mesmo número de caracteres.
+func Lower(text string) string {
+	return strings.ToLower(text)
+}
+
+func Upper(text string) string {
+	return strings.ToUpper(text)
+}
+
 func Run(name string, args []string, dir string) (string, error) {
 	cmd := exec.Command(name, args...)
 	if dir != "" {

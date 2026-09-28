@@ -1,0 +1,324 @@
+// O leitor de JSON: o documento como uma árvore que abre e fecha, e onde está
+// o erro quando ele não é um JSON válido. Lido à mão, caractere a caractere —
+// `hive.json` decodifica por um tipo declarado, e aqui o formato é qualquer um.
+
+import ./highlight
+
+// Um valor lido: o HTML dele, onde a leitura parou e, se deu errado, por quê
+// (`error`) e em que caractere (`at`).
+type Node {
+	html:  Str
+	at:    Int
+	error: Str
+	count: Int
+}
+
+// O erro de um JSON inválido, em linha e coluna (contadas a partir de 1).
+type Problem {
+	line:    Int
+	column:  Int
+	message: Str
+}
+
+// O que o leitor mostra: a árvore (ou o aviso do erro) e o erro, se houver
+// (`problem.line` 0: nenhum).
+type View {
+	html:    Str
+	problem: Problem
+}
+
+// Os textos da tela, no idioma dela.
+type Labels {
+	invalid: Str
+	line:    Str
+	column:  Str
+	more:    Str
+}
+
+func charAt(chars: Str[], i: Int): Str {
+	if chars bounds i {
+		return chars[i]
+	}
+	return ""
+}
+
+func skipSpace(chars: Str[], from: Int): Int {
+	mut i := from
+	for ; i < len(chars); i++ {
+		c := charAt(chars, i)
+		if c != " " && c != "\t" && c != "\n" && c != "\r" {
+			return i
+		}
+	}
+	return i
+}
+
+func fail(at: Int, message: Str): Node {
+	return Node("", at, message, 0)
+}
+
+func leaf(html: Str, at: Int): Node {
+	return Node(html, at, "", 1)
+}
+
+// Até 2 níveis começam abertos; os mais fundos, fechados.
+func openAttr(depth: Int): Str {
+	if depth < 2 {
+		return " open"
+	}
+	return ""
+}
+
+func stringAt(chars: Str[], from: Int): Node {
+	mut j := from + 1
+	for ; j < len(chars); j++ {
+		c := charAt(chars, j)
+		if c == "\\" {
+			j++
+		} else if c == "\"" {
+			return leaf(highlight.escape(highlight.piece(chars, from, j + 1)), j + 1)
+		} else if c == "\n" {
+			return fail(j, "texto sem as aspas de fechamento")
+		}
+	}
+	return fail(j, "texto sem as aspas de fechamento")
+}
+
+func isNumberChar(c: Str): Bool {
+	return highlight.isDigit(c) || c == "." || c == "e" || c == "E" || c == "+" || c == "-"
+}
+
+// `budget` é quantos valores ainda podem ser desenhados; passado dele, o resto
+// é lido (para achar erros) mas não entra na árvore.
+func value(chars: Str[], from: Int, depth: Int, budget: Int): Node {
+	i := skipSpace(chars, from)
+	c := charAt(chars, i)
+	if c == "\{" {
+		return object(chars, i, depth, budget)
+	} else if c == "[" {
+		return list(chars, i, depth, budget)
+	} else if c == "\"" {
+		read := stringAt(chars, i)
+		if read.error != "" {
+			return read
+		}
+		return leaf("<span class=\"ts\">" + read.html + "</span>", read.at)
+	} else if highlight.isDigit(c) || c == "-" {
+		mut j := i + 1
+		for ; j < len(chars); j++ {
+			if !isNumberChar(charAt(chars, j)) {
+				break
+			}
+		}
+		return leaf("<span class=\"tn\">" + highlight.escape(highlight.piece(chars, i, j)) + "</span>", j)
+	}
+	for each word in ["true", "false", "null"] {
+		end := i + len(word)
+		if highlight.piece(chars, i, end) == word {
+			return leaf("<span class=\"tb\">" + word + "</span>", end)
+		}
+	}
+	if c == "" {
+		return fail(i, "o JSON acabou antes de um valor")
+	}
+	return fail(i, "esperava um valor e achou '" + c + "'")
+}
+
+func more(): Str {
+	return "<div class=\"jr jmore\">…</div>"
+}
+
+func object(chars: Str[], from: Int, depth: Int, budget: Int): Node {
+	mut i := skipSpace(chars, from + 1)
+	if charAt(chars, i) == "}" {
+		return leaf("<span class=\"jp\">\{}</span>", i + 1)
+	}
+	mut Str[dyn] rows = []
+	mut used := 0
+	mut items := 0
+	mut cut := false
+	for ;; {
+		i = skipSpace(chars, i)
+		if charAt(chars, i) != "\"" {
+			return fail(i, "esperava o nome de uma chave, entre aspas")
+		}
+		key := stringAt(chars, i)
+		if key.error != "" {
+			return key
+		}
+		i = skipSpace(chars, key.at)
+		if charAt(chars, i) != ":" {
+			return fail(i, "esperava ':' depois da chave")
+		}
+		item := value(chars, i + 1, depth + 1, budget - used)
+		if item.error != "" {
+			return item
+		}
+		items++
+		if used < budget {
+			append(rows, "<div class=\"jr\"><span class=\"jk\">" + key.html + "</span>: " + item.html + "</div>")
+		} else if !cut {
+			append(rows, more())
+			cut = true
+		}
+		used = used + item.count
+		i = skipSpace(chars, item.at)
+		c := charAt(chars, i)
+		if c == "," {
+			i++
+		} else if c == "}" {
+			return Node("<details class=\"jo o\"" + openAttr(depth) + "><summary><span class=\"jp\">\{</span><span class=\"jn\">{items}</span></summary>" +
+				"<div class=\"jb\">" + highlight.joined(rows, "") + "</div><span class=\"jp\">}</span></details>", i + 1, "", used + 1)
+		} else {
+			return fail(i, "esperava ',' ou '}'")
+		}
+	}
+	return fail(i, "objeto sem fim")
+}
+
+func list(chars: Str[], from: Int, depth: Int, budget: Int): Node {
+	mut i := skipSpace(chars, from + 1)
+	if charAt(chars, i) == "]" {
+		return leaf("<span class=\"jp\">[]</span>", i + 1)
+	}
+	mut Str[dyn] rows = []
+	mut used := 0
+	mut items := 0
+	mut cut := false
+	for ;; {
+		item := value(chars, i, depth + 1, budget - used)
+		if item.error != "" {
+			return item
+		}
+		if used < budget {
+			append(rows, "<div class=\"jr\"><span class=\"ji\">{items}</span>" + item.html + "</div>")
+		} else if !cut {
+			append(rows, more())
+			cut = true
+		}
+		items++
+		used = used + item.count
+		i = skipSpace(chars, item.at)
+		c := charAt(chars, i)
+		if c == "," {
+			i++
+		} else if c == "]" {
+			return Node("<details class=\"jo a\"" + openAttr(depth) + "><summary><span class=\"jp\">[</span><span class=\"jn\">{items}</span></summary>" +
+				"<div class=\"jb\">" + highlight.joined(rows, "") + "</div><span class=\"jp\">]</span></details>", i + 1, "", used + 1)
+		} else {
+			return fail(i, "esperava ',' ou ']'")
+		}
+	}
+	return fail(i, "lista sem fim")
+}
+
+// O documento inteiro: um valor e, depois dele, só espaços.
+func read(text: Str, budget: Int): Node {
+	chars := split(text, "")
+	done := value(chars, 0, 0, budget)
+	if done.error != "" {
+		return done
+	}
+	rest := skipSpace(chars, done.at)
+	if rest < len(chars) {
+		return fail(rest, "sobrou texto depois do fim do JSON")
+	}
+	return done
+}
+
+func positionOf(text: Str, at: Int): Problem {
+	mut line := 1
+	mut column := 1
+	chars := split(text, "")
+	for i := 0; i < at && i < len(chars); i++ {
+		if charAt(chars, i) == "\n" {
+			line++
+			column = 1
+		} else {
+			column++
+		}
+	}
+	return Problem(line, column, "")
+}
+
+// O que está errado num JSON, ou Error(false) quando ele é válido.
+func problem(text: Str): Result<Problem, Bool> {
+	done := read(text, 0)
+	if done.error == "" {
+		return Result.Error(false)
+	}
+	mut where := positionOf(text, done.at)
+	where.message = done.error
+	return Result.Ok(where)
+}
+
+// A árvore (no máximo `budget` valores desenhados) ou o aviso de onde o JSON
+// quebrou — os dois de uma leitura só.
+func view(text: Str, budget: Int, labels: Labels): View {
+	none := Problem(0, 0, "")
+	if replaceAll(replaceAll(replaceAll(text, " ", ""), "\n", ""), "\r", "") == "" {
+		return View("<div class=\"jv\"></div>", none)
+	}
+	done := read(text, budget)
+	if done.error != "" {
+		mut where := positionOf(text, done.at)
+		where.message = done.error
+		return View("<div class=\"jv\"><div class=\"jerr\">" + highlight.escape(labels.invalid) + " — " + labels.line + " {where.line}, " + labels.column + " {where.column}: " +
+			highlight.escape(done.error) + "</div></div>", where)
+	}
+	mut note := ""
+	if done.count > budget {
+		note = "<div class=\"jnote\">" + highlight.escape(labels.more) + "</div>"
+	}
+	return View("<div class=\"jv\">" + note + done.html + "</div>", none)
+}
+
+func labelsForTest(): Labels {
+	return Labels("JSON inválido", "linha", "coluna", "mostrando só o começo")
+}
+
+test "um JSON vira uma árvore com chaves, textos, números e literais" {
+	html := view("\{\"nome\": \"Ada\", \"idade\": 36, \"ativo\": true, \"tags\": [\"a\", null], \"vazio\": \{}}", 1000, labelsForTest()).html
+	assert indexOf(html, "<span class=\"jk\">&quot;nome&quot;</span>: <span class=\"ts\">&quot;Ada&quot;</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tn\">36</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tb\">true</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tb\">null</span>") is Result.Ok(_)
+	assert indexOf(html, "<details class=\"jo o\" open>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"jn\">5</span>") is Result.Ok(_)
+	assert problem("[1, 2, -3.5e2]") is Result.Error(_)
+}
+
+test "um JSON inválido diz a linha, a coluna e o que faltou" {
+	if problem("\{\n  \"a\": 1,\n  \"b\" 2\n}") is Result.Ok(p) {
+		assert p.line == 3 && p.column == 7 && p.message == "esperava ':' depois da chave"
+	} else {
+		assert false
+	}
+	if problem("[1, 2") is Result.Ok(p) {
+		assert p.message == "o JSON acabou antes de um valor" || p.message == "esperava ',' ou ']'"
+	} else {
+		assert false
+	}
+	if problem("\{\"a\": 1} x") is Result.Ok(p) {
+		assert p.message == "sobrou texto depois do fim do JSON" && p.column == 10
+	} else {
+		assert false
+	}
+	broken := view("[1,", 1000, labelsForTest())
+	assert indexOf(broken.html, "JSON inválido — linha 1") is Result.Ok(_) && broken.problem.line == 1
+}
+
+test "um JSON grande desenha só até o limite, mas lê até o fim" {
+	mut Str[dyn] items = []
+	for i := 0; i < 50; i++ {
+		append(items, "{i}")
+	}
+	big := view("[" + join(items, ", ") + "]", 10, labelsForTest())
+	assert indexOf(big.html, "mostrando só o começo") is Result.Ok(_)
+	assert indexOf(big.html, "<span class=\"ji\">9</span>") is Result.Ok(_)
+	assert indexOf(big.html, "<span class=\"ji\">10</span>") is Result.Error(_)
+	assert indexOf(big.html, "<span class=\"jn\">50</span>") is Result.Ok(_)
+	assert big.problem.line == 0
+	late := view("[" + join(items, ", ") + ", x]", 10, labelsForTest())
+	assert late.problem.line == 1 && late.problem.message == "esperava um valor e achou 'x'"
+}

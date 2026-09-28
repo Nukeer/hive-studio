@@ -4,6 +4,8 @@ Uma IDE para [Hive](https://hive-lang.run), escrita em Hive.
 A janela é um Chromium (Edge, Chrome, Brave) em modo aplicativo, com perfil
 próprio — o "webview" — e toda a lógica roda no programa Hive.
 
+Precisa do `hivec` v0.2.9 ou mais novo.
+
 ```
 hivec run studio.hive [pasta]      # abre a pasta (padrão: a atual)
 hivec build studio.hive            # gera studio.exe (sem console no Windows)
@@ -66,6 +68,17 @@ hivec test studio.hive             # testes, com cobertura
   Preview** no canto do breadcrumb ou com `Ctrl+Shift+V`. Títulos, ênfase,
   listas (inclusive de tarefas), citações, tabelas, links, imagens e blocos de
   código (com realce quando a linguagem é `hive`).
+- **Error Lens**: o erro do compilador aparece na própria linha, em vermelho,
+  pouco depois de parar de digitar (sem salvar: o check roda numa cópia do
+  projeto com o texto não salvo) e a cada Check, Run, Test e Build. O erro de
+  um módulo importado vai para o arquivo e a linha dele; as funções caras do
+  último Analyze ficam em amarelo. Liga e desliga em Configurações → Editor.
+- **TODO do projeto**: um painel na barra lateral com os `TODO`, `FIXME`,
+  `HACK` e `XXX` dos comentários de todos os arquivos de texto da pasta, por
+  arquivo; o clique abre na linha. As marcas também se destacam no editor.
+- **Leitor de JSON**: `.json` ganha cores e abre como uma árvore que abre e
+  fecha (Editor · Dividir · Preview, como o Markdown); um JSON inválido diz a
+  linha, a coluna e o que faltou.
 - **Explorador em árvore** estilo VS Code, abas, breadcrumb, estrutura do
   arquivo, barra de status (Ln/Col, linguagem, tema). Com o foco nele (um
   clique, ou `:Ex` no modo Vim), `↑`/`↓` andam, `→`/`←` abrem e fecham pastas,
@@ -196,12 +209,14 @@ se existir, vence o compilador configurado.
 | `lib/theme.hive` | temas → variáveis CSS, ícones de arquivo |
 | `lib/settings.hive` | preferências em JSON |
 | `lib/workspace.hive` | caminhos, árvore, breadcrumb |
-| `lib/analysis.hive` | diagnósticos, estrutura, trecho numerado |
-| `lib/toolchain.hive` | roda `hivec` e devolve o resultado ao serviço |
+| `lib/analysis.hive` | diagnósticos, estrutura, trecho numerado, saída do analyze |
+| `lib/todo.hive` | os TODO/FIXME/HACK/XXX dos comentários do projeto |
+| `lib/jsonview.hive` | JSON → árvore HTML, com o erro de um JSON inválido |
+| `lib/toolchain.hive` | roda `hivec` e o check do Error Lens numa cópia do projeto |
 | `lib/git.hive` | status, classificação dos arquivos e ações do git |
 | `lib/navigate.hive` | ir para a definição |
 | `lib/process.hive` | executar programas sem console (via `native.go`) |
-| `lib/native.go` | processos ocultos e sessões de shell (Go) |
+| `lib/native.go` | processos ocultos, sessões de shell, carimbo de arquivo e caixa das letras (Go) |
 | `lib/pty.go` | pseudoterminal dos agentes: PTY / ConPTY (Go) |
 | `lib/watch.go` | vigia as pastas abertas e avisa das mudanças no disco (Go) |
 | `lib/agents.hive` | os agentes (Claude Code, Codex, OpenCode) e seus comandos |
@@ -218,12 +233,12 @@ carimba a versão em `lib/version.hive`, compila para Linux, macOS e Windows
 `SHA256SUMS`. As notas do release são a seção da versão no `CHANGELOG.md`. O
 `hivec` usado no CI está fixado por tag e digest em `.github/hivec.txt`.
 
-Para publicar uma versão (a 0.1.1, por exemplo), com a seção dela no
+Para publicar uma versão (a 0.1.2, por exemplo), com a seção dela no
 `CHANGELOG.md` e o merge feito na `main`:
 
 ```
-git tag v0.1.1
-git push origin main v0.1.1
+git tag v0.1.2
+git push origin main v0.1.2
 ```
 
 ## Git

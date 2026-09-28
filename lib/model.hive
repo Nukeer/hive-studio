@@ -45,6 +45,12 @@ type Doc {
 	undo:  Snapshot[dyn]
 	redo:  Snapshot[dyn]
 	gone:  Bool
+	// A visualização (Markdown, árvore do JSON) guardada, e a `version` do texto
+	// a que ela corresponde (-1: nenhuma) — refeita quando a digitação para.
+	view:    Str
+	viewOf:  Int
+	// O erro de um JSON inválido na última leitura (linha 0: nenhum).
+	problem: Diagnostic
 }
 
 // Uma linha `arquivo:linha: mensagem` do compilador.
@@ -52,6 +58,9 @@ type Diagnostic {
 	file:    Str
 	line:    Int
 	message: Str
+	// O texto da linha quando o erro foi achado: o Error Lens só o mostra
+	// enquanto a linha continua igual.
+	source:  Str
 }
 
 // Uma função que `hivec analyze` apontou: a nota dela (0 a 100), onde ela está
@@ -63,6 +72,28 @@ type Hotspot {
 	file:   Str
 	line:   Int
 	detail: Str
+	source: Str
+}
+
+// Um comentário marcado com TODO, FIXME, HACK ou XXX: onde está (linha a partir
+// de 1, coluna a partir de 0), a marca e o texto depois dela.
+type Todo {
+	file:   Str
+	line:   Int
+	column: Int
+	tag:    Str
+	text:   Str
+}
+
+// Uma marca do Error Lens numa linha do documento à vista: `error` (do
+// compilador) ou `warning` (do último Analyze). `source` é o texto da linha
+// quando a marca foi feita — a página só a mostra enquanto a linha continua
+// igual, e a acha de novo se ela mudou de lugar.
+type LensMark {
+	line:     Int
+	severity: Str
+	message:  Str
+	source:   Str
 }
 
 // Uma declaração de topo do arquivo ativo, para o painel de estrutura.
@@ -219,6 +250,8 @@ type Vim {
 	lastMacro:    Str
 	replaying:    Int
 	promptFrom:   Str
+	// O `.` está repetindo a última alteração: ela não é regravada.
+	repeating:    Bool
 }
 
 type Pane {
@@ -251,6 +284,7 @@ type SideView {
 	SearchSide
 	OutlineSide
 	GitSide
+	TodoSide
 }
 
 type EditorView {
@@ -303,6 +337,11 @@ type Msg {
 	Invoke           { command: Str }
 	Finished         { command: Str, output: Str, ok: Bool }
 	OpenReport
+	LensDue          { n: Int }
+	LensDone         { output: Str }
+	TodosFound       { todos: Todo[dyn] }
+	ViewReady        { path: Str, version: Int, view: Str, problem: Diagnostic }
+	ScanTodos
 	ShowPane         { pane: Pane }
 	TogglePanel
 	ShowSide         { side: SideView }
@@ -445,9 +484,17 @@ type State {
 	clientHvPath:  Str
 	clientSerial:  Int
 	frameSeq:      Int
+	clientView:    Str
+	viewPending:   Str
 	analysisHead:  Str[dyn]
 	hotspots:      Hotspot[dyn]
 	analysisReport: Str
+	lensDue:       Int
+	lensRunning:   Bool
+	lensAgain:     Bool
+	todos:         Todo[dyn]
+	todoScanned:   Bool
+	todoScanning:  Bool
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -530,6 +577,7 @@ type Frame {
 	agentShown:    Int
 	agentKeys:     Str[dyn]
 	textQuiet:     Bool
+	lens:          LensMark[dyn]
 }
 
 // A resposta a "dá para ir à definição do nome em `caret`?", mandada enquanto
@@ -608,9 +656,17 @@ func initial(root: Str, prefs: settings.Settings): State {
 		clientHvPath: "",
 		clientSerial: -1,
 		frameSeq: 0,
+		clientView: "",
+		viewPending: "",
 		analysisHead: [],
 		hotspots: [],
-		analysisReport: ""
+		analysisReport: "",
+		lensDue: 0,
+		lensRunning: false,
+		lensAgain: false,
+		todos: [],
+		todoScanned: false,
+		todoScanning: false
 	)
 }
 
@@ -660,19 +716,36 @@ func emptyVim(): Vim {
 		macros: hive.map.new(),
 		lastMacro: "",
 		replaying: 0,
-		promptFrom: ""
+		promptFrom: "",
+		repeating: false
 	)
 }
 
-// Arquivos Hive e Go ganham cores; o resto é só texto.
-func colored(path: Str): Bool {
-	return path is "{stem}.hive" || path is "{stem}.go"
+// Como o arquivo é colorido: "hive" (Hive e Go), "json", ou "" (só texto).
+func language(path: Str): Str {
+	if path is "{stem}.hive" || path is "{stem}.go" {
+		return "hive"
+	}
+	if isJson(path) {
+		return "json"
+	}
+	return ""
+}
+
+func isJson(path: Str): Bool {
+	return path is "{stem}.json"
+}
+
+// Markdown e JSON abrem na visualização, com a troca para o texto.
+func hasPreview(path: Str): Bool {
+	return isMarkdown(path) || isJson(path)
 }
 
 // Um documento recém-aberto, sem nada para desfazer.
 func newDoc(path: Str, name: Str, text: Str, eol: Str, mode: Str): Doc {
 	Snapshot[dyn] none = []
-	return Doc(path, name, text, text, eol, highlight.highlightText(text, colored(path)), 0, highlight.noPatch(), mode, none, none, false)
+	return Doc(path, name, text, text, eol, highlight.highlightText(text, language(path)), 0, highlight.noPatch(), mode, none, none, false,
+		"", -1, Diagnostic(path, 0, "", ""))
 }
 
 func emptySearch(): SearchPanel {
