@@ -1,6 +1,6 @@
 # Changelog
 
-## Não lançado
+## v0.1.2
 
 ### Precisa de
 
@@ -57,6 +57,8 @@
 * **Tela inicial** fica centralizada na área toda e o painel de baixo passa por
   cima dela quando cresce, em vez de o conteúdo vazar para cima da barra de
   título e para baixo do painel.
+* **Vim**: `.` com contagem (`3.`) passa a valer para os próximos `.`, como no
+  Vim; `u` e `Ctrl+R` com contagem desfazem e refazem tudo de uma vez.
 
 ## v0.1.1
 
