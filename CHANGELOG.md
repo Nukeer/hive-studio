@@ -43,6 +43,10 @@
   o erro de um JSON grande também aparece na linha.
 * **TODO**: salvar não relê mais o projeto inteiro, e um arquivo sem nenhuma
   marca é descartado sem ser partido em linhas.
+* **`hivec analyze` 100/100**: o estado, o editor do Vim e as listas de texto
+  são alterados no lugar em vez de copiados; o explorador diz se um nome é
+  pasta sem listá-lo; maiúsculas e minúsculas vêm do Go; a busca de TODO não
+  copia os documentos abertos para a thread dela.
 
 ### Correções
 
