@@ -561,6 +561,72 @@ proc toggleSetting(state: model.State, name: Str): model.State {
 	return next
 }
 
+// O resultado do `hivec analyze` vai para o painel ANÁLISE: cada função com o
+// arquivo onde ela está, para o clique abrir na linha certa.
+proc withAnalysis(state: model.State, output: Str): model.State {
+	mut next := state
+	target := render.targetOf(state)
+	report := analysis.parseAnalyze(output)
+	modules := importedModules(target)
+	mut model.Hotspot[dyn] spots = []
+	for each spot in report.spots {
+		mut found := spot
+		found.file = moduleFile(target, modules, analysis.moduleOf(spot.name))
+		append(spots, found)
+	}
+	next.analysisHead = report.head
+	next.hotspots = spots
+	next.analysisReport = ""
+	if target is "{stem}.hive" {
+		next.analysisReport = stem + "-analysis.html"
+	}
+	next.pane = model.Pane.AnalysisPane()
+	next.panelOpen = true
+	if report.head bounds 0 {
+		next.status = "analyze: " + report.head[0]
+	}
+	return next
+}
+
+// Os `import ./caminho` do arquivo de entrada, como "módulo=arquivo".
+proc importedModules(target: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	if hive.file.read(target) is Result.Ok(text) {
+		folder := workspace.parentOf(target)
+		for each raw in split(replaceAll(text, "\r", ""), "\n") {
+			if raw is "import ./{path}" {
+				if path is "{stem}.go" {
+					continue
+				}
+				append(found, workspace.baseName(path) + "=" + folder + "/" + path + ".hive")
+			}
+		}
+	}
+	return found
+}
+
+// O arquivo de um módulo: o que o arquivo de entrada importa com esse nome, ou
+// um `lib/<módulo>.hive` / `<módulo>.hive` ao lado dele (os de segunda mão).
+proc moduleFile(target: Str, modules: Str[], module: Str): Str {
+	if module == "" {
+		return target
+	}
+	for each pair in modules {
+		if pair is "{name}={file}" {
+			if name == module {
+				return file
+			}
+		}
+	}
+	folder := workspace.parentOf(target)
+	for each candidate in [folder + "/lib/" + module + ".hive", folder + "/" + module + ".hive"] {
+		if hive.file.exists(candidate) {
+			return candidate
+		}
+	}
+	return target
+}
+
 func summary(state: model.State, command: Str, ok: Bool, problems: Int): Str {
 	if ok {
 		return "{command}: ok"
@@ -1554,9 +1620,16 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 		next.output = state.output + output
 		next.diagnostics = found
 		next.status = summary(state, command, ok, len(found))
+		if command == "analyze" && ok {
+			next = withAnalysis(next, output)
+		}
 		if len(found) > 0 {
 			next.pane = model.Pane.ProblemsPane()
 			next.panelOpen = true
+		}
+	} else if message is model.Msg.OpenReport {
+		if state.analysisReport != "" && hive.file.exists(state.analysisReport) {
+			async dialogs.openUrl(state.analysisReport)
 		}
 	} else if message is model.Msg.ShowPane(pane) {
 		next.pane = pane
@@ -1707,7 +1780,7 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 		return Result.Ok(model.Msg.SuggestAt(caret))
 	} else if action == "preview" {
 		return Result.Ok(model.Msg.TogglePreview())
-	} else if action == "check" || action == "run" || action == "test" || action == "build" {
+	} else if action == "check" || action == "run" || action == "test" || action == "build" || action == "analyze" {
 		return Result.Ok(model.Msg.Invoke(action))
 	} else if action == "terminal" {
 		if state.panelOpen && state.pane == model.Pane.TerminalPane() {
@@ -1900,6 +1973,8 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 	} else if a == "pane" {
 		if arg == "problems" {
 			return Result.Ok(model.Msg.ShowPane(model.Pane.ProblemsPane()))
+		} else if arg == "analysis" {
+			return Result.Ok(model.Msg.ShowPane(model.Pane.AnalysisPane()))
 		} else if arg == "terminal" {
 			return Result.Ok(model.Msg.ShowPane(model.Pane.TerminalPane()))
 		} else if arg == "agent" {
@@ -1910,6 +1985,8 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.TogglePanel())
 	} else if a == "clear" {
 		return Result.Ok(model.Msg.ClearOutput())
+	} else if a == "openReport" {
+		return Result.Ok(model.Msg.OpenReport())
 	} else if a == "peek" {
 		return Result.Ok(model.Msg.Peek(arg, numberOr(event.text, 1)))
 	} else if a == "closePeek" {
@@ -2178,6 +2255,26 @@ proc fresh(folder: Str): model.State {
 
 func event(kind: Str, act: Str, arg: Str, text: Str, caret: Int): model.Event {
 	return model.Event(kind, act, arg, text, caret, -1, 0, -1)
+}
+
+test "o analyze enche o painel ANÁLISE e cada função aponta para o arquivo dela" {
+	folder := scratch()
+	if hive.file.write(folder + "/lib/util.hive", "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n") is Result.Error(why) {
+		panic why
+	}
+	state := openDoc(fresh(folder), folder + "/main.hive")
+	output := "  main.hive scores 90/100 over 2 callables\n  1 finding — 1 copy\n\n  50  util.dobro                          func, line 1\n        ·      n\n             a copy\n\n  60  main                                proc, line 1\n"
+	next := withAnalysis(state, output)
+	assert next.pane == model.Pane.AnalysisPane() && next.panelOpen
+	assert len(next.hotspots) == 2
+	if next.hotspots bounds 1 {
+		assert next.hotspots[0].file == folder + "/lib/util.hive"
+		assert next.hotspots[1].file == folder + "/main.hive"
+		assert next.hotspots[0].detail == "a copy"
+	}
+	assert next.analysisReport == folder + "/main-analysis.html"
+	assert indexOf(render.panel(next), "util.dobro") is Result.Ok(_)
+	assert indexOf(render.titleBar(next), "Analyze") is Result.Ok(_)
 }
 
 test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {

@@ -231,6 +231,12 @@ body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
 .prob:hover{background:var(--selection)}
 .prob .ic{color:var(--danger)}
 .prob .where{color:var(--muted);margin-left:auto;white-space:nowrap}
+.ahead{padding:2px 4px;font-family:"Segoe UI",system-ui,sans-serif;font-size:13px;color:var(--muted)}
+.ahead .link{color:var(--accent);cursor:pointer}.ahead .link:hover{text-decoration:underline}
+.spot .sc{min-width:28px;text-align:right;font-family:var(--mono);font-weight:600}
+.spot .sc.bad{color:var(--danger)}.spot .sc.mid{color:var(--syn-number)}.spot .sc.good{color:var(--syn-string)}
+.spot .nm{font-family:var(--mono);white-space:nowrap}
+.spot .det{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 #status{height:24px;flex:none;display:flex;align-items:center;gap:4px;padding:0 6px;background:var(--status-bg);color:var(--status-fg);font-size:12px}
 #status .si{padding:0 7px;height:24px;display:flex;align-items:center;white-space:nowrap}
 #status .si.click:hover{background:rgba(255,255,255,.14);cursor:pointer}

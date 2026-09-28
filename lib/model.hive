@@ -54,6 +54,17 @@ type Diagnostic {
 	message: Str
 }
 
+// Uma função que `hivec analyze` apontou: a nota dela (0 a 100), onde ela está
+// e o primeiro achado.
+type Hotspot {
+	score:  Int
+	name:   Str
+	kind:   Str
+	file:   Str
+	line:   Int
+	detail: Str
+}
+
 // Uma declaração de topo do arquivo ativo, para o painel de estrutura.
 type Symbol {
 	kind: Str
@@ -213,6 +224,7 @@ type Vim {
 type Pane {
 	OutputPane
 	ProblemsPane
+	AnalysisPane
 	TerminalPane
 	AgentPane
 }
@@ -290,6 +302,7 @@ type Msg {
 	TogglePreview
 	Invoke           { command: Str }
 	Finished         { command: Str, output: Str, ok: Bool }
+	OpenReport
 	ShowPane         { pane: Pane }
 	TogglePanel
 	ShowSide         { side: SideView }
@@ -432,6 +445,9 @@ type State {
 	clientHvPath:  Str
 	clientSerial:  Int
 	frameSeq:      Int
+	analysisHead:  Str[dyn]
+	hotspots:      Hotspot[dyn]
+	analysisReport: Str
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -591,7 +607,10 @@ func initial(root: Str, prefs: settings.Settings): State {
 		clientHv: -1,
 		clientHvPath: "",
 		clientSerial: -1,
-		frameSeq: 0
+		frameSeq: 0,
+		analysisHead: [],
+		hotspots: [],
+		analysisReport: ""
 	)
 }
 
