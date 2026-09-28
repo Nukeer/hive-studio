@@ -38,6 +38,22 @@ type Overlay {
 	text: Str
 }
 
+// Os documentos com alterações por salvar, como JSON: um texto atravessa
+// para a thread do check sem ser copiado.
+type Overlays {
+	items: Overlay[dyn]
+}
+
+func packOverlays(docs: model.Doc[]): Str {
+	mut Overlay[dyn] items = []
+	for each doc in docs {
+		if model.dirty(doc) {
+			append(items, Overlay(doc.path, doc.text))
+		}
+	}
+	return encode(Overlays(items), hive.json.codec())
+}
+
 // Onde fica a cópia do projeto que o Error Lens confere.
 func lensFolder(): Str {
 	return settings.folder() + "/lens"
@@ -195,12 +211,13 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 		return ""
 	}
 	manifest := mirror + "/.copiados"
-	mut first := true
-	mut hive.map.Map<Str, Copied> before = hive.map.new()
-	if hive.file.read(manifest) is Result.Ok(text) {
-		before = parseManifest(text)
-		first = false
+	read := hive.file.read(manifest)
+	first := read is Result.Error(_)
+	mut text := ""
+	if read is Result.Ok(saved) {
+		text = saved
 	}
+	before := parseManifest(text)
 	mut hive.map.Map<Str, Str> edited = hive.map.new()
 	for each o in overlays {
 		rel := inside(root, o.path)
@@ -227,15 +244,16 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 			previous = stamp
 		}
 		if syncOne(mirror, root, rel, hive.map.get(edited, rel), previous) is Result.Ok(synced) {
-			mut imports := synced.imports
+			hive.map.set(kept, rel, true)
 			if synced.reused {
 				if hive.map.get(before, rel) is Result.Ok(old) {
-					imports = old.imports
+					append(now, old)
+					queue(pending, old.imports)
 				}
+			} else {
+				append(now, Copied(rel, synced.stamp, synced.imports))
+				queue(pending, synced.imports)
 			}
-			append(now, Copied(rel, synced.stamp, imports))
-			hive.map.set(kept, rel, true)
-			queue(pending, imports)
 		}
 	}
 	dropStale(mirror, hive.map.keys(before), kept)
@@ -257,9 +275,12 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 // O check do Error Lens: confere a cópia do programa (ver `lensSync`), com o
 // texto ainda não salvo — assim o erro aparece enquanto se digita, sem salvar
 // nada. A saída volta com os caminhos do projeto.
-proc lensCheck(window: hive.syslink.Address, compiler: Str, root: Str, target: Str, overlays: Overlay[]): void {
+proc lensCheck(window: hive.syslink.Address, compiler: Str, root: Str, target: Str, packed: Str): void {
 	mirror := lensFolder()
-	rel := lensSync(mirror, root, target, overlays)
+	mut rel := ""
+	if Overlays.decode(packed, hive.json.codec()) is Result.Ok(overlays) {
+		rel = lensSync(mirror, root, target, overlays.items)
+	}
 	mut output := ""
 	if rel != "" {
 		result := process.run(compilerPath(compiler), ["check", mirror + "/" + rel], "")

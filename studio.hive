@@ -639,12 +639,7 @@ proc startLens(state: mut model.State, from: hive.syslink.Address): void {
 	if target == "" {
 		return
 	}
-	mut toolchain.Overlay[dyn] overlays = []
-	for each doc in state.docs {
-		if model.dirty(doc) {
-			append(overlays, toolchain.Overlay(doc.path, doc.text))
-		}
-	}
+	overlays := toolchain.packOverlays(state.docs)
 	state.lensRunning = true
 	state.lensAgain = false
 	compiler := state.settings.compiler
@@ -736,20 +731,16 @@ proc withView(state: mut model.State, path: Str, version: Int, done: Rendered): 
 
 // ── TODO ─────────────────────────────────────────────────────────────────
 
-// Procura os TODO da pasta numa thread própria (com o texto não salvo dos
-// documentos abertos); a lista chega em `TodosFound`.
+// Procura os TODO da pasta no disco, numa thread própria; a lista chega em
+// `TodosFound`, onde os documentos não salvos entram com o texto do editor.
 proc scanTodos(state: mut model.State, from: hive.syslink.Address): void {
 	if state.todoScanning {
 		return
 	}
-	mut todo.Buffer[dyn] buffers = []
-	for each doc in state.docs {
-		append(buffers, todo.Buffer(doc.path, doc.text))
-	}
 	state.todoScanning = true
 	root := state.root
 	hidden := state.settings.showHidden
-	async todo.scan(from, root, hidden, buffers)
+	async todo.scan(from, root, hidden)
 }
 
 // Os erros do compilador no arquivo e na linha onde estão de fato.
@@ -1970,6 +1961,15 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		scanTodos(state, from)
 	} else if message is model.Msg.TodosFound(found) {
 		state.todos = found
+		// A busca leu o disco: os documentos com alterações por salvar entram
+		// com o texto do editor.
+		for i := 0; i < len(state.docs); i++ {
+			if state.docs bounds i {
+				if model.dirty(state.docs[i]) {
+					state.todos = todo.withTodosOf(state.todos, state.docs[i].path, state.docs[i].text)
+				}
+			}
+		}
 		state.todoScanned = true
 		state.todoScanning = false
 	} else if message is model.Msg.ToggleSidebar {
@@ -3378,6 +3378,28 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	assert !hidden.panel
 	assert hidden.agentShown == 0
 	assert ask(db, event("key", "", "", combo, 0)).panel
+}
+
+test "a busca de TODO lê o disco, e um documento não salvo entra com o texto do editor" {
+	folder := explorerFolder("todo-test")
+	mut state := fresh(folder)
+	openDoc(state, folder + "/main.hive")
+	withText(state, "// TODO: não salvo\n")
+	db := hive.syslink.spawnAddressed(serve, fresh(folder))
+	disk := [model.Todo(folder + "/LEIAME.md", 1, 5, "TODO", "do disco")]
+	update(state, model.Msg.TodosFound(disk), db)
+	assert state.todoScanned && !state.todoScanning
+	assert len(state.todos) == 2
+	if state.todos bounds 1 {
+		assert state.todos[0].text == "do disco"
+		assert state.todos[1].file == folder + "/main.hive" && state.todos[1].text == "não salvo"
+	}
+	packed := toolchain.packOverlays(state.docs)
+	if toolchain.Overlays.decode(packed, hive.json.codec()) is Result.Ok(overlays) {
+		assert overlays.items == [toolchain.Overlay(folder + "/main.hive", "// TODO: não salvo\n")]
+	} else {
+		assert false
+	}
 }
 
 test "um arquivo aberto que muda no disco é relido; um com alteração por salvar, não" {

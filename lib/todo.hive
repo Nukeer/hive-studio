@@ -7,12 +7,6 @@ import ./complete
 import ./search
 import ./workspace
 
-// Um documento aberto: a busca usa o texto do editor, mesmo o não salvo.
-type Buffer {
-	path: Str
-	text: Str
-}
-
 func tags(): Str[dyn] {
 	return ["TODO", "FIXME", "HACK", "XXX"]
 }
@@ -149,12 +143,8 @@ proc appendAll(out: mut model.Todo[dyn], items: model.Todo[]): void {
 	}
 }
 
-// O texto de um arquivo: o do editor, se ele estiver aberto, ou o do disco
-// (até 1 MB).
-proc textFor(path: Str, open: hive.map.Map<Str, Str>): Str {
-	if hive.map.get(open, workspace.normalize(path)) is Result.Ok(buffer) {
-		return buffer
-	}
+// O texto de um arquivo no disco (até 1 MB).
+proc textFor(path: Str): Str {
 	if hive.file.size(path) is Result.Ok(bytes) {
 		if bytes >= 1000000 {
 			return ""
@@ -168,16 +158,12 @@ proc textFor(path: Str, open: hive.map.Map<Str, Str>): Str {
 
 // Procura em todos os arquivos de texto da pasta (até 1 MB cada), numa thread
 // própria, e manda o que achou de volta para a janela.
-proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool, buffers: Buffer[]): void {
+proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool): void {
 	mut model.Todo[dyn] found = []
-	mut hive.map.Map<Str, Str> open = hive.map.new()
-	for each b in buffers {
-		hive.map.set(open, workspace.normalize(b.path), b.text)
-	}
 	for each rel in search.allFiles(root, showHidden, 20000) {
 		if search.isTextFile(rel) {
 			path := workspace.joinPath(root, rel)
-			appendAll(found, todosIn(path, textFor(path, open)))
+			appendAll(found, todosIn(path, textFor(path)))
 		}
 	}
 	async window(model.Cmd.Post(model.Msg.TodosFound(found)))
