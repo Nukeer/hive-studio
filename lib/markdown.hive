@@ -225,7 +225,7 @@ func render(text: Str): Str {
 
 		if fence {
 			if trimSpaces(line) is "```{rest}" {
-				body := join(code, "\n")
+				body := highlight.joined(code, "\n")
 				if fenceLang == "hive" {
 					append(out, "<pre class=\"md-code\"><code>" + highlight.highlight(body) + "</code></pre>")
 				} else {
@@ -253,12 +253,12 @@ func render(text: Str): Str {
 
 		// Fecha o que estiver aberto quando a linha não continua aquilo.
 		if len(paragraph) > 0 && (blank || isItem || line is "#{rest}" || line is ">{rest}" || line is "```{rest}" || line is "|{rest}" || isRule(line)) {
-			append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
+			append(out, "<p>" + inline(highlight.joined(paragraph, " ")) + "</p>")
 			Str[dyn] none = []
 			paragraph = none
 		}
 		if hasItem {
-			append(out, itemHtml(list, join(pending, " ")))
+			append(out, itemHtml(list, highlight.joined(pending, " ")))
 			hasItem = false
 			Str[dyn] none = []
 			pending = none
@@ -330,16 +330,16 @@ func render(text: Str): Str {
 		append(paragraph, trimBoth(line))
 	}
 	if len(paragraph) > 0 {
-		append(out, "<p>" + inline(join(paragraph, " ")) + "</p>")
+		append(out, "<p>" + inline(highlight.joined(paragraph, " ")) + "</p>")
 	}
 	if hasItem {
-		append(out, itemHtml(list, join(pending, " ")))
+		append(out, itemHtml(list, highlight.joined(pending, " ")))
 	}
 	if list != "" {
 		append(out, "</" + list + ">")
 	}
 	if fence {
-		append(out, "<pre class=\"md-code\"><code>" + esc(join(code, "\n")) + "</code></pre>")
+		append(out, "<pre class=\"md-code\"><code>" + esc(highlight.joined(code, "\n")) + "</code></pre>")
 	}
 	return join(out, "\n")
 }

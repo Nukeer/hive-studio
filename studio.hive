@@ -71,7 +71,7 @@ proc watchTerminal(db: hive.syslink.Address, session: Int): void {
 			async db(model.Cmd.Post(model.Msg.TermExited(session, native.code(session))))
 			return
 		}
-		hive.task.sleep(40)
+		server.pause(40)
 	}
 }
 
@@ -1174,7 +1174,7 @@ proc watchAgent(db: hive.syslink.Address, session: Int): void {
 		if !pty.alive(session) {
 			break
 		}
-		hive.task.sleep(300)
+		server.pause(300)
 	}
 	async db(model.Cmd.Post(model.Msg.AgentExited(session, pty.code(session))))
 }
@@ -1297,21 +1297,20 @@ proc selectRow(state: mut model.State, index: Int): void {
 
 // Abre as pastas até `path` e o seleciona, para ele aparecer na árvore.
 proc revealPath(state: mut model.State, path: Str): void {
-	mut Str[dyn] expanded = state.expanded
-	root := workspace.normalize(state.root)
-	mut folder := workspace.parentOf(path)
-	for n := 0; n < 64; n++ {
-		if !complete.startsWith(folder, root + "/") {
-			break
-		}
-		if !workspace.isExpanded(expanded, folder) {
-			append(expanded, folder)
-		}
-		folder = workspace.parentOf(folder)
-	}
-	state.expanded = expanded
+	expandUp(state, workspace.normalize(state.root), workspace.parentOf(path), 0)
 	state.selected = path
 	reload(state)
+}
+
+// Expande `folder` e as pastas acima dele, até a raiz.
+proc expandUp(state: mut model.State, root: Str, folder: Str, depth: Int): void {
+	if depth >= 64 || !complete.startsWith(folder, root + "/") {
+		return
+	}
+	if !workspace.isExpanded(state.expanded, folder) {
+		append(state.expanded, folder)
+	}
+	expandUp(state, root, workspace.parentOf(folder), depth + 1)
 }
 
 // `:Ex` (e `:e .`): mostra o explorador com `target` — o arquivo atual quando
@@ -2593,7 +2592,7 @@ proc quitSoon(): void {
 // Relê o git de tempos em tempos, para mudanças feitas fora do Hive Studio.
 proc watchGit(db: hive.syslink.Address): void {
 	for ;; {
-		hive.task.sleep(4000)
+		server.pause(4000)
 		async db(model.Cmd.Post(model.Msg.GitPoll()))
 	}
 }
@@ -2640,7 +2639,7 @@ proc main(): void {
 	async watchGit(db)
 	async watchDocs(db)
 	for ;; {
-		hive.task.sleep(60000)
+		server.pause(60000)
 	}
 }
 
@@ -3189,10 +3188,11 @@ proc explorerFolder(name: Str): Str {
 	if hive.file.makeDir(folder + "/lib") is Result.Error(why) {
 		panic why
 	}
-	for each file in ["/main.hive", "/LEIAME.md"] {
-		if hive.file.write(folder + file, "\n") is Result.Error(why) {
-			panic why
-		}
+	if hive.file.write(folder + "/main.hive", "\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/LEIAME.md", "\n") is Result.Error(why) {
+		panic why
 	}
 	return folder
 }

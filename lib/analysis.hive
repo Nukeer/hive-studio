@@ -77,10 +77,10 @@ func parseAnalyze(output: Str): AnalyzeReport {
 			continue
 		} else if spots bounds last {
 			if indent >= 10 && spots[last].detail == "" {
-				spots[last].detail = replaceAll(join(parts, " "), "`", "")
+				spots[last].detail = replaceAll(highlight.joined(parts, " "), "`", "")
 			}
 		} else {
-			append(head, join(parts, " "))
+			append(head, highlight.joined(parts, " "))
 		}
 	}
 	return AnalyzeReport(head, spots)
@@ -147,7 +147,7 @@ func weight(piece: Str): Int {
 func scoreOf(line: Str, pieces: Str[]): Int {
 	mut score := 0
 	for each piece in pieces {
-		if indexOf(line, piece) is Result.Ok(_) {
+		if highlight.has(line, piece) {
 			score = score + weight(piece)
 		}
 	}
@@ -325,11 +325,12 @@ func countLines(text: Str): Int {
 }
 
 func pad(number: Int, width: Int): Str {
-	mut label := "{number}"
-	for ; len(label) < width; {
-		label = " " + label
+	label := "{number}"
+	mut Str[dyn] spaces = []
+	for n := len(label); n < width; n++ {
+		append(spaces, " ")
 	}
-	return label
+	return join(spaces, "") + label
 }
 
 // As linhas em volta de `line`, numeradas, com a própria linha marcada.

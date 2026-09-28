@@ -21,7 +21,7 @@ func tags(): Str[dyn] {
 // SQL, HTML…) ou continua um bloco `/* … */`.
 func inComment(before: Str): Bool {
 	for each marker in ["//", "#", "/*", "<!--", "--", ";"] {
-		if indexOf(before, marker) is Result.Ok(_) {
+		if highlight.has(before, marker) {
 			return true
 		}
 	}
@@ -81,7 +81,7 @@ func todosIn(file: Str, text: Str): model.Todo[dyn] {
 	mut model.Todo[dyn] found = []
 	mut any := false
 	for each tag in tags() {
-		if indexOf(text, tag) is Result.Ok(_) {
+		if highlight.has(text, tag) {
 			any = true
 		}
 	}
@@ -109,7 +109,8 @@ type Mark {
 
 func todoOf(line: Str): Mark {
 	for each tag in tags() {
-		if indexOf(line, tag) is Result.Ok(at) {
+		at := highlight.position(line, tag)
+		if at >= 0 {
 			before := complete.take(line, at)
 			after := complete.skip(line, at + len(tag))
 			// Uma palavra inteira: TODOS e XXXL não contam.
@@ -129,9 +130,7 @@ func withTodosOf(todos: model.Todo[], file: Str, text: Str): model.Todo[dyn] {
 	for each t in todos {
 		if t.file == file {
 			if !placed {
-				for each f in fresh {
-					append(out, f)
-				}
+				appendAll(out, fresh)
 				placed = true
 			}
 		} else {
@@ -139,11 +138,15 @@ func withTodosOf(todos: model.Todo[], file: Str, text: Str): model.Todo[dyn] {
 		}
 	}
 	if !placed {
-		for each f in fresh {
-			append(out, f)
-		}
+		appendAll(out, fresh)
 	}
 	return out
+}
+
+proc appendAll(out: mut model.Todo[dyn], items: model.Todo[]): void {
+	for each t in items {
+		append(out, t)
+	}
 }
 
 // O texto de um arquivo: o do editor, se ele estiver aberto, ou o do disco
@@ -174,9 +177,7 @@ proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool, buffers: Bu
 	for each rel in search.allFiles(root, showHidden, 20000) {
 		if search.isTextFile(rel) {
 			path := workspace.joinPath(root, rel)
-			for each t in todosIn(path, textFor(path, open)) {
-				append(found, t)
-			}
+			appendAll(found, todosIn(path, textFor(path, open)))
 		}
 	}
 	async window(model.Cmd.Post(model.Msg.TodosFound(found)))

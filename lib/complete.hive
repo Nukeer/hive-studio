@@ -170,19 +170,27 @@ func wordsIn(text: Str, prefix: Str, limit: Int): Str[dyn] {
 	mut Str[dyn] found = []
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	for each line in split(text, "\n") {
-		if indexOf(line, prefix) is Result.Ok(_) {
-			for each word in namesIn(line) {
-				if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
-					hive.map.set(seen, word, true)
-					append(found, word)
-					if len(found) >= limit {
-						return found
-					}
-				}
-			}
+		if len(found) >= limit {
+			break
+		}
+		if highlight.has(line, prefix) {
+			wordsOf(line, prefix, limit, found, seen)
 		}
 	}
 	return found
+}
+
+// Os nomes de uma linha que começam com `prefix`, sem repetir, até `limit`.
+proc wordsOf(line: Str, prefix: Str, limit: Int, found: mut Str[dyn], seen: mut hive.map.Map<Str, Bool>): void {
+	for each word in namesIn(line) {
+		if len(found) >= limit {
+			return
+		}
+		if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
+			hive.map.set(seen, word, true)
+			append(found, word)
+		}
+	}
 }
 
 // Os nomes de uma linha, na ordem.

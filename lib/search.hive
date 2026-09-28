@@ -5,6 +5,7 @@ import ./workspace
 import ./model
 import ./complete
 import ./native.go
+import ./highlight
 
 // Minúsculas sem mudar o comprimento — cada letra vira uma letra —, então uma
 // posição no texto em minúsculas é a mesma posição no original.
@@ -104,7 +105,8 @@ func hitsIn(rel: Str, clean: Str, folded: Str, needle: Str, room: Int): ProjectR
 	search := split(folded, "\n")
 	for i := 0; i < len(lines); i++ {
 		if search bounds i && lines bounds i {
-			if indexOf(search[i], needle) is Result.Ok(column) {
+			column := highlight.position(search[i], needle)
+			if column >= 0 {
 				if len(hits) >= room {
 					return ProjectResult(hits, 1, true)
 				}
@@ -138,6 +140,12 @@ proc searchFile(root: Str, rel: Str, needle: Str, caseSensitive: Bool, room: Int
 	return ProjectResult(none, 0, false)
 }
 
+proc appendHits(hits: mut model.Hit[dyn], found: model.Hit[]): void {
+	for each hit in found {
+		append(hits, hit)
+	}
+}
+
 proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool, limit: Int): ProjectResult {
 	mut model.Hit[dyn] hits = []
 	mut files := 0
@@ -154,9 +162,7 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 	for each rel in allFiles(root, showHidden, 20000) {
 		if isTextFile(rel) && !truncated {
 			found := searchFile(root, rel, needle, caseSensitive, limit - len(hits))
-			for each hit in found.hits {
-				append(hits, hit)
-			}
+			appendHits(hits, found.hits)
 			if len(found.hits) > 0 {
 				files++
 			}
@@ -168,20 +174,21 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 
 // `wanted` aparece em `text` nessa ordem, mesmo com coisas no meio.
 func subsequence(text: Str, wanted: Str): Bool {
-	mut rest := text
-	for each c in split(wanted, "") {
-		if indexOf(rest, c) is Result.Ok(at) {
-			rest = complete.skip(rest, at + 1)
-		} else {
-			return false
+	want := split(wanted, "")
+	mut k := 0
+	for each c in split(text, "") {
+		if want bounds k {
+			if want[k] == c {
+				k++
+			}
 		}
 	}
-	return true
+	return k >= len(want)
 }
 
 func containsAll(text: Str, words: Str[]): Bool {
 	for each word in words {
-		if word != "" && indexOf(text, word) is Result.Error(_) {
+		if word != "" && !highlight.has(text, word) {
 			return false
 		}
 	}

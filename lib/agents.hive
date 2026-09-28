@@ -101,17 +101,23 @@ test "cada agente tem um comando, partido em programa e argumentos" {
 
 // O que o programa escreveu até agora, esperando até `ms` por ele.
 proc output(session: Int, wanted: Str, ms: Int): Str {
-	mut seen := ""
-	for waited := 0; waited < ms; waited = waited + 50 {
-		chunk := pty.read(session, 50)
-		if hive.crypto.base64Decode(chunk) is Result.Ok(raw) {
-			seen = seen + raw
-		}
-		if indexOf(seen, wanted) is Result.Ok(_) {
-			return seen
-		}
+	return outputFrom(session, wanted, ms, "")
+}
+
+// Lê o terminal em pedaços de 50 ms até aparecer `wanted` ou o tempo acabar.
+proc outputFrom(session: Int, wanted: Str, left: Int, seen: Str): Str {
+	if left <= 0 {
+		return seen
 	}
-	return seen
+	chunk := pty.read(session, 50)
+	mut now := seen
+	if hive.crypto.base64Decode(chunk) is Result.Ok(raw) {
+		now = seen + raw
+	}
+	if indexOf(now, wanted) is Result.Ok(_) {
+		return now
+	}
+	return outputFrom(session, wanted, left - 50, now)
 }
 
 test "um agente roda num terminal de verdade: tty, tamanho, digitação e saída" {

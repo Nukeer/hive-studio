@@ -318,12 +318,12 @@ func tr(dictionary: hive.map.Map<Str, Str>, text: Str): Str {
 }
 
 func unique(values: Str[]): Bool {
-	mut Str[dyn] seen = []
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	for each v in values {
-		if indexOf(seen, v) is Result.Ok(_) {
+		if hive.map.has(seen, v) {
 			return false
 		}
-		append(seen, v)
+		hive.map.set(seen, v, true)
 	}
 	return true
 }

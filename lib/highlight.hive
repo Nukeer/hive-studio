@@ -79,13 +79,116 @@ func span(cls: Str, text: Str): Str {
 	return "<span class=\"{cls}\">{escape(text)}</span>"
 }
 
+// Pequenas utilidades de texto que os outros módulos usam dentro de laços.
+func has(text: Str, part: Str): Bool {
+	return indexOf(text, part) is Result.Ok(_)
+}
+
+// Onde `part` aparece em `text`, ou -1.
+func position(text: Str, part: Str): Int {
+	if indexOf(text, part) is Result.Ok(at) {
+		return at
+	}
+	return -1
+}
+
+func joined(parts: Str[], separator: Str): Str {
+	return join(parts, separator)
+}
+
+func tagged(html: Str, tag: Str): Str {
+	return replaceAll(html, tag, "<span class=\"td\">" + tag + "</span>")
+}
+
 // Um comentário, com TODO, FIXME, HACK e XXX em destaque.
 func commentSpan(text: Str): Str {
-	mut html := escape(text)
-	for each tag in ["TODO", "FIXME", "HACK", "XXX"] {
-		html = replaceAll(html, tag, "<span class=\"td\">" + tag + "</span>")
-	}
+	html := tagged(tagged(tagged(tagged(escape(text), "TODO"), "FIXME"), "HACK"), "XXX")
 	return "<span class=\"tc\">" + html + "</span>"
+}
+
+func charOf(chars: Str[], i: Int): Str {
+	if chars bounds i {
+		return chars[i]
+	}
+	return ""
+}
+
+// Onde termina o texto entre aspas cujo conteúdo começa em `from`.
+func quotedEnd(chars: Str[], from: Int): Int {
+	mut j := from
+	for ; j < len(chars); j++ {
+		c := charOf(chars, j)
+		if c == "\\" {
+			j++
+		} else if c == "\"" {
+			return j + 1
+		}
+	}
+	return j
+}
+
+// O primeiro `stop` a partir de `from`; com `past`, a posição logo depois dele.
+func untilChar(chars: Str[], from: Int, stop: Str, past: Bool): Int {
+	for j := from; j < len(chars); j++ {
+		if charOf(chars, j) == stop {
+			if past {
+				return j + 1
+			}
+			return j
+		}
+	}
+	return len(chars)
+}
+
+func identEnd(chars: Str[], from: Int): Int {
+	for j := from; j < len(chars); j++ {
+		if !isIdent(charOf(chars, j)) {
+			return j
+		}
+	}
+	return len(chars)
+}
+
+// Um número do Hive (com `.` e `_`) ou do JSON (com expoente e sinal).
+func numberEnd(chars: Str[], from: Int, json: Bool): Int {
+	for j := from; j < len(chars); j++ {
+		d := charOf(chars, j)
+		mut part := isDigit(d) || d == "."
+		if json {
+			part = part || d == "e" || d == "E" || d == "+" || d == "-"
+		} else {
+			part = part || d == "_"
+		}
+		if !part {
+			return j
+		}
+	}
+	return len(chars)
+}
+
+// Onde termina o token do Hive que começa em `i`.
+func tokenEnd(chars: Str[], i: Int): Int {
+	c := charOf(chars, i)
+	after := charOf(chars, i + 1)
+	if c == "/" && after == "/" {
+		return untilChar(chars, i + 1, "\n", false)
+	}
+	if c == "\"" {
+		return quotedEnd(chars, i + 1)
+	}
+	if c == "`" {
+		return untilChar(chars, i + 1, "`", true)
+	}
+	if c == "#" && isUpper(after) {
+		return identEnd(chars, i + 1)
+	}
+	if isDigit(c) {
+		return numberEnd(chars, i + 1, false)
+	}
+	if isIdentStart(c) {
+		return identEnd(chars, i + 1)
+	}
+	return i + 1
 }
 
 // O primeiro caractere que não é espaço a partir de `from`.
@@ -107,74 +210,18 @@ func highlight(text: Str): Str {
 	mut Str[dyn] out = []
 	mut i := 0
 	for ; i < total; {
-		mut c := ""
-		if chars bounds i {
-			c = chars[i]
-		}
-		mut after := ""
-		ahead := i + 1
-		if chars bounds ahead {
-			after = chars[ahead]
-		}
-		mut j := i + 1
+		c := charOf(chars, i)
+		after := charOf(chars, i + 1)
+		j := tokenEnd(chars, i)
 		if c == "/" && after == "/" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "\n" {
-						break
-					}
-				}
-			}
 			append(out, commentSpan(piece(chars, i, j)))
-		} else if c == "\"" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "\\" {
-						j++
-					} else if chars[j] == "\"" {
-						j++
-						break
-					}
-				}
-			}
-			append(out, span("ts", piece(chars, i, j)))
-		} else if c == "`" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "`" {
-						j++
-						break
-					}
-				}
-			}
+		} else if c == "\"" || c == "`" {
 			append(out, span("ts", piece(chars, i, j)))
 		} else if c == "#" && isUpper(after) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if !isIdent(chars[j]) {
-						break
-					}
-				}
-			}
 			append(out, span("ta", piece(chars, i, j)))
 		} else if isDigit(c) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					d := chars[j]
-					if !(isDigit(d) || d == "." || d == "_") {
-						break
-					}
-				}
-			}
 			append(out, span("tn", piece(chars, i, j)))
 		} else if isIdentStart(c) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if !isIdent(chars[j]) {
-						break
-					}
-				}
-			}
 			word := piece(chars, i, j)
 			append(out, span(wordClass(word, nextVisible(chars, j)), word))
 		} else {
@@ -298,60 +345,33 @@ func jsonLine(line: Str): Str {
 	mut Str[dyn] out = []
 	mut i := 0
 	for ; i < total; {
-		mut c := ""
-		if chars bounds i {
-			c = chars[i]
-		}
-		mut after := ""
-		ahead := i + 1
-		if chars bounds ahead {
-			after = chars[ahead]
-		}
-		mut j := i + 1
+		c := charOf(chars, i)
+		after := charOf(chars, i + 1)
 		if c == "\"" {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if chars[j] == "\\" {
-						j++
-					} else if chars[j] == "\"" {
-						j++
-						break
-					}
-				}
-			}
+			j := quotedEnd(chars, i + 1)
 			mut cls := "ts"
 			if nextVisible(chars, j) == ":" {
 				cls = "tt"
 			}
 			append(out, span(cls, piece(chars, i, j)))
+			i = j
 		} else if isDigit(c) || (c == "-" && isDigit(after)) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					d := chars[j]
-					if !(isDigit(d) || d == "." || d == "e" || d == "E" || d == "+" || d == "-") {
-						break
-					}
-				}
-			}
+			j := numberEnd(chars, i + 1, true)
 			append(out, span("tn", piece(chars, i, j)))
+			i = j
 		} else if isIdentStart(c) {
-			for ; j < total; j++ {
-				if chars bounds j {
-					if !isIdent(chars[j]) {
-						break
-					}
-				}
-			}
+			j := identEnd(chars, i + 1)
 			word := piece(chars, i, j)
 			if word == "true" || word == "false" || word == "null" {
 				append(out, span("tb", word))
 			} else {
 				append(out, escape(word))
 			}
+			i = j
 		} else {
 			append(out, escape(c))
+			i++
 		}
-		i = j
 	}
 	return join(out, "")
 }

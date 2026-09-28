@@ -168,7 +168,7 @@ func object(chars: Str[], from: Int, depth: Int, budget: Int): Node {
 			i++
 		} else if c == "}" {
 			return Node("<details class=\"jo o\"" + openAttr(depth) + "><summary><span class=\"jp\">\{</span><span class=\"jn\">{items}</span></summary>" +
-				"<div class=\"jb\">" + join(rows, "") + "</div><span class=\"jp\">}</span></details>", i + 1, "", used + 1)
+				"<div class=\"jb\">" + highlight.joined(rows, "") + "</div><span class=\"jp\">}</span></details>", i + 1, "", used + 1)
 		} else {
 			return fail(i, "esperava ',' ou '}'")
 		}
@@ -204,7 +204,7 @@ func list(chars: Str[], from: Int, depth: Int, budget: Int): Node {
 			i++
 		} else if c == "]" {
 			return Node("<details class=\"jo a\"" + openAttr(depth) + "><summary><span class=\"jp\">[</span><span class=\"jn\">{items}</span></summary>" +
-				"<div class=\"jb\">" + join(rows, "") + "</div><span class=\"jp\">]</span></details>", i + 1, "", used + 1)
+				"<div class=\"jb\">" + highlight.joined(rows, "") + "</div><span class=\"jp\">]</span></details>", i + 1, "", used + 1)
 		} else {
 			return fail(i, "esperava ',' ou ']'")
 		}

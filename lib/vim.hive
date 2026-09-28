@@ -2053,7 +2053,7 @@ proc repeatChange(ed: mut Editor, count: Int, hasCount: Bool): void {
 }
 
 // As teclas pendentes no modo normal.
-proc normalStep(ed: mut Editor, keys: mut Str[dyn]): Outcome {
+proc normalStep(ed: mut Editor, keys: Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -2281,7 +2281,7 @@ proc toNormal(ed: mut Editor): void {
 }
 
 // As teclas pendentes no modo visual.
-proc visualStep(ed: mut Editor, keys: mut Str[dyn]): Outcome {
+proc visualStep(ed: mut Editor, keys: Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -2491,8 +2491,7 @@ proc keyStep(ed: mut Editor, key: Str): Outcome {
 		settled(ed)
 		return finished()
 	}
-	mut Str[dyn] keys = ed.vim.pending
-	append(keys, key)
+	keys := ed.vim.pending + [key]
 	mut outcome := finished()
 	if mode == model.VimMode.NormalMode() {
 		outcome = normalStep(ed, keys)
