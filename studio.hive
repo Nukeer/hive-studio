@@ -530,7 +530,7 @@ proc toggleSetting(state: mut model.State, name: Str): void {
 	if name == "showHidden" {
 		reload(state)
 	} else if name == "vim" {
-		state.vim = vim.reset(state.vim)
+		vim.reset(state.vim)
 		state.status = render.tx(state, "modo Vim desligado")
 		if prefs.vim {
 			state.status = render.tx(state, "modo Vim ligado")
@@ -984,7 +984,9 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 			return true
 		}
 		idle := state.vim.mode == model.VimMode.NormalMode() && len(state.vim.pending) == 0 && state.vim.prompt == ""
-		vimApply(state, vim.press(vimEditor(state, caret, view), key), from)
+		mut editor := vimEditor(state, caret, view)
+		vim.press(editor, key)
+		vimApply(state, editor, from)
 		// Esc sem nada pendente fecha o que estiver aberto (busca, sugestões…).
 		if vim.isEscape(key) && idle {
 			if escapeMsg(state) is Result.Ok(closing) {
@@ -996,7 +998,9 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 			state.caret = start
 			return true
 		}
-		vimApply(state, vim.click(vimEditor(state, start, ""), start, end), from)
+		mut editor := vimEditor(state, start, "")
+		vim.click(editor, start, end)
+		vimApply(state, editor, from)
 	} else if message is model.Msg.VimTyped(text) {
 		state.vim.command = text
 		if state.vim.prompt == "/" || state.vim.prompt == "?" {
@@ -1006,10 +1010,14 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 		if state.vim.prompt == "" || !state.settings.vim {
 			return true
 		}
-		vimApply(state, vim.submit(vimEditor(state, -1, ""), text), from)
+		mut editor := vimEditor(state, -1, "")
+		vim.submit(editor, text)
+		vimApply(state, editor, from)
 	} else if message is model.Msg.VimCancel {
 		if state.settings.vim {
-			vimApply(state, vim.cancel(vimEditor(state, -1, "")), from)
+			mut editor := vimEditor(state, -1, "")
+			vim.cancel(editor)
+			vimApply(state, editor, from)
 			return true
 		}
 		state.vim.prompt = ""
@@ -1017,7 +1025,7 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 		state.vim.serial = state.vim.serial + 1
 		withFocus(state, "editor")
 	} else if message is model.Msg.VimHistory(delta) {
-		state.vim = vim.browseHistory(state.vim, delta)
+		vim.browseHistory(state.vim, delta)
 	} else if message is model.Msg.VimEdit(path) {
 		vimEdit(state, path)
 	} else if message is model.Msg.FocusExplorer(path) {
@@ -1915,7 +1923,7 @@ proc step(state: mut model.State, message: model.Msg, from: hive.syslink.Address
 			state.caret = 0
 		}
 		clearSuggestions(state)
-		state.vim = vim.reset(state.vim)
+		vim.reset(state.vim)
 	}
 	// Outra pasta, uma pasta aberta ou fechada na árvore, um arquivo aberto ou
 	// fechado: as pastas vigiadas acompanham.

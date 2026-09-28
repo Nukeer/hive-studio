@@ -1170,14 +1170,17 @@ func textObject(text: Str, chars: Str[], pos: Int, inner: Bool, obj: Str, count:
 }
 
 // ── desfazer ─────────────────────────────────────────────────────────────
+//
+// O motor altera o editor no lugar (`ed: mut Editor`): nenhuma proc devolve
+// um editor novo, o que deixa o compilador compartilhá-lo com quem só o lê em
+// vez de copiá-lo a cada tecla.
 
 func snapshot(ed: Editor): model.Snapshot {
 	return model.Snapshot(ed.text, ed.caret)
 }
 
 // Guarda `before` para o `u`. Uma alteração nova esquece o que dava para refazer.
-func pushUndo(ed: Editor, before: model.Snapshot): Editor {
-	mut e := ed
+proc pushUndo(ed: mut Editor, before: model.Snapshot): void {
 	mut model.Snapshot[dyn] stack = ed.undo
 	append(stack, before)
 	if len(stack) > undoLimit() {
@@ -1185,14 +1188,12 @@ func pushUndo(ed: Editor, before: model.Snapshot): Editor {
 			drop(stack, 0, 0)
 		}
 	}
-	e.undo = stack
+	ed.undo = stack
 	model.Snapshot[dyn] none = []
-	e.redo = none
-	return e
+	ed.redo = none
 }
 
-func undoSteps(ed: Editor, count: Int, back: Bool): Editor {
-	mut e := ed
+proc undoSteps(ed: mut Editor, count: Int, back: Bool): void {
 	mut model.Snapshot[dyn] from = ed.undo
 	mut model.Snapshot[dyn] into = ed.redo
 	if !back {
@@ -1205,109 +1206,96 @@ func undoSteps(ed: Editor, count: Int, back: Bool): Editor {
 		if from bounds last {
 			snap := from[last]
 			drop(from, last, last)
-			append(into, model.Snapshot(e.text, e.caret))
-			e.text = snap.text
-			e.caret = snap.caret
+			append(into, model.Snapshot(ed.text, ed.caret))
+			ed.text = snap.text
+			ed.caret = snap.caret
 			done++
 		}
 	}
 	if back {
-		e.undo = from
-		e.redo = into
+		ed.undo = from
+		ed.redo = into
 	} else {
-		e.undo = into
-		e.redo = from
+		ed.undo = into
+		ed.redo = from
 	}
-	e.caret = clampNormal(split(e.text, ""), e.caret)
+	ed.caret = clampNormal(split(ed.text, ""), ed.caret)
 	if done == 0 && back {
-		return say(e, "Já está na alteração mais antiga", "", false)
+		say(ed, "Já está na alteração mais antiga", "", false)
 	} else if done == 0 {
-		return say(e, "Já está na alteração mais recente", "", false)
+		say(ed, "Já está na alteração mais recente", "", false)
 	}
-	return e
 }
 
 // ── edições ──────────────────────────────────────────────────────────────
 
-func say(ed: Editor, message: Str, arg: Str, bad: Bool): Editor {
-	mut e := ed
+proc say(ed: mut Editor, message: Str, arg: Str, bad: Bool): void {
 	mut Str[dyn] args = []
 	if arg != "" {
 		append(args, arg)
 	}
-	e.vim.message = message
-	e.vim.args = args
-	e.vim.error = bad
-	return e
+	ed.vim.message = message
+	ed.vim.args = args
+	ed.vim.error = bad
 }
 
-func sayTwo(ed: Editor, message: Str, first: Str, second: Str): Editor {
-	mut e := ed
-	e.vim.message = message
-	e.vim.args = [first, second]
-	e.vim.error = false
-	return e
+proc sayTwo(ed: mut Editor, message: Str, first: Str, second: Str): void {
+	ed.vim.message = message
+	ed.vim.args = [first, second]
+	ed.vim.error = false
 }
 
 // Mensagem de "N linhas…", que o Vim só mostra a partir de 3.
-func report(ed: Editor, message: Str, lines: Int): Editor {
+proc report(ed: mut Editor, message: Str, lines: Int): void {
 	if lines >= 3 {
-		return say(ed, message, "{lines}", false)
+		say(ed, message, "{lines}", false)
 	}
-	return ed
 }
 
 func linesIn(text: Str): Int {
 	return len(split(text, "\n")) - 1
 }
 
-func effect(ed: Editor, message: model.Msg): Editor {
-	mut e := ed
+proc effect(ed: mut Editor, message: model.Msg): void {
 	mut model.Msg[dyn] effects = ed.effects
 	append(effects, message)
-	e.effects = effects
-	return e
+	ed.effects = effects
 }
 
 // Guarda as teclas da alteração para o `.`.
-func recorded(ed: Editor, keys: Str[dyn]): Editor {
-	mut e := ed
-	e.vim.change = keys
-	e.vim.typed = ""
-	return e
+proc recorded(ed: mut Editor, keys: Str[dyn]): void {
+	ed.vim.change = keys
+	ed.vim.typed = ""
 }
 
 // Copia um trecho para o registrador sem nome.
-func yank(ed: Editor, chars: Str[], span: Span): Editor {
-	mut e := ed
+proc yank(ed: mut Editor, chars: Str[], span: Span): void {
 	mut register := slice(ed.text, span.from, span.to)
 	if span.linewise && !endsWith(register, "\n") {
 		register = register + "\n"
 	}
-	e.vim.register = register
-	e.vim.linewise = span.linewise
-	e.clip = register
+	ed.vim.register = register
+	ed.vim.linewise = span.linewise
+	ed.clip = register
 	if span.linewise {
 		if span.from < lineStart(chars, ed.caret) {
-			e.caret = atColumn(chars, span.from, ed.vim.column, ed.tab)
+			ed.caret = atColumn(chars, span.from, ed.vim.column, ed.tab)
 		}
+		report(ed, "%1 linhas copiadas", linesIn(register))
 	} else {
-		e.caret = clampNormal(chars, span.from)
+		ed.caret = clampNormal(chars, span.from)
 	}
-	if span.linewise {
-		return report(e, "%1 linhas copiadas", linesIn(register))
-	}
-	return e
 }
 
 // Apaga um trecho, que vai para o registrador. Apagar a última linha leva junto
 // o "\n" de antes dela.
-func deleteSpan(ed: Editor, chars: Str[], span: Span): Editor {
+proc deleteSpan(ed: mut Editor, chars: Str[], span: Span): void {
 	if span.to <= span.from {
-		return ed
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	content := slice(ed.text, span.from, span.to)
+	original := ed.text
+	pushUndo(ed, snapshot(ed))
+	content := slice(original, span.from, span.to)
 	mut from := span.from
 	mut register := content
 	if span.linewise && !endsWith(content, "\n") {
@@ -1316,56 +1304,55 @@ func deleteSpan(ed: Editor, chars: Str[], span: Span): Editor {
 			from = from - 1
 		}
 	}
-	e.vim.register = register
-	e.vim.linewise = span.linewise
-	e.text = cut(ed.text, from, span.to)
-	after := split(e.text, "")
+	ed.vim.register = register
+	ed.vim.linewise = span.linewise
+	ed.text = cut(original, from, span.to)
+	after := split(ed.text, "")
 	if span.linewise {
-		e.caret = firstNonBlank(after, clampNormal(after, from))
-		return report(e, "%1 linhas a menos", linesIn(register))
+		ed.caret = firstNonBlank(after, clampNormal(after, from))
+		report(ed, "%1 linhas a menos", linesIn(register))
+		return
 	}
-	e.caret = clampNormal(after, from)
-	return e
+	ed.caret = clampNormal(after, from)
 }
 
 // Entra no modo de inserção. `before` vai para a pilha de desfazer; `keys` e
 // `count` servem para o `.` e para repetir o que for digitado (`3ihi<Esc>`).
-func enterInsert(ed: Editor, before: model.Snapshot, keys: Str[dyn], count: Int): Editor {
-	mut e := pushUndo(ed, before)
-	e.vim.mode = model.VimMode.InsertMode()
-	e.vim.insertBase = ed.text
-	e.vim.insertAt = ed.caret
-	e.vim.insertKeys = keys
-	e.vim.count = maxInt(count, 1)
-	return e
+proc enterInsert(ed: mut Editor, before: model.Snapshot, keys: Str[dyn], count: Int): void {
+	pushUndo(ed, before)
+	ed.vim.mode = model.VimMode.InsertMode()
+	ed.vim.insertBase = ed.text
+	ed.vim.insertAt = ed.caret
+	ed.vim.insertKeys = keys
+	ed.vim.count = maxInt(count, 1)
 }
 
 // Apaga o trecho e entra no modo de inserção no lugar dele. Linhas inteiras
 // viram uma linha vazia com a indentação da primeira.
-func changeSpan(ed: Editor, chars: Str[], span: Span, keys: Str[dyn]): Editor {
+proc changeSpan(ed: mut Editor, chars: Str[], span: Span, keys: Str[dyn]): void {
 	before := snapshot(ed)
-	mut e := ed
-	content := slice(ed.text, span.from, span.to)
+	original := ed.text
+	content := slice(original, span.from, span.to)
 	if content != "" {
-		e.vim.register = content
-		e.vim.linewise = span.linewise
+		ed.vim.register = content
+		ed.vim.linewise = span.linewise
 		if span.linewise && !endsWith(content, "\n") {
-			e.vim.register = content + "\n"
+			ed.vim.register = content + "\n"
 		}
 	}
 	if span.linewise {
-		indent := leadingBlanks(slice(ed.text, span.from, lineEnd(chars, span.from)))
+		indent := leadingBlanks(slice(original, span.from, lineEnd(chars, span.from)))
 		mut replacement := indent
 		if endsWith(content, "\n") {
 			replacement = indent + "\n"
 		}
-		e.text = complete.take(ed.text, span.from) + replacement + complete.skip(ed.text, span.to)
-		e.caret = span.from + len(indent)
+		ed.text = complete.take(original, span.from) + replacement + complete.skip(original, span.to)
+		ed.caret = span.from + len(indent)
 	} else {
-		e.text = cut(ed.text, span.from, span.to)
-		e.caret = span.from
+		ed.text = cut(original, span.from, span.to)
+		ed.caret = span.from
 	}
-	return enterInsert(e, before, keys, 1)
+	enterInsert(ed, before, keys, 1)
 }
 
 // A unidade de indentação do arquivo: tab, a não ser que ele indente com espaços.
@@ -1391,7 +1378,7 @@ func unindent(line: Str, tab: Int): Str {
 }
 
 // `>` e `<`: indenta ou desindenta as linhas do trecho, `levels` vezes.
-func shiftLines(ed: Editor, chars: Str[], span: Span, right: Bool, levels: Int): Editor {
+proc shiftLines(ed: mut Editor, chars: Str[], span: Span, right: Bool, levels: Int): void {
 	first := lineOf(chars, span.from)
 	last := lineOf(chars, maxInt(span.to - 1, span.from))
 	unit := indentUnit(ed.text, ed.tab)
@@ -1411,16 +1398,15 @@ func shiftLines(ed: Editor, chars: Str[], span: Span, right: Bool, levels: Int):
 	}
 	text := join(lines, "\n")
 	if text == ed.text {
-		return ed
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = text
-	e.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, first))
-	return e
+	pushUndo(ed, snapshot(ed))
+	ed.text = text
+	ed.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, first))
 }
 
 // `g~`, `gu`, `gU`, `~`, `u` e `U` no visual.
-func recase(ed: Editor, chars: Str[], span: Span, how: Str): Editor {
+proc recase(ed: mut Editor, chars: Str[], span: Span, how: Str): void {
 	piece := slice(ed.text, span.from, span.to)
 	mut changed := toggleCase(piece)
 	if how == "gu" || how == "u" {
@@ -1429,27 +1415,31 @@ func recase(ed: Editor, chars: Str[], span: Span, how: Str): Editor {
 		changed = upper(piece)
 	}
 	if changed == piece {
-		return ed
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = complete.take(ed.text, span.from) + changed + complete.skip(ed.text, span.to)
+	original := ed.text
+	pushUndo(ed, snapshot(ed))
+	ed.text = complete.take(original, span.from) + changed + complete.skip(original, span.to)
 	if !span.linewise {
-		e.caret = clampNormal(split(e.text, ""), span.from)
+		ed.caret = clampNormal(split(ed.text, ""), span.from)
 	}
-	return e
 }
 
-func applyOperator(ed: Editor, chars: Str[], op: Str, span: Span, keys: Str[dyn], levels: Int): Editor {
+proc applyOperator(ed: mut Editor, chars: Str[], op: Str, span: Span, keys: Str[dyn], levels: Int): void {
 	if op == "y" {
-		return yank(ed, chars, span)
+		yank(ed, chars, span)
 	} else if op == "d" {
-		return recorded(deleteSpan(ed, chars, span), keys)
+		deleteSpan(ed, chars, span)
+		recorded(ed, keys)
 	} else if op == "c" {
-		return changeSpan(ed, chars, span, keys)
+		changeSpan(ed, chars, span, keys)
 	} else if op == ">" || op == "<" {
-		return recorded(shiftLines(ed, chars, span, op == ">", levels), keys)
+		shiftLines(ed, chars, span, op == ">", levels)
+		recorded(ed, keys)
+	} else {
+		recase(ed, chars, span, op)
+		recorded(ed, keys)
 	}
-	return recorded(recase(ed, chars, span, op), keys)
 }
 
 // O trecho que um operador pega com um movimento. Um movimento exclusivo que
@@ -1505,16 +1495,18 @@ func insertedText(base: Str, offset: Int, now: Str): Result<Str, Bool> {
 
 // `Esc` no modo de inserção: repete o que foi digitado se houve contagem, guarda
 // para o `.` (com `record`) e volta ao modo normal um caractere para trás.
-func leaveInsert(ed: Editor, record: Bool): Editor {
-	mut e := ed
-	v := ed.vim
+proc leaveInsert(ed: mut Editor, record: Bool): void {
+	base := ed.vim.insertBase
+	offset := ed.vim.insertAt
+	times := ed.vim.count
+	keys := ed.vim.insertKeys
 	mut text := ed.text
 	mut caret := ed.caret
-	typed := insertedText(v.insertBase, v.insertAt, ed.text)
+	typed := insertedText(base, offset, ed.text)
 	if typed is Result.Ok(piece) {
-		if piece != "" && v.count > 1 {
-			command := at(v.insertKeys, len(v.insertKeys) - 1)
-			for n := 1; n < v.count; n++ {
+		if piece != "" && times > 1 {
+			command := at(keys, len(keys) - 1)
+			for n := 1; n < times; n++ {
 				if command == "o" || command == "O" {
 					opened := openLine(text, caret, command == "o")
 					text = opened.text
@@ -1525,44 +1517,47 @@ func leaveInsert(ed: Editor, record: Bool): Editor {
 			}
 		}
 		if record {
-			e.vim.change = v.insertKeys
-			e.vim.typed = piece
+			ed.vim.change = keys
+			ed.vim.typed = piece
 		}
 	}
 	chars := split(text, "")
 	if caret > lineStart(chars, caret) {
 		caret = caret - 1
 	}
-	e.text = text
-	e.caret = clampNormal(chars, caret)
-	e.vim.mode = model.VimMode.NormalMode()
-	e.vim.count = 1
-	e.vim.column = displayColumn(chars, e.caret, ed.tab)
+	ed.text = text
+	ed.caret = clampNormal(chars, caret)
+	ed.vim.mode = model.VimMode.NormalMode()
+	ed.vim.count = 1
+	ed.vim.column = displayColumn(chars, ed.caret, ed.tab)
 	// Entrou e saiu sem mudar nada: não há o que desfazer.
-	mut model.Snapshot[dyn] stack = e.undo
+	mut model.Snapshot[dyn] stack = ed.undo
 	last := len(stack) - 1
 	if stack bounds last {
 		if stack[last].text == text {
 			drop(stack, last, last)
 		}
 	}
-	e.undo = stack
-	return e
+	ed.undo = stack
 }
 
 // `p` e `P`: o registrador depois (ou antes) do cursor, `count` vezes.
-func put(ed: Editor, chars: Str[], before: Bool, count: Int): Editor {
+proc put(ed: mut Editor, chars: Str[], before: Bool, count: Int): void {
 	register := ed.vim.register
 	if register == "" {
-		return say(ed, "E353: Nada no registrador", "", true)
+		say(ed, "E353: Nada no registrador", "", true)
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
+	original := ed.text
+	caret := ed.caret
+	linewise := ed.vim.linewise
+	pushUndo(ed, snapshot(ed))
 	size := len(chars)
 	mut piece := repeatText(register, count)
-	if ed.vim.linewise {
-		mut offset := lineStart(chars, ed.caret)
+	if linewise {
+		mut offset := lineStart(chars, caret)
 		if !before {
-			end := lineEnd(chars, ed.caret)
+			end := lineEnd(chars, caret)
 			if end >= size {
 				offset = size
 				piece = "\n" + complete.take(piece, len(piece) - 1)
@@ -1570,30 +1565,30 @@ func put(ed: Editor, chars: Str[], before: Bool, count: Int): Editor {
 				offset = end + 1
 			}
 		}
-		e.text = insertAt(ed.text, offset, piece)
-		after := split(e.text, "")
+		ed.text = insertAt(original, offset, piece)
+		after := split(ed.text, "")
 		mut first := offset
 		if complete.startsWith(piece, "\n") {
 			first = offset + 1
 		}
-		e.caret = firstNonBlank(after, first)
-		return report(e, "%1 linhas a mais", linesIn(register) * count)
+		ed.caret = firstNonBlank(after, first)
+		report(ed, "%1 linhas a mais", linesIn(register) * count)
+		return
 	}
-	mut offset := ed.caret
+	mut offset := caret
 	if !before && offset < size && at(chars, offset) != "\n" {
 		offset++
 	}
-	e.text = insertAt(ed.text, offset, piece)
-	e.caret = clampNormal(split(e.text, ""), offset + len(piece) - 1)
-	return e
+	ed.text = insertAt(original, offset, piece)
+	ed.caret = clampNormal(split(ed.text, ""), offset + len(piece) - 1)
 }
 
 // `J` (e `gJ`, sem mexer nos espaços): junta `count` linhas a partir do cursor.
-func joinLines(ed: Editor, chars: Str[], count: Int, spaces: Bool): Editor {
+proc joinLines(ed: mut Editor, chars: Str[], count: Int, spaces: Bool): void {
 	line := lineOf(chars, ed.caret)
 	final := lastLine(chars)
 	if line >= final {
-		return ed
+		return
 	}
 	mut Str[dyn] lines = split(ed.text, "\n")
 	mut joinAt := 0
@@ -1622,31 +1617,32 @@ func joinLines(ed: Editor, chars: Str[], count: Int, spaces: Bool): Editor {
 		}
 		joined++
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = join(lines, "\n")
-	e.caret = clampNormal(split(e.text, ""), offsetOfLine(lines, line) + joinAt)
-	return e
+	pushUndo(ed, snapshot(ed))
+	ed.text = join(lines, "\n")
+	ed.caret = clampNormal(split(ed.text, ""), offsetOfLine(lines, line) + joinAt)
 }
 
 // `r`: troca `count` caracteres por `c`. `r<CR>` troca todos por uma quebra de linha.
-func replaceChars(ed: Editor, chars: Str[], c: Str, count: Int): Step {
+proc replaceChars(ed: mut Editor, chars: Str[], c: Str, count: Int): Outcome {
 	end := lineEnd(chars, ed.caret)
 	if c == "" || ed.caret + count > end {
-		return fail(ed)
+		return failed()
 	}
-	mut e := pushUndo(ed, snapshot(ed))
+	original := ed.text
+	caret := ed.caret
+	pushUndo(ed, snapshot(ed))
 	if c == "\n" {
-		e.text = complete.take(ed.text, ed.caret) + "\n" + complete.skip(ed.text, ed.caret + count)
-		e.caret = ed.caret + 1
+		ed.text = complete.take(original, caret) + "\n" + complete.skip(original, caret + count)
+		ed.caret = caret + 1
 	} else {
-		e.text = complete.take(ed.text, ed.caret) + repeatText(c, count) + complete.skip(ed.text, ed.caret + count)
-		e.caret = ed.caret + count - 1
+		ed.text = complete.take(original, caret) + repeatText(c, count) + complete.skip(original, caret + count)
+		ed.caret = caret + count - 1
 	}
-	return done(e)
+	return finished()
 }
 
 // `Ctrl+A` e `Ctrl+X`: soma `amount` ao número no cursor (ou ao primeiro depois dele na linha).
-func increment(ed: Editor, chars: Str[], amount: Int): Step {
+proc increment(ed: mut Editor, chars: Str[], amount: Int): Outcome {
 	end := lineEnd(chars, ed.caret)
 	mut i := ed.caret
 	for ; i > lineStart(chars, i) && highlight.isDigit(at(chars, i)) && highlight.isDigit(at(chars, i - 1)); i-- {
@@ -1654,7 +1650,7 @@ func increment(ed: Editor, chars: Str[], amount: Int): Step {
 	for ; i < end && !highlight.isDigit(at(chars, i)); i++ {
 	}
 	if i >= end {
-		return fail(ed)
+		return failed()
 	}
 	mut start := i
 	mut stop := i
@@ -1663,20 +1659,21 @@ func increment(ed: Editor, chars: Str[], amount: Int): Step {
 	if at(chars, start - 1) == "-" {
 		start--
 	}
-	number := slice(ed.text, start, stop)
+	original := ed.text
+	number := slice(original, start, stop)
 	if hive.conv.sti(number) is Result.Ok(value) {
 		changed := "{value + amount}"
-		mut e := pushUndo(ed, snapshot(ed))
-		e.text = complete.take(ed.text, start) + changed + complete.skip(ed.text, stop)
-		e.caret = start + len(changed) - 1
-		return done(e)
+		pushUndo(ed, snapshot(ed))
+		ed.text = complete.take(original, start) + changed + complete.skip(original, stop)
+		ed.caret = start + len(changed) - 1
+		return finished()
 	}
-	return fail(ed)
+	return failed()
 }
 
 // `Ctrl+D`, `Ctrl+U`, `Ctrl+F`, `Ctrl+B`, `Ctrl+E`, `Ctrl+Y`: rolam a tela e
 // levam o cursor junto quando ele sairia dela.
-func scrollBy(ed: Editor, chars: Str[], k: Str, count: Int, hasCount: Bool): Step {
+proc scrollBy(ed: mut Editor, chars: Str[], k: Str, count: Int, hasCount: Bool): Outcome {
 	final := lastLine(chars)
 	rows := maxInt(ed.rows, 1)
 	line := lineOf(chars, ed.caret)
@@ -1706,107 +1703,116 @@ func scrollBy(ed: Editor, chars: Str[], k: Str, count: Int, hasCount: Bool): Ste
 	} else if target > view + rows - 1 {
 		target = view + rows - 1
 	}
-	mut e := ed
-	e.scroll = view
-	e.caret = atColumn(chars, lineOffset(chars, target), ed.vim.column, ed.tab)
-	return Step(e, #Done, true)
+	ed.scroll = view
+	ed.caret = atColumn(chars, lineOffset(chars, target), ed.vim.column, ed.tab)
+	return kept()
 }
 
 // `zz`, `zt`, `zb` (e `z.`, `z<CR>`, `z-`, que também vão ao primeiro não branco).
-func scrollAround(ed: Editor, chars: Str[], k: Str): Step {
-	mut e := ed
+proc scrollAround(ed: mut Editor, chars: Str[], k: Str): Outcome {
 	line := lineOf(chars, ed.caret)
 	rows := maxInt(ed.rows, 1)
 	if k == "t" || k == "<CR>" {
-		e.scroll = line
+		ed.scroll = line
 	} else if k == "z" || k == "." {
-		e.scroll = maxInt(line - rows / 2, 0)
+		ed.scroll = maxInt(line - rows / 2, 0)
 	} else if k == "b" || k == "-" {
-		e.scroll = maxInt(line - rows + 1, 0)
+		ed.scroll = maxInt(line - rows + 1, 0)
 	} else {
-		return fail(ed)
+		return failed()
 	}
 	if k == "<CR>" || k == "." || k == "-" {
-		e.caret = firstNonBlank(chars, ed.caret)
-		return done(e)
+		ed.caret = firstNonBlank(chars, ed.caret)
+		return finished()
 	}
-	return Step(e, #Done, true)
+	return kept()
 }
 
 // `*` e `#`: busca a palavra sob o cursor, inteira.
-func searchWord(ed: Editor, chars: Str[], backward: Bool, count: Int): Step {
+proc searchWord(ed: mut Editor, chars: Str[], backward: Bool, count: Int): Outcome {
 	word := wordUnder(chars, ed.caret)
 	if !word.ok {
-		return fail(say(ed, "E348: Nenhuma palavra sob o cursor", "", true))
+		say(ed, "E348: Nenhuma palavra sob o cursor", "", true)
+		return failed()
 	}
-	mut e := ed
-	e.vim.pattern = slice(ed.text, word.from, word.to)
-	e.vim.backward = backward
-	e.vim.whole = true
-	e.vim.highlight = true
-	e.caret = word.from
-	t := searchTarget(e, chars, false, count)
+	ed.vim.pattern = slice(ed.text, word.from, word.to)
+	ed.vim.backward = backward
+	ed.vim.whole = true
+	ed.vim.highlight = true
+	ed.caret = word.from
+	t := searchTarget(ed, chars, false, count)
 	if !t.ok {
-		return fail(say(e, t.note, t.arg, t.bad))
+		say(ed, t.note, t.arg, t.bad)
+		return failed()
 	}
-	e.caret = t.pos
-	return done(say(e, t.note, t.arg, false))
+	ed.caret = t.pos
+	say(ed, t.note, t.arg, false)
+	return finished()
 }
 
 // Abre a linha de comando (`:`, `/` ou `?`), já com `text` escrito.
-func openPrompt(ed: Editor, prompt: Str, text: Str): Editor {
-	mut e := ed
-	e.vim.prompt = prompt
-	e.vim.command = text
-	e.vim.historyAt = len(ed.vim.history)
-	e.vim.promptFrom = ""
-	return e
+proc openPrompt(ed: mut Editor, prompt: Str, text: Str): void {
+	ed.vim.prompt = prompt
+	ed.vim.command = text
+	ed.vim.historyAt = len(ed.vim.history)
+	ed.vim.promptFrom = ""
 }
 
 // ── ler as teclas ────────────────────────────────────────────────────────
 
-func wait(ed: Editor): Step {
-	return Step(ed, #Wait, false)
+// O que uma tecla deu: esperar mais teclas (`#Wait`), feito (`#Done`) ou
+// falhou (`#Fail`, o que para uma macro), e se a coluna desejada fica (`keep`,
+// de `j`, `k`, `$`…).
+type Outcome {
+	status: Atom
+	keep:   Bool
 }
 
-func done(ed: Editor): Step {
-	return Step(ed, #Done, false)
+func waitFor(): Outcome {
+	return Outcome(#Wait, false)
 }
 
-func fail(ed: Editor): Step {
-	return Step(ed, #Fail, false)
+func finished(): Outcome {
+	return Outcome(#Done, false)
+}
+
+func kept(): Outcome {
+	return Outcome(#Done, true)
+}
+
+func failed(): Outcome {
+	return Outcome(#Fail, false)
 }
 
 // Guarda o último `f`/`t`/`F`/`T`, para `;` e `,`.
-func remember(ed: Editor, keys: Str[]): Editor {
-	mut e := ed
+proc remember(ed: mut Editor, keys: Str[]): void {
 	k := at(keys, 0)
 	if (k == "f" || k == "F" || k == "t" || k == "T") && literal(at(keys, 1)) != "" {
-		e.vim.find = [k, literal(at(keys, 1))]
+		ed.vim.find = [k, literal(at(keys, 1))]
 	}
-	return e
 }
 
 // Um movimento sozinho: leva o cursor (no visual, a ponta da seleção).
-func moveStep(ed: Editor, chars: Str[], keys: Str[dyn], count: Int, hasCount: Bool): Step {
+proc moveStep(ed: mut Editor, chars: Str[], keys: Str[dyn], count: Int, hasCount: Bool): Outcome {
 	t := motion(ed, chars, keys, count, hasCount)
-	mut e := remember(ed, keys)
+	remember(ed, keys)
 	if !t.ok {
-		return fail(say(e, t.note, t.arg, t.bad))
+		say(ed, t.note, t.arg, t.bad)
+		return failed()
 	}
-	e.caret = clampNormal(chars, t.pos)
-	e = say(e, t.note, t.arg, t.bad)
+	ed.caret = clampNormal(chars, t.pos)
+	say(ed, t.note, t.arg, t.bad)
 	k := at(keys, 0)
 	if k == "$" || k == "<End>" || (k == "g" && at(keys, 1) == "$") {
-		e.vim.column = endColumn()
-		return Step(e, #Done, true)
+		ed.vim.column = endColumn()
+		return kept()
 	}
-	return Step(e, #Done, t.keep)
+	return Outcome(#Done, t.keep)
 }
 
 // `d`, `c`, `y`, `>`, `<`, `g~`, `gu`, `gU` seguidos de um movimento, de um
 // objeto de texto (`iw`, `a"`, `i\{`…) ou de si mesmos (`dd`, `>>`, `gUU`).
-func operatorStep(ed: Editor, chars: Str[], keys: Str[dyn], start: Int, op: Str, count: Int, hasCount: Bool): Step {
+proc operatorStep(ed: mut Editor, chars: Str[], keys: Str[dyn], start: Int, op: Str, count: Int, hasCount: Bool): Outcome {
 	mut i := start
 	mut second := 0
 	for ; i < len(keys); i++ {
@@ -1820,92 +1826,100 @@ func operatorStep(ed: Editor, chars: Str[], keys: Str[dyn], start: Int, op: Str,
 	anyCount := hasCount || second > 0
 	k := at(keys, i)
 	if k == "" {
-		return wait(ed)
+		return waitFor()
 	}
+	caret := ed.caret
 	mut doubled := k == op
 	if op is "g{rest}" {
 		doubled = k == rest || (k == "g" && at(keys, i + 1) == rest)
 	}
 	if doubled {
-		first := lineOf(chars, ed.caret)
+		first := lineOf(chars, caret)
 		last := minInt(first + total - 1, lastLine(chars))
-		span := lineSpan(chars, ed.caret, lineOffset(chars, last))
-		return done(applyOperator(ed, chars, op, span, keys, 1))
+		span := lineSpan(chars, caret, lineOffset(chars, last))
+		applyOperator(ed, chars, op, span, keys, 1)
+		return finished()
 	}
 	if k == "i" || k == "a" {
 		obj := at(keys, i + 1)
 		if obj == "" {
-			return wait(ed)
+			return waitFor()
 		}
-		span := textObject(ed.text, chars, ed.caret, k == "i", obj, total)
+		span := textObject(ed.text, chars, caret, k == "i", obj, total)
 		if !span.ok {
-			return fail(ed)
+			return failed()
 		}
-		return done(applyOperator(ed, chars, op, span, keys, 1))
+		applyOperator(ed, chars, op, span, keys, 1)
+		return finished()
 	}
 	size := motionLength(keys, i)
 	if size == 0 {
-		return wait(ed)
+		return waitFor()
 	}
 	if size < 0 {
-		return fail(ed)
+		return failed()
 	}
 	moves := keysFrom(keys, i, size)
-	e := remember(ed, moves)
+	remember(ed, moves)
 	big := k == "W"
-	if op == "c" && (k == "w" || k == "W") && !isSpace(at(chars, ed.caret)) && at(chars, ed.caret) != "" {
-		span := Span(ed.caret, minInt(changeWordEnd(chars, ed.caret, big, total) + 1, len(chars)), false, true)
-		return done(applyOperator(e, chars, op, span, keys, 1))
+	if op == "c" && (k == "w" || k == "W") && !isSpace(at(chars, caret)) && at(chars, caret) != "" {
+		span := Span(caret, minInt(changeWordEnd(chars, caret, big, total) + 1, len(chars)), false, true)
+		applyOperator(ed, chars, op, span, keys, 1)
+		return finished()
 	}
 	if k == "w" || k == "W" {
 		// A última palavra de uma linha não leva o "\n" junto.
-		mut before := ed.caret
-		mut p := ed.caret
+		mut before := caret
+		mut p := caret
 		for n := 0; n < total; n++ {
 			before = p
 			p = nextWord(chars, p, big)
 		}
 		if lineOf(chars, p) > lineOf(chars, before) {
-			p = maxInt(lineEnd(chars, before), ed.caret)
+			p = maxInt(lineEnd(chars, before), caret)
 		}
-		return done(applyOperator(e, chars, op, Span(ed.caret, p, false, true), keys, 1))
+		applyOperator(ed, chars, op, Span(caret, p, false, true), keys, 1)
+		return finished()
 	}
-	t := motion(e, chars, moves, total, anyCount)
+	t := motion(ed, chars, moves, total, anyCount)
 	if !t.ok {
-		return fail(say(e, t.note, t.arg, t.bad))
+		say(ed, t.note, t.arg, t.bad)
+		return failed()
 	}
-	return done(applyOperator(e, chars, op, operatorSpan(chars, ed.caret, t), keys, 1))
+	applyOperator(ed, chars, op, operatorSpan(chars, caret, t), keys, 1)
+	return finished()
 }
 
 // Entra no modo de inserção num lugar do texto (`i`, `a`, `I`, `A`, `o`, `O`).
-func insertStep(ed: Editor, chars: Str[], k: Str, keys: Str[dyn], count: Int): Step {
+proc insertStep(ed: mut Editor, chars: Str[], k: Str, keys: Str[dyn], count: Int): Outcome {
 	before := snapshot(ed)
-	mut e := ed
+	caret := ed.caret
 	if k == "a" {
-		if ed.caret < len(chars) && at(chars, ed.caret) != "\n" {
-			e.caret = ed.caret + 1
+		if caret < len(chars) && at(chars, caret) != "\n" {
+			ed.caret = caret + 1
 		}
 	} else if k == "A" {
-		e.caret = lineEnd(chars, ed.caret)
+		ed.caret = lineEnd(chars, caret)
 	} else if k == "I" {
-		e.caret = firstNonBlank(chars, ed.caret)
-		if isBlank(at(chars, e.caret)) {
-			e.caret = lineEnd(chars, ed.caret)
+		ed.caret = firstNonBlank(chars, caret)
+		if isBlank(at(chars, ed.caret)) {
+			ed.caret = lineEnd(chars, caret)
 		}
 	} else if k == "o" || k == "O" {
-		opened := openLine(ed.text, ed.caret, k == "o")
-		e.text = opened.text
-		e.caret = opened.caret
+		opened := openLine(ed.text, caret, k == "o")
+		ed.text = opened.text
+		ed.caret = opened.caret
 	}
-	return done(enterInsert(e, before, keys, count))
+	enterInsert(ed, before, keys, count)
+	return finished()
 }
 
 // `.`: repete a última alteração (com outra contagem, se houver uma).
-func repeatChange(ed: Editor, count: Int, hasCount: Bool): Editor {
+proc repeatChange(ed: mut Editor, count: Int, hasCount: Bool): void {
 	change := ed.vim.change
 	typed := ed.vim.typed
 	if len(change) == 0 {
-		return ed
+		return
 	}
 	mut Str[dyn] keys = []
 	if hasCount {
@@ -1922,22 +1936,20 @@ func repeatChange(ed: Editor, count: Int, hasCount: Bool): Editor {
 			append(keys, k)
 		}
 	}
-	mut e := ed
 	Str[dyn] none = []
-	e.vim.pending = none
-	mut out := normalStep(e, keys).editor
-	if out.vim.mode == model.VimMode.InsertMode() {
-		out.text = insertAt(out.text, out.caret, typed)
-		out.caret = out.caret + len(typed)
-		out = leaveInsert(out, false)
+	ed.vim.pending = none
+	_outcome := normalStep(ed, keys)
+	if ed.vim.mode == model.VimMode.InsertMode() {
+		ed.text = insertAt(ed.text, ed.caret, typed)
+		ed.caret = ed.caret + len(typed)
+		leaveInsert(ed, false)
 	}
-	out.vim.change = change
-	out.vim.typed = typed
-	return out
+	ed.vim.change = change
+	ed.vim.typed = typed
 }
 
 // As teclas pendentes no modo normal.
-func normalStep(ed: Editor, keys: Str[dyn]): Step {
+proc normalStep(ed: mut Editor, keys: Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -1955,18 +1967,19 @@ func normalStep(ed: Editor, keys: Str[dyn]): Step {
 	pos := ed.caret
 	end := lineEnd(chars, pos)
 	if k == "" {
-		return wait(ed)
+		return waitFor()
 	}
 	if k == "q" {
 		if ed.vim.recordingTo != "" {
-			return Step(stopRecording(ed), #Done, true)
+			stopRecording(ed)
+			return kept()
 		} else if next == "" {
-			return wait(ed)
+			return waitFor()
 		}
 		return startRecording(ed, next)
 	} else if k == "@" {
 		if next == "" {
-			return wait(ed)
+			return waitFor()
 		}
 		return playMacro(ed, next, n)
 	}
@@ -1975,97 +1988,124 @@ func normalStep(ed: Editor, keys: Str[dyn]): Step {
 	}
 	if k == "g" {
 		if next == "" {
-			return wait(ed)
+			return waitFor()
 		} else if next == "~" || next == "u" || next == "U" {
 			return operatorStep(ed, chars, keys, i + 2, "g" + next, n, hasCount)
 		} else if next == "d" {
-			return done(effect(ed, model.Msg.GotoDefinition(pos)))
+			effect(ed, model.Msg.GotoDefinition(pos))
+			return finished()
 		} else if next == "t" {
-			return done(effect(ed, model.Msg.CycleTab(1)))
+			effect(ed, model.Msg.CycleTab(1))
+			return finished()
 		} else if next == "T" {
-			return done(effect(ed, model.Msg.CycleTab(-1)))
+			effect(ed, model.Msg.CycleTab(-1))
+			return finished()
 		} else if next == "J" {
-			return done(recorded(joinLines(ed, chars, maxInt(count, 2), false), keys))
+			joinLines(ed, chars, maxInt(count, 2), false)
+			recorded(ed, keys)
+			return finished()
 		}
 	}
 	if k == "z" {
 		if next == "" {
-			return wait(ed)
+			return waitFor()
 		}
 		return scrollAround(ed, chars, next)
 	}
 	if k == "Z" {
 		if next == "" {
-			return wait(ed)
+			return waitFor()
 		} else if next == "Z" {
-			return done(command(ed, chars, "x", false, "", 0, 0, false))
+			command(ed, chars, "x", false, "", 0, 0, false)
+			return finished()
 		} else if next == "Q" {
-			return done(command(ed, chars, "q", true, "", 0, 0, false))
+			command(ed, chars, "q", true, "", 0, 0, false)
+			return finished()
 		}
-		return fail(ed)
+		return failed()
 	}
 	if k == "r" {
 		if next == "" {
-			return wait(ed)
+			return waitFor()
 		}
-		step := replaceChars(ed, chars, literal(next), n)
-		return Step(recorded(step.editor, keys), step.status, false)
+		replaced := replaceChars(ed, chars, literal(next), n)
+		recorded(ed, keys)
+		return Outcome(replaced.status, false)
 	}
 	if k == "x" || k == "<Del>" {
-		return done(recorded(deleteSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true)), keys))
+		deleteSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true))
+		recorded(ed, keys)
+		return finished()
 	} else if k == "X" {
-		return done(recorded(deleteSpan(ed, chars, Span(maxInt(pos - n, lineStart(chars, pos)), pos, false, true)), keys))
+		deleteSpan(ed, chars, Span(maxInt(pos - n, lineStart(chars, pos)), pos, false, true))
+		recorded(ed, keys)
+		return finished()
 	} else if k == "D" || k == "C" {
 		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
 		span := Span(pos, lineEnd(chars, lineOffset(chars, last)), false, true)
 		if k == "C" {
-			return done(changeSpan(ed, chars, span, keys))
+			changeSpan(ed, chars, span, keys)
+			return finished()
 		}
-		return done(recorded(deleteSpan(ed, chars, span), keys))
+		deleteSpan(ed, chars, span)
+		recorded(ed, keys)
+		return finished()
 	} else if k == "s" {
-		return done(changeSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true), keys))
+		changeSpan(ed, chars, Span(pos, minInt(pos + n, end), false, true), keys)
+		return finished()
 	} else if k == "S" {
 		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
-		return done(changeSpan(ed, chars, lineSpan(chars, pos, lineOffset(chars, last)), keys))
+		changeSpan(ed, chars, lineSpan(chars, pos, lineOffset(chars, last)), keys)
+		return finished()
 	} else if k == "Y" {
 		last := minInt(lineOf(chars, pos) + n - 1, lastLine(chars))
-		return done(yank(ed, chars, lineSpan(chars, pos, lineOffset(chars, last))))
+		yank(ed, chars, lineSpan(chars, pos, lineOffset(chars, last)))
+		return finished()
 	} else if k == "p" || k == "P" {
-		return done(recorded(put(ed, chars, k == "P", n), keys))
+		put(ed, chars, k == "P", n)
+		recorded(ed, keys)
+		return finished()
 	} else if k == "J" {
-		return done(recorded(joinLines(ed, chars, maxInt(count, 2), true), keys))
+		joinLines(ed, chars, maxInt(count, 2), true)
+		recorded(ed, keys)
+		return finished()
 	} else if k == "u" {
-		return done(undoSteps(ed, n, true))
+		undoSteps(ed, n, true)
+		return finished()
 	} else if k == "<C-r>" {
-		return done(undoSteps(ed, n, false))
+		undoSteps(ed, n, false)
+		return finished()
 	} else if k == "." {
-		return done(repeatChange(ed, n, hasCount))
+		repeatChange(ed, n, hasCount)
+		return finished()
 	} else if k == "i" || k == "a" || k == "I" || k == "A" || k == "o" || k == "O" {
 		return insertStep(ed, chars, k, keys, n)
 	} else if k == "~" {
 		to := minInt(pos + n, end)
 		if to <= pos {
-			return fail(ed)
+			return failed()
 		}
-		mut e := recorded(recase(ed, chars, Span(pos, to, false, true), "~"), keys)
-		e.caret = clampNormal(split(e.text, ""), to)
-		return done(e)
+		recase(ed, chars, Span(pos, to, false, true), "~")
+		recorded(ed, keys)
+		ed.caret = clampNormal(split(ed.text, ""), to)
+		return finished()
 	} else if k == "v" || k == "V" {
-		mut e := ed
-		e.vim.mode = model.VimMode.VisualMode()
+		ed.vim.mode = model.VimMode.VisualMode()
 		if k == "V" {
-			e.vim.mode = model.VimMode.VisualLineMode()
+			ed.vim.mode = model.VimMode.VisualLineMode()
 		}
-		e.vim.anchor = pos
-		return Step(e, #Done, true)
+		ed.vim.anchor = pos
+		return kept()
 	} else if k == ":" {
 		mut range := ""
 		if hasCount {
 			range = ".,.+{count - 1}"
 		}
-		return Step(openPrompt(ed, ":", range), #Done, true)
+		openPrompt(ed, ":", range)
+		return kept()
 	} else if k == "/" || k == "?" {
-		return Step(openPrompt(ed, k, ""), #Done, true)
+		openPrompt(ed, k, "")
+		return kept()
 	} else if k == "*" || k == "#" {
 		return searchWord(ed, chars, k == "#", n)
 	} else if isAny(k, ["<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "<PageDown>", "<PageUp>"]) {
@@ -2075,15 +2115,16 @@ func normalStep(ed: Editor, keys: Str[dyn]): Step {
 		if k == "<C-x>" {
 			amount = 0 - n
 		}
-		step := increment(ed, chars, amount)
-		return Step(recorded(step.editor, keys), step.status, false)
+		changed := increment(ed, chars, amount)
+		recorded(ed, keys)
+		return Outcome(changed.status, false)
 	}
 	length := motionLength(keys, i)
 	if length == 0 {
-		return wait(ed)
+		return waitFor()
 	}
 	if length < 0 {
-		return fail(ed)
+		return failed()
 	}
 	return moveStep(ed, chars, keysFrom(keys, i, length), n, hasCount)
 }
@@ -2099,12 +2140,14 @@ func selection(text: Str, chars: Str[], caret: Int, v: model.Vim): Span {
 }
 
 // `p` no visual: troca a seleção pelo registrador (e o registrador pelo que saiu).
-func putOver(ed: Editor, chars: Str[], span: Span) : Editor {
+proc putOver(ed: mut Editor, chars: Str[], span: Span): void {
 	register := ed.vim.register
 	if register == "" {
-		return say(ed, "E353: Nada no registrador", "", true)
+		say(ed, "E353: Nada no registrador", "", true)
+		return
 	}
-	content := slice(ed.text, span.from, span.to)
+	original := ed.text
+	content := slice(original, span.from, span.to)
 	mut piece := register
 	if span.linewise && !ed.vim.linewise {
 		piece = register + "\n"
@@ -2114,28 +2157,25 @@ func putOver(ed: Editor, chars: Str[], span: Span) : Editor {
 	if span.linewise && !endsWith(content, "\n") && endsWith(piece, "\n") {
 		piece = complete.take(piece, len(piece) - 1)
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = complete.take(ed.text, span.from) + piece + complete.skip(ed.text, span.to)
-	e.vim.register = content
-	e.vim.linewise = span.linewise
-	after := split(e.text, "")
+	pushUndo(ed, snapshot(ed))
+	ed.text = complete.take(original, span.from) + piece + complete.skip(original, span.to)
+	ed.vim.register = content
+	ed.vim.linewise = span.linewise
+	after := split(ed.text, "")
 	if span.linewise {
-		e.caret = firstNonBlank(after, span.from)
+		ed.caret = firstNonBlank(after, span.from)
 	} else {
-		e.caret = clampNormal(after, span.from + len(piece) - 1)
+		ed.caret = clampNormal(after, span.from + len(piece) - 1)
 	}
-	return e
 }
 
-func toNormal(ed: Editor) : Editor {
-	mut e := ed
-	e.vim.mode = model.VimMode.NormalMode()
-	e.caret = clampNormal(split(e.text, ""), e.caret)
-	return e
+proc toNormal(ed: mut Editor): void {
+	ed.vim.mode = model.VimMode.NormalMode()
+	ed.caret = clampNormal(split(ed.text, ""), ed.caret)
 }
 
 // As teclas pendentes no modo visual.
-func visualStep(ed: Editor, keys: Str[dyn]): Step {
+proc visualStep(ed: mut Editor, keys: Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -2153,195 +2193,249 @@ func visualStep(ed: Editor, keys: Str[dyn]): Step {
 	lines := ed.vim.mode == model.VimMode.VisualLineMode()
 	span := selection(ed.text, chars, ed.caret, ed.vim)
 	whole := lineSpan(chars, span.from, maxInt(span.to - 1, span.from))
-	mut e := ed
-	e.vim.visualFrom = lineOf(chars, span.from)
-	e.vim.visualTo = lineOf(chars, maxInt(span.to - 1, span.from))
+	original := ed.text
+	caret := ed.caret
+	anchor := ed.vim.anchor
+	ed.vim.visualFrom = lineOf(chars, span.from)
+	ed.vim.visualTo = lineOf(chars, maxInt(span.to - 1, span.from))
 	if k == "" {
-		return wait(e)
+		return waitFor()
 	}
 	if k == "q" && ed.vim.recordingTo != "" {
-		return Step(stopRecording(e), #Done, true)
+		stopRecording(ed)
+		return kept()
 	}
 	if k == "v" || k == "V" {
 		if (k == "v" && !lines) || (k == "V" && lines) {
-			return done(toNormal(e))
+			toNormal(ed)
+			return finished()
 		}
 		if k == "v" {
-			e.vim.mode = model.VimMode.VisualMode()
+			ed.vim.mode = model.VimMode.VisualMode()
 		} else {
-			e.vim.mode = model.VimMode.VisualLineMode()
+			ed.vim.mode = model.VimMode.VisualLineMode()
 		}
-		return Step(e, #Done, true)
+		return kept()
 	} else if k == "o" || k == "O" {
-		e.vim.anchor = ed.caret
-		e.caret = ed.vim.anchor
-		return done(e)
+		ed.vim.anchor = caret
+		ed.caret = anchor
+		return finished()
 	} else if k == ":" {
-		return Step(toNormal(openPrompt(e, ":", "'<,'>")), #Done, true)
+		openPrompt(ed, ":", "'<,'>")
+		toNormal(ed)
+		return kept()
 	} else if k == "d" || k == "x" || k == "<Del>" {
-		return done(toNormal(deleteSpan(e, chars, span)))
+		deleteSpan(ed, chars, span)
+		toNormal(ed)
+		return finished()
 	} else if k == "D" || k == "X" {
-		return done(toNormal(deleteSpan(e, chars, whole)))
+		deleteSpan(ed, chars, whole)
+		toNormal(ed)
+		return finished()
 	} else if k == "y" {
-		return done(toNormal(yank(e, chars, span)))
+		yank(ed, chars, span)
+		toNormal(ed)
+		return finished()
 	} else if k == "Y" {
-		return done(toNormal(yank(e, chars, whole)))
+		yank(ed, chars, whole)
+		toNormal(ed)
+		return finished()
 	} else if k == "c" || k == "s" {
-		return done(changeSpan(e, chars, span, keys))
+		changeSpan(ed, chars, span, keys)
+		return finished()
 	} else if k == "C" || k == "S" || k == "R" {
-		return done(changeSpan(e, chars, whole, keys))
+		changeSpan(ed, chars, whole, keys)
+		return finished()
 	} else if k == ">" || k == "<" {
-		return done(toNormal(shiftLines(e, chars, whole, k == ">", n)))
+		shiftLines(ed, chars, whole, k == ">", n)
+		toNormal(ed)
+		return finished()
 	} else if k == "~" || k == "u" || k == "U" {
-		return done(toNormal(recase(e, chars, span, k)))
+		recase(ed, chars, span, k)
+		toNormal(ed)
+		return finished()
 	} else if k == "J" {
-		e.caret = span.from
-		return done(toNormal(joinLines(e, chars, maxInt(e.vim.visualTo - e.vim.visualFrom + 1, 2), true)))
+		ed.caret = span.from
+		joinLines(ed, chars, maxInt(ed.vim.visualTo - ed.vim.visualFrom + 1, 2), true)
+		toNormal(ed)
+		return finished()
 	} else if k == "p" || k == "P" {
-		return done(toNormal(putOver(e, chars, span)))
+		putOver(ed, chars, span)
+		toNormal(ed)
+		return finished()
 	} else if k == "r" {
 		if next == "" {
-			return wait(e)
+			return waitFor()
 		}
 		c := literal(next)
 		if c == "" || c == "\n" {
-			return fail(e)
+			return failed()
 		}
 		mut Str[dyn] out = []
-		for each ch in split(slice(ed.text, span.from, span.to), "") {
+		for each ch in split(slice(original, span.from, span.to), "") {
 			if ch == "\n" {
 				append(out, ch)
 			} else {
 				append(out, c)
 			}
 		}
-		mut changed := pushUndo(e, snapshot(e))
-		changed.text = complete.take(ed.text, span.from) + join(out, "") + complete.skip(ed.text, span.to)
-		changed.caret = span.from
-		return done(toNormal(changed))
+		pushUndo(ed, snapshot(ed))
+		ed.text = complete.take(original, span.from) + join(out, "") + complete.skip(original, span.to)
+		ed.caret = span.from
+		toNormal(ed)
+		return finished()
 	} else if k == "g" {
 		if next == "" {
-			return wait(e)
+			return waitFor()
 		} else if next == "~" || next == "u" || next == "U" {
-			return done(toNormal(recase(e, chars, span, "g" + next)))
+			recase(ed, chars, span, "g" + next)
+			toNormal(ed)
+			return finished()
 		} else if next == "J" {
-			e.caret = span.from
-			return done(toNormal(joinLines(e, chars, maxInt(e.vim.visualTo - e.vim.visualFrom + 1, 2), false)))
+			ed.caret = span.from
+			joinLines(ed, chars, maxInt(ed.vim.visualTo - ed.vim.visualFrom + 1, 2), false)
+			toNormal(ed)
+			return finished()
 		}
 	} else if k == "i" || k == "a" {
 		if next == "" {
-			return wait(e)
+			return waitFor()
 		}
-		obj := textObject(ed.text, chars, ed.caret, k == "i", next, n)
+		obj := textObject(original, chars, caret, k == "i", next, n)
 		if !obj.ok || obj.to <= obj.from {
-			return fail(e)
+			return failed()
 		}
-		e.vim.anchor = obj.from
-		e.caret = obj.to - 1
-		return done(e)
+		ed.vim.anchor = obj.from
+		ed.caret = obj.to - 1
+		return finished()
 	} else if isAny(k, ["<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "<PageDown>", "<PageUp>"]) {
-		return scrollBy(e, chars, k, n, hasCount)
+		return scrollBy(ed, chars, k, n, hasCount)
 	}
 	length := motionLength(keys, i)
 	if length == 0 {
-		return wait(e)
+		return waitFor()
 	}
 	if length < 0 {
-		return fail(e)
+		return failed()
 	}
-	return moveStep(e, chars, keysFrom(keys, i, length), n, hasCount)
+	return moveStep(ed, chars, keysFrom(keys, i, length), n, hasCount)
 }
 
 // ── a entrada do motor ───────────────────────────────────────────────────
 
 // Zera o que uma tecla devolve (mensagem, rolagem, cópia, efeitos).
-func begin(ed: Editor): Editor {
-	mut e := say(ed, "", "", false)
-	e.scroll = -1
-	e.clip = ""
+proc begin(ed: mut Editor): void {
+	say(ed, "", "", false)
+	ed.scroll = -1
+	ed.clip = ""
 	model.Msg[dyn] none = []
-	e.effects = none
-	return e
+	ed.effects = none
+}
+
+// O que a gravação de uma macro precisa saber de antes da tecla.
+type KeyContext {
+	recording:  Str
+	inserting:  Bool
+	insertBase: Str
+	insertAt:   Int
+	text:       Str
+	prompt:     Str
+	command:    Str
+}
+
+func keyContext(ed: Editor): KeyContext {
+	return KeyContext(ed.vim.recordingTo, ed.vim.mode == model.VimMode.InsertMode(), ed.vim.insertBase, ed.vim.insertAt, ed.text,
+		ed.vim.prompt, ed.vim.command)
 }
 
 // Uma tecla no editor. É a entrada do motor.
-func press(ed: Editor, key: Str): Editor {
-	return recordKey(ed, key, keyStep(begin(ed), key).editor)
+proc press(ed: mut Editor, key: Str): void {
+	before := keyContext(ed)
+	begin(ed)
+	_outcome := keyStep(ed, key)
+	recordKey(before, key, ed)
 }
 
 // Uma tecla, e se ela deu certo: uma macro para no primeiro erro, como no Vim.
-func keyStep(ed: Editor, key: Str): Step {
-	mut e := ed
+proc keyStep(ed: mut Editor, key: Str): Outcome {
 	// O cursor mudou por fora (clique, busca, ir para a definição): a coluna
 	// que `j` e `k` guardam passa a ser a dele.
 	if ed.caret != ed.vim.columnAt {
-		e.vim.column = displayColumn(split(ed.text, ""), ed.caret, ed.tab)
+		ed.vim.column = displayColumn(split(ed.text, ""), ed.caret, ed.tab)
 	}
 	mode := ed.vim.mode
 	if mode == model.VimMode.InsertMode() {
 		if isEscape(key) {
-			return done(settled(leaveInsert(e, true)))
+			leaveInsert(ed, true)
+			settled(ed)
+		} else {
+			typeKey(ed, key)
 		}
-		return done(typeKey(e, key))
+		return finished()
 	}
 	if ed.vim.prompt != "" {
-		return promptStep(e, key)
+		return promptStep(ed, key)
 	}
 	Str[dyn] cleared = []
 	if isEscape(key) {
-		e.vim.pending = cleared
-		return done(settled(toNormal(e)))
+		ed.vim.pending = cleared
+		toNormal(ed)
+		settled(ed)
+		return finished()
 	}
 	mut Str[dyn] keys = ed.vim.pending
 	append(keys, key)
-	mut step := normalStep(e, keys)
-	if mode != model.VimMode.NormalMode() {
-		step = visualStep(e, keys)
+	mut outcome := finished()
+	if mode == model.VimMode.NormalMode() {
+		outcome = normalStep(ed, keys)
+	} else {
+		outcome = visualStep(ed, keys)
 	}
-	out := step.editor
-	if step.status == #Wait {
-		mut waiting := out
-		waiting.vim.pending = keys
-		return Step(settled(waiting), #Wait, false)
+	if outcome.status == #Wait {
+		ed.vim.pending = keys
+		settled(ed)
+		return waitFor()
 	}
-	mut finished := out
-	finished.vim.pending = cleared
-	if step.status == #Done && !step.keep {
-		finished.vim.column = displayColumn(split(out.text, ""), out.caret, out.tab)
+	ed.vim.pending = cleared
+	if outcome.status == #Done && !outcome.keep {
+		ed.vim.column = displayColumn(split(ed.text, ""), ed.caret, ed.tab)
 	}
-	return Step(settled(finished), step.status, step.keep)
+	settled(ed)
+	return outcome
 }
 
 // Uma tecla com a linha de comando aberta: a página ainda não tinha posto o
 // foco nela, ou uma macro está repetindo o comando que gravou.
-func promptStep(ed: Editor, key: Str): Step {
-	mut e := ed
+proc promptStep(ed: mut Editor, key: Str): Outcome {
 	if isEscape(key) {
-		return done(closePrompt(e))
+		closePrompt(ed)
+		return finished()
 	} else if key == "<CR>" {
-		out := runCommandLine(e, ed.vim.command)
-		if out.vim.error {
-			return fail(out)
+		typed := ed.vim.command
+		runCommandLine(ed, typed)
+		if ed.vim.error {
+			return failed()
 		}
-		return done(out)
+		return finished()
 	} else if complete.startsWith(key, "<Text>") {
-		e.vim.command = complete.skip(key, 6)
+		ed.vim.command = complete.skip(key, 6)
 	} else {
-		e.vim = promptKey(ed.vim, key)
+		promptKey(ed.vim, key)
 	}
-	return done(e)
+	return finished()
 }
 
-func closePrompt(ed: Editor): Editor {
-	mut e := ed
-	e.vim.prompt = ""
-	e.vim.command = ""
-	return e
+proc closePrompt(ed: mut Editor): void {
+	ed.vim.prompt = ""
+	ed.vim.command = ""
 }
 
 // Esc na linha de comando, vindo da página.
-func cancel(ed: Editor): Editor {
-	return recordKey(ed, "<Esc>", closePrompt(begin(ed)))
+proc cancel(ed: mut Editor): void {
+	before := keyContext(ed)
+	begin(ed)
+	closePrompt(ed)
+	recordKey(before, "<Esc>", ed)
 }
 
 // ── macros ───────────────────────────────────────────────────────────────
@@ -2349,45 +2443,43 @@ func cancel(ed: Editor): Editor {
 // Com uma macro sendo gravada, guarda a tecla. Na inserção, o que se digitou
 // (e a página escreveu sozinha) entra de uma vez, no Esc; na linha de comando,
 // o comando inteiro entra no Enter. `<Text>…` é um texto digitado.
-func recordKey(before: Editor, key: Str, after: Editor): Editor {
-	if before.vim.recordingTo == "" || after.vim.recordingTo == "" {
-		return after
+proc recordKey(before: KeyContext, key: Str, ed: mut Editor): void {
+	if before.recording == "" || ed.vim.recordingTo == "" {
+		return
 	}
 	mut Str[dyn] tokens = []
-	if before.vim.mode == model.VimMode.InsertMode() {
+	if before.inserting {
 		if !isEscape(key) {
-			return after
+			return
 		}
-		typed := insertedText(before.vim.insertBase, before.vim.insertAt, before.text)
+		typed := insertedText(before.insertBase, before.insertAt, before.text)
 		if typed is Result.Ok(piece) {
 			if piece != "" {
 				append(tokens, "<Text>" + piece)
 			}
 		}
 		append(tokens, "<Esc>")
-	} else if before.vim.prompt != "" {
+	} else if before.prompt != "" {
 		if key == "<CR>" {
-			append(tokens, "<Text>" + before.vim.command)
+			append(tokens, "<Text>" + before.command)
 			append(tokens, "<CR>")
 		} else if isEscape(key) {
 			append(tokens, "<Esc>")
 		} else {
-			return after
+			return
 		}
 	} else {
 		append(tokens, key)
 	}
-	return recordTokens(after, tokens)
+	recordTokens(ed, tokens)
 }
 
-func recordTokens(ed: Editor, tokens: Str[]): Editor {
-	mut e := ed
+proc recordTokens(ed: mut Editor, tokens: Str[]): void {
 	mut Str[dyn] recorded = ed.vim.recorded
 	for each token in tokens {
 		append(recorded, token)
 	}
-	e.vim.recorded = recorded
-	return e
+	ed.vim.recorded = recorded
 }
 
 func isRegister(reg: Str): Bool {
@@ -2395,9 +2487,9 @@ func isRegister(reg: Str): Bool {
 }
 
 // `qa` começa a gravar em `a`; `qA` continua a macro que já está em `a`.
-func startRecording(ed: Editor, reg: Str): Step {
+proc startRecording(ed: mut Editor, reg: Str): Outcome {
 	if !isRegister(reg) {
-		return fail(ed)
+		return failed()
 	}
 	name := search.lower(reg)
 	mut Str[dyn] tokens = []
@@ -2406,22 +2498,19 @@ func startRecording(ed: Editor, reg: Str): Step {
 			tokens = old
 		}
 	}
-	mut e := ed
-	e.vim.recordingTo = name
-	e.vim.recorded = tokens
-	return Step(e, #Done, true)
+	ed.vim.recordingTo = name
+	ed.vim.recorded = tokens
+	return kept()
 }
 
 // `q` de novo: guarda a macro.
-func stopRecording(ed: Editor): Editor {
-	mut e := ed
+proc stopRecording(ed: mut Editor): void {
 	mut hive.map.Map<Str, Str[dyn]> macros = ed.vim.macros
 	hive.map.set(macros, ed.vim.recordingTo, ed.vim.recorded)
 	Str[dyn] none = []
-	e.vim.macros = macros
-	e.vim.recordingTo = ""
-	e.vim.recorded = none
-	return e
+	ed.vim.macros = macros
+	ed.vim.recordingTo = ""
+	ed.vim.recorded = none
 }
 
 // Até quantas macros podem rodar uma dentro da outra (uma que chama a si mesma para aí).
@@ -2443,166 +2532,162 @@ func lastCommand(history: Str[]): Str {
 // `@a` repete as teclas gravadas em `a`, `count` vezes; `@@` repete a última
 // macro e `@:` o último comando. Para no primeiro erro, como no Vim — é o que
 // faz `100@a` parar no fim do arquivo.
-func playMacro(ed: Editor, reg: Str, count: Int): Step {
+proc playMacro(ed: mut Editor, reg: Str, count: Int): Outcome {
 	mut name := search.lower(reg)
 	if reg == "@" {
 		name = ed.vim.lastMacro
 	}
 	if name == "" {
-		return fail(ed)
+		return failed()
 	}
-	if ed.vim.replaying >= macroDepth() {
-		return fail(say(ed, "E: macros dentro de macros demais", "", true))
+	depth := ed.vim.replaying
+	if depth >= macroDepth() {
+		say(ed, "E: macros dentro de macros demais", "", true)
+		return failed()
 	}
 	mut Str[dyn] tokens = []
 	if name == ":" {
 		last := lastCommand(ed.vim.history)
 		if last == "" {
-			return fail(say(ed, "E30: Nenhuma linha de comando anterior", "", true))
+			say(ed, "E30: Nenhuma linha de comando anterior", "", true)
+			return failed()
 		}
 		tokens = [":", "<Text>" + last, "<CR>"]
 	} else if hive.map.get(ed.vim.macros, name) is Result.Ok(found) {
 		tokens = found
 	} else {
-		return fail(ed)
+		return failed()
 	}
-	mut e := ed
 	Str[dyn] none = []
-	e.vim.pending = none
-	e.vim.lastMacro = name
-	e.vim.replaying = ed.vim.replaying + 1
+	ed.vim.pending = none
+	ed.vim.lastMacro = name
+	ed.vim.replaying = depth + 1
 	mut status := #Done
 	for n := 0; n < count && status != #Fail; n++ {
 		for each token in tokens {
 			if status != #Fail {
-				step := keyStep(e, token)
-				e = step.editor
+				step := keyStep(ed, token)
 				if step.status == #Fail {
 					status = #Fail
 				}
 			}
 		}
 	}
-	e.vim.replaying = ed.vim.replaying
-	return Step(e, status, true)
+	ed.vim.replaying = depth
+	return Outcome(status, true)
 }
 
 // Uma tecla que chegou aqui no modo de inserção — a página ainda não sabia que
 // a inserção tinha começado — vira texto, como no editor.
-func typeKey(ed: Editor, key: Str): Editor {
-	mut e := ed
-	chars := split(ed.text, "")
+proc typeKey(ed: mut Editor, key: Str): void {
+	original := ed.text
+	caret := ed.caret
+	chars := split(original, "")
 	if complete.startsWith(key, "<Text>") {
 		piece := complete.skip(key, 6)
-		e.text = insertAt(ed.text, ed.caret, piece)
-		e.caret = ed.caret + len(piece)
+		ed.text = insertAt(original, caret, piece)
+		ed.caret = caret + len(piece)
 	} else if key == "<BS>" {
-		if ed.caret > 0 {
-			e.text = cut(ed.text, ed.caret - 1, ed.caret)
-			e.caret = ed.caret - 1
+		if caret > 0 {
+			ed.text = cut(original, caret - 1, caret)
+			ed.caret = caret - 1
 		}
 	} else if key == "<Del>" {
-		if ed.caret < len(chars) {
-			e.text = cut(ed.text, ed.caret, ed.caret + 1)
+		if caret < len(chars) {
+			ed.text = cut(original, caret, caret + 1)
 		}
 	} else if key == "<Left>" {
-		e.caret = maxInt(ed.caret - 1, 0)
+		ed.caret = maxInt(caret - 1, 0)
 	} else if key == "<Right>" {
-		e.caret = minInt(ed.caret + 1, len(chars))
+		ed.caret = minInt(caret + 1, len(chars))
 	} else if key == "<CR>" {
-		line := slice(ed.text, lineStart(chars, ed.caret), ed.caret)
+		line := slice(original, lineStart(chars, caret), caret)
 		mut indent := leadingBlanks(line)
 		trimmed := trim(line)
 		if endsWith(trimmed, "\{") || endsWith(trimmed, "[") || endsWith(trimmed, "(") {
 			indent = indent + "\t"
 		}
-		e.text = insertAt(ed.text, ed.caret, "\n" + indent)
-		e.caret = ed.caret + 1 + len(indent)
+		ed.text = insertAt(original, caret, "\n" + indent)
+		ed.caret = caret + 1 + len(indent)
 	} else {
 		c := literal(key)
 		if c != "" {
-			e.text = insertAt(ed.text, ed.caret, c)
-			e.caret = ed.caret + 1
+			ed.text = insertAt(original, caret, c)
+			ed.caret = caret + 1
 		}
 	}
-	return e
 }
 
 // Uma tecla que chegou aqui com a linha de comando aberta (a página ainda não
 // tinha posto o foco nela) entra no que está sendo digitado.
-func promptKey(v: model.Vim, key: Str): model.Vim {
-	mut next := v
+proc promptKey(v: mut model.Vim, key: Str): void {
 	if key == "<BS>" {
-		next.command = complete.take(v.command, len(v.command) - 1)
+		v.command = complete.take(v.command, len(v.command) - 1)
 	} else if literal(key) != "" && key != "<CR>" {
-		next.command = v.command + literal(key)
+		v.command = v.command + literal(key)
 	}
-	return next
 }
 
 // Trocar de documento (ou ligar o modo Vim) começa no modo normal, sem nada pendente.
-func reset(v: model.Vim): model.Vim {
-	mut next := v
+proc reset(v: mut model.Vim): void {
 	Str[dyn] none = []
-	next.mode = model.VimMode.NormalMode()
-	next.pending = none
-	next.prompt = ""
-	next.command = ""
-	next.columnAt = -1
-	next.serial = v.serial + 1
-	return next
+	v.mode = model.VimMode.NormalMode()
+	v.pending = none
+	v.prompt = ""
+	v.command = ""
+	v.columnAt = -1
+	v.serial = v.serial + 1
 }
 
 // Lembra para qual cursor a coluna desejada foi calculada.
-func settled(ed: Editor): Editor {
-	mut e := ed
-	e.vim.columnAt = ed.caret
-	return e
+proc settled(ed: mut Editor): void {
+	ed.vim.columnAt = ed.caret
 }
 
 // Um clique (ou uma seleção com o mouse) no texto.
-func click(ed: Editor, start: Int, end: Int): Editor {
-	mut e := say(ed, "", "", false)
+proc click(ed: mut Editor, start: Int, end: Int): void {
+	say(ed, "", "", false)
 	Str[dyn] cleared = []
-	e.vim.pending = cleared
+	ed.vim.pending = cleared
 	chars := split(ed.text, "")
-	if ed.vim.mode == model.VimMode.InsertMode() {
-		e.caret = start
-		return e
+	mode := ed.vim.mode
+	if mode == model.VimMode.InsertMode() {
+		ed.caret = start
+		return
 	}
 	if end > start {
-		if ed.vim.mode != model.VimMode.VisualLineMode() {
-			e.vim.mode = model.VimMode.VisualMode()
+		if mode != model.VimMode.VisualLineMode() {
+			ed.vim.mode = model.VimMode.VisualMode()
 		}
-		e.vim.anchor = start
-		e.caret = end - 1
+		ed.vim.anchor = start
+		ed.caret = end - 1
 	} else {
-		e.vim.mode = model.VimMode.NormalMode()
-		e.caret = clampNormal(chars, start)
+		ed.vim.mode = model.VimMode.NormalMode()
+		ed.caret = clampNormal(chars, start)
 	}
-	e.vim.column = displayColumn(chars, e.caret, ed.tab)
-	return settled(e)
+	ed.vim.column = displayColumn(chars, ed.caret, ed.tab)
+	settled(ed)
 }
 
 // ── a linha de comando ───────────────────────────────────────────────────
 
 // O que foi digitado depois de `:`, `/` ou `?`, ao apertar Enter na página.
-func submit(ed: Editor, typed: Str): Editor {
-	out := runCommandLine(begin(ed), typed)
-	if ed.vim.recordingTo != "" && out.vim.recordingTo != "" {
-		return recordTokens(out, ["<Text>" + typed, "<CR>"])
+proc submit(ed: mut Editor, typed: Str): void {
+	recording := ed.vim.recordingTo
+	begin(ed)
+	runCommandLine(ed, typed)
+	if recording != "" && ed.vim.recordingTo != "" {
+		recordTokens(ed, ["<Text>" + typed, "<CR>"])
 	}
-	return out
 }
 
-func runCommandLine(ed: Editor, typed: Str): Editor {
-	mut e := ed
+proc runCommandLine(ed: mut Editor, typed: Str): void {
 	mut prompt := ed.vim.prompt
 	if prompt == "" {
 		prompt = ":"
 	}
-	e.vim.prompt = ""
-	e.vim.command = ""
+	ed.vim.prompt = ""
+	ed.vim.command = ""
 	if typed != "" {
 		entry := prompt + typed
 		mut Str[dyn] history = []
@@ -2617,62 +2702,63 @@ func runCommandLine(ed: Editor, typed: Str): Editor {
 				drop(history, 0, 0)
 			}
 		}
-		e.vim.history = history
+		ed.vim.history = history
 	}
-	e.vim.historyAt = len(e.vim.history)
+	ed.vim.historyAt = len(ed.vim.history)
 	if prompt == "/" || prompt == "?" {
-		return settled(searchFor(e, typed, prompt == "?"))
+		searchFor(ed, typed, prompt == "?")
+		settled(ed)
+		return
 	}
-	return execute(e, typed)
+	execute(ed, typed)
 }
 
-func searchFor(ed: Editor, typed: Str, backward: Bool): Editor {
-	mut e := ed
+proc searchFor(ed: mut Editor, typed: Str, backward: Bool): void {
 	mut pattern := typed
 	if pattern == "" {
 		pattern = ed.vim.pattern
 	}
 	if pattern == "" {
-		return say(e, "E35: Nenhuma busca anterior", "", true)
+		say(ed, "E35: Nenhuma busca anterior", "", true)
+		return
 	}
-	e.vim.pattern = pattern
-	e.vim.backward = backward
-	e.vim.whole = false
-	e.vim.highlight = true
-	chars := split(e.text, "")
-	t := searchTarget(e, chars, false, 1)
+	ed.vim.pattern = pattern
+	ed.vim.backward = backward
+	ed.vim.whole = false
+	ed.vim.highlight = true
+	chars := split(ed.text, "")
+	t := searchTarget(ed, chars, false, 1)
 	if !t.ok {
-		return say(e, t.note, t.arg, t.bad)
+		say(ed, t.note, t.arg, t.bad)
+		return
 	}
-	e.caret = clampNormal(chars, t.pos)
-	e.vim.column = displayColumn(chars, e.caret, e.tab)
-	return say(e, t.note, t.arg, false)
+	ed.caret = clampNormal(chars, t.pos)
+	ed.vim.column = displayColumn(chars, ed.caret, ed.tab)
+	say(ed, t.note, t.arg, false)
 }
 
 // ↑ e ↓ na linha de comando: as entradas já usadas do mesmo tipo.
-func browseHistory(v: model.Vim, delta: Int): model.Vim {
-	mut next := v
+proc browseHistory(v: mut model.Vim, delta: Int): void {
 	count := len(v.history)
 	mut i := v.historyAt
 	for n := 0; n <= count; n++ {
 		i = i + delta
 		if i < 0 {
-			return next
+			return
 		}
 		if i >= count {
-			next.historyAt = count
-			next.command = ""
-			return next
+			v.historyAt = count
+			v.command = ""
+			return
 		}
 		entry := at(v.history, i)
 		search := v.prompt == "/" || v.prompt == "?"
 		if (search && (complete.startsWith(entry, "/") || complete.startsWith(entry, "?"))) || (!search && complete.startsWith(entry, v.prompt)) {
-			next.historyAt = i
-			next.command = complete.skip(entry, 1)
-			return next
+			v.historyAt = i
+			v.command = complete.skip(entry, 1)
+			return
 		}
 	}
-	return next
 }
 
 func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Address {
@@ -2726,7 +2812,7 @@ func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Ad
 }
 
 // Lê `[intervalo]comando[!] [argumentos]` e executa.
-func execute(ed: Editor, typed: Str): Editor {
+proc execute(ed: mut Editor, typed: Str): void {
 	chars := split(ed.text, "")
 	cmd := split(typed, "")
 	current := lineOf(chars, ed.caret)
@@ -2749,7 +2835,8 @@ func execute(ed: Editor, typed: Str): Editor {
 			if at(cmd, i) == "," || at(cmd, i) == ";" {
 				second := address(cmd, i + 1, current, final, ed.vim)
 				if !second.ok {
-					return say(ed, "E16: Intervalo inválido", "", true)
+					say(ed, "E16: Intervalo inválido", "", true)
+					return
 				}
 				to = second.line
 				i = second.next
@@ -2795,22 +2882,22 @@ func execute(ed: Editor, typed: Str): Editor {
 	}
 	if name == "" {
 		if hasRange {
-			mut e := ed
-			e.caret = firstNonBlank(chars, lineOffset(chars, clampInt(to, 0, final)))
-			return e
+			ed.caret = firstNonBlank(chars, lineOffset(chars, clampInt(to, 0, final)))
 		}
-		return ed
+		return
 	}
 	if from < 0 || to > final {
 		if !(name == "m" || name == "move" || name == "t" || name == "co" || name == "copy") || from < 0 {
-			return say(ed, "E16: Intervalo inválido", "", true)
+			say(ed, "E16: Intervalo inválido", "", true)
+			return
 		}
 	}
 	if name == ">" || name == "<" {
 		span := lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to))
-		return shiftLines(ed, chars, span, name == ">", levels)
+		shiftLines(ed, chars, span, name == ">", levels)
+		return
 	}
-	return command(ed, chars, name, bang, args, from, to, hasRange)
+	command(ed, chars, name, bang, args, from, to, hasRange)
 }
 
 // A ajuda de uma linha que `:help` mostra.
@@ -2818,117 +2905,119 @@ func helpText(): Str {
 	return "Vim: :w :q :wq :x :e arquivo :N :s/a/b/g :noh :set nu :d :y :m :t :sort :bn :bp :check :make :run :test :term :!comando"
 }
 
-func command(ed: Editor, chars: Str[], name: Str, bang: Bool, args: Str, from: Int, to: Int, hasRange: Bool): Editor {
+proc command(ed: mut Editor, chars: Str[], name: Str, bang: Bool, args: Str, from: Int, to: Int, hasRange: Bool): void {
 	final := lastLine(chars)
 	if isAny(name, ["w", "write"]) {
 		if args != "" {
-			return say(ed, "E: :w só salva o próprio arquivo", "", true)
+			say(ed, "E: :w só salva o próprio arquivo", "", true)
+			return
 		}
-		return effect(ed, model.Msg.Save())
+		effect(ed, model.Msg.Save())
 	} else if isAny(name, ["wa", "wall"]) {
-		return effect(ed, model.Msg.SaveAll())
+		effect(ed, model.Msg.SaveAll())
 	} else if isAny(name, ["up", "update"]) {
 		if ed.dirty {
-			return effect(ed, model.Msg.Save())
+			effect(ed, model.Msg.Save())
 		}
-		return ed
 	} else if isAny(name, ["q", "quit", "clo", "close", "bd", "bdelete", "tabc", "tabclose"]) {
 		if ed.dirty && !bang {
-			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			return
 		}
-		return effect(ed, model.Msg.CloseDoc(ed.active))
+		effect(ed, model.Msg.CloseDoc(ed.active))
 	} else if isAny(name, ["wq", "x", "xi", "xit", "exi", "exit"]) {
-		mut e := ed
 		if name == "wq" || ed.dirty {
-			e = effect(e, model.Msg.Save())
+			effect(ed, model.Msg.Save())
 		}
-		return effect(e, model.Msg.CloseDoc(ed.active))
+		effect(ed, model.Msg.CloseDoc(ed.active))
 	} else if isAny(name, ["qa", "qall", "quita", "quitall"]) {
 		if ed.anyDirty && !bang {
-			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			return
 		}
-		return effect(ed, model.Msg.Quit())
+		effect(ed, model.Msg.Quit())
 	} else if isAny(name, ["wqa", "wqall", "xa", "xall"]) {
-		return effect(effect(ed, model.Msg.SaveAll()), model.Msg.Quit())
+		effect(ed, model.Msg.SaveAll())
+		effect(ed, model.Msg.Quit())
 	} else if isAny(name, ["e", "edit"]) {
 		if args != "" {
-			return effect(ed, model.Msg.VimEdit(args))
+			effect(ed, model.Msg.VimEdit(args))
+			return
 		}
 		if ed.dirty && !bang {
-			return say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
+			return
 		}
-		return effect(ed, model.Msg.VimReload())
+		effect(ed, model.Msg.VimReload())
 	} else if isAny(name, ["s", "su", "substitute"]) {
-		return substitute(ed, chars, args, from, to)
+		substitute(ed, chars, args, from, to)
 	} else if isAny(name, ["noh", "nohl", "nohlsearch"]) {
-		mut e := ed
-		e.vim.highlight = false
-		return e
+		ed.vim.highlight = false
 	} else if isAny(name, ["se", "set"]) {
-		return setOptions(ed, args)
+		setOptions(ed, args)
 	} else if isAny(name, ["d", "de", "del", "delete"]) {
-		return deleteSpan(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
+		deleteSpan(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
 	} else if isAny(name, ["y", "ya", "yank"]) {
-		mut e := yank(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
-		e.caret = ed.caret
-		return e
+		caret := ed.caret
+		yank(ed, chars, lineSpan(chars, lineOffset(chars, from), lineOffset(chars, to)))
+		ed.caret = caret
 	} else if isAny(name, ["j", "join"]) {
-		mut e := ed
-		e.caret = lineOffset(chars, from)
-		return joinLines(e, chars, maxInt(to - from + 1, 2), !bang)
+		ed.caret = lineOffset(chars, from)
+		joinLines(ed, chars, maxInt(to - from + 1, 2), !bang)
 	} else if isAny(name, ["m", "move", "t", "co", "copy"]) {
 		target := address(split(args, ""), 0, lineOf(chars, ed.caret), final, ed.vim)
 		if !target.ok || target.line < -1 || target.line > final {
-			return say(ed, "E14: Endereço inválido", "", true)
+			say(ed, "E14: Endereço inválido", "", true)
+			return
 		}
-		return moveLines(ed, from, to, target.line, name == "m" || name == "move")
+		moveLines(ed, from, to, target.line, name == "m" || name == "move")
 	} else if isAny(name, ["sor", "sort"]) {
 		if hasRange {
-			return sortLines(ed, from, to, bang)
+			sortLines(ed, from, to, bang)
+		} else {
+			sortLines(ed, 0, final, bang)
 		}
-		return sortLines(ed, 0, final, bang)
 	} else if isAny(name, ["bn", "bnext", "tabn", "tabnext"]) {
-		return effect(ed, model.Msg.CycleTab(1))
+		effect(ed, model.Msg.CycleTab(1))
 	} else if isAny(name, ["bp", "bprevious", "bN", "bNext", "tabp", "tabprevious", "tabN", "tabNext"]) {
-		return effect(ed, model.Msg.CycleTab(-1))
+		effect(ed, model.Msg.CycleTab(-1))
 	} else if isAny(name, ["check", "make", "run", "test", "build"]) {
 		// `:make` compila, como no Vim; os diagnósticos vêm do `:check`.
 		mut action := name
 		if name == "make" {
 			action = "build"
 		}
-		return effect(ed, model.Msg.Invoke(action))
+		effect(ed, model.Msg.Invoke(action))
 	} else if isAny(name, ["term", "terminal"]) {
-		return effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
+		effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
 	} else if name == "!" {
-		e := effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
-		if args == "" {
-			return e
+		effect(ed, model.Msg.ShowPane(model.Pane.TerminalPane()))
+		if args != "" {
+			effect(ed, model.Msg.TermSubmit(args))
 		}
-		return effect(e, model.Msg.TermSubmit(args))
 	} else if isAny(name, ["Ex", "Explore", "Sex", "Sexplore", "Vex", "Vexplore", "Lex", "Lexplore", "Hex", "Hexplore", "Tex", "Texplore"]) {
-		return effect(ed, model.Msg.FocusExplorer(args))
+		effect(ed, model.Msg.FocusExplorer(args))
 	} else if isAny(name, ["Agent", "Agente"]) {
-		return effect(ed, model.Msg.ShowAgent(search.lower(args)))
+		effect(ed, model.Msg.ShowAgent(search.lower(args)))
 	} else if name == "Claude" {
-		return effect(ed, model.Msg.ShowAgent("claude"))
+		effect(ed, model.Msg.ShowAgent("claude"))
 	} else if name == "Codex" {
-		return effect(ed, model.Msg.ShowAgent("codex"))
+		effect(ed, model.Msg.ShowAgent("codex"))
 	} else if isAny(name, ["OpenCode", "Opencode"]) {
-		return effect(ed, model.Msg.ShowAgent("opencode"))
+		effect(ed, model.Msg.ShowAgent("opencode"))
 	} else if isAny(name, ["u", "un", "undo"]) {
-		return undoSteps(ed, 1, true)
+		undoSteps(ed, 1, true)
 	} else if isAny(name, ["red", "redo"]) {
-		return undoSteps(ed, 1, false)
+		undoSteps(ed, 1, false)
 	} else if isAny(name, ["h", "help"]) {
-		return say(ed, helpText(), "", false)
+		say(ed, helpText(), "", false)
+	} else {
+		say(ed, "E492: Não é um comando do editor: %1", name, true)
 	}
-	return say(ed, "E492: Não é um comando do editor: %1", name, true)
 }
 
 // `:set nu`, `:set nonu`, `:set nu!`, `:set ts=4`, `:set hls`, `:set nohls`.
-func setOptions(ed: Editor, args: Str): Editor {
-	mut e := ed
+proc setOptions(ed: mut Editor, args: Str): void {
 	mut numbers := ed.numbers
 	for each option in split(args, " ") {
 		if option == "" {
@@ -2942,33 +3031,35 @@ func setOptions(ed: Editor, args: Str): Editor {
 		} else if isAny(option, ["nu!", "number!", "invnu", "invnumber"]) {
 			wanted = !numbers
 		} else if isAny(option, ["hls", "hlsearch"]) {
-			e.vim.highlight = true
+			ed.vim.highlight = true
 		} else if isAny(option, ["nohls", "nohlsearch"]) {
-			e.vim.highlight = false
+			ed.vim.highlight = false
 		} else if option is "{key}={value}" && isAny(key, ["ts", "tabstop", "sw", "shiftwidth"]) {
 			if hive.conv.sti(value) is Result.Ok(size) {
-				e = effect(e, model.Msg.SetTabSize(size))
+				effect(ed, model.Msg.SetTabSize(size))
 			} else {
-				return say(e, "E521: Número esperado: %1", option, true)
+				say(ed, "E521: Número esperado: %1", option, true)
+				return
 			}
 		} else {
-			return say(e, "E518: Opção desconhecida: %1", option, true)
+			say(ed, "E518: Opção desconhecida: %1", option, true)
+			return
 		}
 		if wanted != numbers {
 			numbers = wanted
-			e = effect(e, model.Msg.ToggleSetting("lineNumbers"))
+			effect(ed, model.Msg.ToggleSetting("lineNumbers"))
 		}
 	}
-	return e
 }
 
 // `:s/padrão/troca/g` nas linhas `from`–`to`. O padrão é texto literal; na
 // troca, `&` é o trecho achado e `\n`, `\t` e `\&` valem o que dizem.
-func substitute(ed: Editor, chars: Str[], args: Str, from: Int, to: Int): Editor {
+proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): void {
 	parts := split(args, "")
 	delimiter := at(parts, 0)
 	if delimiter == "" || isKeyword(delimiter) || isBlank(delimiter) || delimiter == "\\" || delimiter == "\"" {
-		return say(ed, "E: use :s/padrão/troca/", "", true)
+		say(ed, "E: use :s/padrão/troca/", "", true)
+		return
 	}
 	mut i := 1
 	mut Str[dyn] wanted = []
@@ -3023,7 +3114,8 @@ func substitute(ed: Editor, chars: Str[], args: Str, from: Int, to: Int): Editor
 		pattern = ed.vim.pattern
 	}
 	if pattern == "" {
-		return say(ed, "E35: Nenhuma busca anterior", "", true)
+		say(ed, "E35: Nenhuma busca anterior", "", true)
+		return
 	}
 	global := indexOf(flags, "g") is Result.Ok(_)
 	mut sensitive := sensitiveTo(pattern)
@@ -3046,36 +3138,40 @@ func substitute(ed: Editor, chars: Str[], args: Str, from: Int, to: Int): Editor
 			}
 			found := occurrencesOf(line, pattern, sensitive, limit)
 			if len(found) > 0 {
-				mut out := ""
+				mut Str[dyn] out = []
 				mut previous := 0
 				for each p in found {
-					out = out + slice(line, previous, p) + join(pieces, slice(line, p, p + size))
+					append(out, slice(line, previous, p))
+					append(out, join(pieces, slice(line, p, p + size)))
 					previous = p + size
 				}
-				lines[l] = out + complete.skip(line, previous)
+				append(out, complete.skip(line, previous))
+				lines[l] = join(out, "")
 				replaced = replaced + len(found)
 				touched++
 				lastTouched = l
 			}
 		}
 	}
-	mut e := ed
-	e.vim.pattern = pattern
-	e.vim.whole = false
+	before := snapshot(ed)
+	ed.vim.pattern = pattern
+	ed.vim.whole = false
 	if replaced == 0 {
-		return say(e, "E486: Padrão não encontrado: %1", pattern, true)
+		say(ed, "E486: Padrão não encontrado: %1", pattern, true)
+		return
 	}
-	e = pushUndo(e, snapshot(ed))
-	e.text = join(lines, "\n")
-	e.caret = firstNonBlank(split(e.text, ""), offsetOfLine(lines, lastTouched))
-	return sayTwo(e, "%1 substituição(ões) em %2 linha(s)", "{replaced}", "{touched}")
+	pushUndo(ed, before)
+	ed.text = join(lines, "\n")
+	ed.caret = firstNonBlank(split(ed.text, ""), offsetOfLine(lines, lastTouched))
+	sayTwo(ed, "%1 substituição(ões) em %2 linha(s)", "{replaced}", "{touched}")
 }
 
 // `:m` (mover) e `:t` (copiar) as linhas `from`–`to` para depois de `after`
 // (-1 = antes da primeira).
-func moveLines(ed: Editor, from: Int, to: Int, after: Int, moving: Bool): Editor {
+proc moveLines(ed: mut Editor, from: Int, to: Int, after: Int, moving: Bool): void {
 	if moving && after >= from && after < to {
-		return say(ed, "E134: Não dá para mover linhas para dentro delas mesmas", "", true)
+		say(ed, "E134: Não dá para mover linhas para dentro delas mesmas", "", true)
+		return
 	}
 	lines := split(ed.text, "\n")
 	mut Str[dyn] block = []
@@ -3103,16 +3199,15 @@ func moveLines(ed: Editor, from: Int, to: Int, after: Int, moving: Bool): Editor
 	}
 	text := join(out, "\n")
 	if text == ed.text {
-		return ed
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = text
-	e.caret = firstNonBlank(split(text, ""), offsetOfLine(out, lastMoved))
-	return e
+	pushUndo(ed, snapshot(ed))
+	ed.text = text
+	ed.caret = firstNonBlank(split(text, ""), offsetOfLine(out, lastMoved))
 }
 
 // `:sort` (e `:sort!`, ao contrário) das linhas `from`–`to`.
-func sortLines(ed: Editor, from: Int, to: Int, reverse: Bool): Editor {
+proc sortLines(ed: mut Editor, from: Int, to: Int, reverse: Bool): void {
 	mut Str[dyn] lines = split(ed.text, "\n")
 	mut Str[dyn] block = []
 	for l := from; l <= to; l++ {
@@ -3136,12 +3231,11 @@ func sortLines(ed: Editor, from: Int, to: Int, reverse: Bool): Editor {
 	}
 	text := join(lines, "\n")
 	if text == ed.text {
-		return ed
+		return
 	}
-	mut e := pushUndo(ed, snapshot(ed))
-	e.text = text
-	e.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, from))
-	return e
+	pushUndo(ed, snapshot(ed))
+	ed.text = text
+	ed.caret = firstNonBlank(split(text, ""), offsetOfLine(lines, from))
 }
 
 // ── o que a página mostra ────────────────────────────────────────────────
@@ -3257,307 +3351,398 @@ func tokens(text: Str): Str[dyn] {
 	return out
 }
 
-func feed(ed: Editor, keys: Str): Editor {
-	mut e := ed
+proc feed(ed: mut Editor, keys: Str): void {
 	for each k in tokens(keys) {
-		e = press(e, k)
+		press(ed, k)
 	}
-	return e
+}
+
+// Um editor com `text`, o cursor em `caret`, depois de `keys`.
+proc fed(text: Str, caret: Int, keys: Str): Editor {
+	mut ed := editorFor(text, caret)
+	feed(ed, keys)
+	return ed
 }
 
 // O que a página faz quando se digita no modo de inserção.
-func typeText(ed: Editor, text: Str): Editor {
-	mut e := ed
-	e.text = insertAt(ed.text, ed.caret, text)
-	e.caret = ed.caret + len(text)
-	return e
+proc typeText(ed: mut Editor, text: Str): void {
+	ed.text = insertAt(ed.text, ed.caret, text)
+	ed.caret = ed.caret + len(text)
 }
 
-func caretsOf(ed: Editor, keys: Str): Int[dyn] {
-	mut e := ed
+proc caretsOf(text: Str, caret: Int, keys: Str): Int[dyn] {
+	mut ed := editorFor(text, caret)
 	mut Int[dyn] seen = []
 	for each k in tokens(keys) {
-		e = press(e, k)
-		append(seen, e.caret)
+		press(ed, k)
+		append(seen, ed.caret)
 	}
 	return seen
 }
 
 test "w, W, e, b e ge andam por palavras, pontuação e linhas vazias" {
 	text := "foo bar.baz\n  qux quux\n\nend"
-	assert caretsOf(editorFor(text, 0), "wwwwwww") == [4, 7, 8, 14, 18, 23, 24]
-	assert caretsOf(editorFor(text, 0), "WW") == [4, 14]
-	assert caretsOf(editorFor(text, 0), "eeee") == [2, 6, 7, 10]
-	assert caretsOf(editorFor(text, 10), "bbbb") == [8, 7, 4, 0]
-	assert caretsOf(editorFor(text, 8), "gege") == [8, 7, 7, 6]
-	assert caretsOf(editorFor(text, 0), "3w") == [0, 8]
+	assert caretsOf(text, 0, "wwwwwww") == [4, 7, 8, 14, 18, 23, 24]
+	assert caretsOf(text, 0, "WW") == [4, 14]
+	assert caretsOf(text, 0, "eeee") == [2, 6, 7, 10]
+	assert caretsOf(text, 10, "bbbb") == [8, 7, 4, 0]
+	assert caretsOf(text, 8, "gege") == [8, 7, 7, 6]
+	assert caretsOf(text, 0, "3w") == [0, 8]
 }
 
 test "linhas: 0, ^, $, j e k com a coluna guardada, gg e G" {
 	text := "foo bar.baz\n  qux quux\n\nend"
-	assert feed(editorFor(text, 5), "$").caret == 10
-	assert feed(editorFor(text, 5), "0").caret == 0
-	assert feed(editorFor(text, 16), "^").caret == 14
-	assert caretsOf(editorFor(text, 2), "jjjkk") == [14, 23, 26, 23, 14]
-	assert caretsOf(editorFor(text, 0), "$jj") == [10, 21, 23]
-	assert feed(editorFor(text, 20), "gg").caret == 0
-	assert feed(editorFor(text, 0), "G").caret == 24
-	assert feed(editorFor(text, 0), "2G").caret == 14
-	assert feed(editorFor(text, 0), "3gg").caret == 23
-	assert feed(editorFor("a\nb\n", 0), "G").caret == 2
+	assert fed(text, 5, "$").caret == 10
+	assert fed(text, 5, "0").caret == 0
+	assert fed(text, 16, "^").caret == 14
+	assert caretsOf(text, 2, "jjjkk") == [14, 23, 26, 23, 14]
+	assert caretsOf(text, 0, "$jj") == [10, 21, 23]
+	assert fed(text, 20, "gg").caret == 0
+	assert fed(text, 0, "G").caret == 24
+	assert fed(text, 0, "2G").caret == 14
+	assert fed(text, 0, "3gg").caret == 23
+	assert fed("a\nb\n", 0, "G").caret == 2
 	tabs := "\tab\n12345678"
-	assert feed(editorFor(tabs, 1), "j").caret == 8
+	assert fed(tabs, 1, "j").caret == 8
 }
 
 test "f, t, F, T, ; e , ficam na linha" {
 	text := "foo bar.baz(a)"
-	assert feed(editorFor(text, 0), "f.").caret == 7
-	assert caretsOf(editorFor(text, 0), "fa;,") == [0, 5, 9, 5]
-	assert feed(editorFor(text, 0), "t.").caret == 6
-	assert feed(editorFor(text, 0), "t.;").caret == 6
-	assert feed(editorFor(text, 13), "Fb").caret == 8
-	assert feed(editorFor(text, 13), "Tb").caret == 9
-	assert feed(editorFor(text, 0), "fq").caret == 0
-	assert feed(editorFor(text, 0), "2fa").caret == 9
+	assert fed(text, 0, "f.").caret == 7
+	assert caretsOf(text, 0, "fa;,") == [0, 5, 9, 5]
+	assert fed(text, 0, "t.").caret == 6
+	assert fed(text, 0, "t.;").caret == 6
+	assert fed(text, 13, "Fb").caret == 8
+	assert fed(text, 13, "Tb").caret == 9
+	assert fed(text, 0, "fq").caret == 0
+	assert fed(text, 0, "2fa").caret == 9
 }
 
 test "% salta entre pares, chaves entre parágrafos" {
-	assert caretsOf(editorFor("(a [b] c)", 0), "%%") == [8, 0]
-	assert feed(editorFor("x = f(a[1])", 0), "%").caret == 10
+	assert caretsOf("(a [b] c)", 0, "%%") == [8, 0]
+	assert fed("x = f(a[1])", 0, "%").caret == 10
 	text := "a\nb\n\nc\nd\n\ne"
-	assert caretsOf(editorFor(text, 0), "}}}") == [4, 9, 10]
-	assert caretsOf(editorFor(text, 10), "\{\{") == [9, 4]
+	assert caretsOf(text, 0, "}}}") == [4, 9, 10]
+	assert caretsOf(text, 10, "\{\{") == [9, 4]
 }
 
 test "dw não leva o fim da linha, cw muda só até o fim da palavra" {
-	assert feed(editorFor("foo bar\nbaz", 4), "dw").text == "foo \nbaz"
-	assert feed(editorFor("foo bar baz", 0), "d2w").text == "baz"
-	assert feed(editorFor("a b\nc d", 0), "d2w").text == "\nc d"
-	deleted := feed(editorFor("foo bar", 0), "dw")
+	assert fed("foo bar\nbaz", 4, "dw").text == "foo \nbaz"
+	assert fed("foo bar baz", 0, "d2w").text == "baz"
+	assert fed("a b\nc d", 0, "d2w").text == "\nc d"
+	deleted := fed("foo bar", 0, "dw")
 	assert deleted.text == "bar"
 	assert deleted.vim.register == "foo "
-	changed := feed(typeText(feed(editorFor("foo bar", 0), "cw"), "x"), "<Esc>")
+	mut changed := fed("foo bar", 0, "cw")
+	typeText(changed, "x")
+	feed(changed, "<Esc>")
 	assert changed.text == "x bar"
 	assert changed.vim.mode == model.VimMode.NormalMode()
-	assert feed(typeText(feed(editorFor("foo bar", 2), "cw"), "x"), "<Esc>").text == "fox bar"
-	assert feed(editorFor("foo bar baz", 4), "de").text == "foo  baz"
-	assert feed(editorFor("foo bar baz", 8), "db").text == "foo baz"
-	assert feed(editorFor("foo(a, b)", 0), "dt,").text == ", b)"
-	assert feed(editorFor("foo(a, b)", 0), "df(").text == "a, b)"
+	mut probe1 := fed("foo bar", 2, "cw")
+	typeText(probe1, "x")
+	feed(probe1, "<Esc>")
+	assert probe1.text == "fox bar"
+	assert fed("foo bar baz", 4, "de").text == "foo  baz"
+	assert fed("foo bar baz", 8, "db").text == "foo baz"
+	assert fed("foo(a, b)", 0, "dt,").text == ", b)"
+	assert fed("foo(a, b)", 0, "df(").text == "a, b)"
 }
 
 test "dd, D, x e X, com contagem" {
-	assert feed(editorFor("a\nb\nc\nd", 0), "dd").text == "b\nc\nd"
-	assert feed(editorFor("a\nb\nc\nd", 0), "2dd").text == "c\nd"
-	assert feed(editorFor("a\nb\nc\nd", 0), "d2d").text == "c\nd"
-	last := feed(editorFor("a\nb", 2), "dd")
+	assert fed("a\nb\nc\nd", 0, "dd").text == "b\nc\nd"
+	assert fed("a\nb\nc\nd", 0, "2dd").text == "c\nd"
+	assert fed("a\nb\nc\nd", 0, "d2d").text == "c\nd"
+	last := fed("a\nb", 2, "dd")
 	assert last.text == "a"
 	assert last.caret == 0
 	assert last.vim.register == "b\n"
 	assert last.vim.linewise
-	assert feed(editorFor("a\nb\n", 2), "dd").text == "a\n"
-	assert feed(editorFor("a\nb\nc", 2), "dj").text == "a"
-	assert feed(editorFor("a\nb\nc", 2), "dk").text == "c"
-	assert feed(editorFor("a\n  b\nc", 0), "dG").text == ""
-	lines := feed(editorFor("a\nb\nc\nd", 0), "3dd")
+	assert fed("a\nb\n", 2, "dd").text == "a\n"
+	assert fed("a\nb\nc", 2, "dj").text == "a"
+	assert fed("a\nb\nc", 2, "dk").text == "c"
+	assert fed("a\n  b\nc", 0, "dG").text == ""
+	lines := fed("a\nb\nc\nd", 0, "3dd")
 	assert lines.vim.message == "%1 linhas a menos"
 	assert lines.vim.args == ["3"]
-	cut := feed(editorFor("hello world", 5), "D")
+	cut := fed("hello world", 5, "D")
 	assert cut.text == "hello"
 	assert cut.caret == 4
-	assert feed(editorFor("abc", 1), "x").text == "ac"
-	assert feed(editorFor("abcdef", 1), "3x").text == "aef"
-	assert feed(editorFor("abc", 2), "x").caret == 1
-	assert feed(editorFor("abc", 2), "X").text == "ac"
-	assert feed(editorFor("abc", 0), "X").text == "abc"
+	assert fed("abc", 1, "x").text == "ac"
+	assert fed("abcdef", 1, "3x").text == "aef"
+	assert fed("abc", 2, "x").caret == 1
+	assert fed("abc", 2, "X").text == "ac"
+	assert fed("abc", 0, "X").text == "abc"
 }
 
 test "yy, yw, p e P, e xp troca dois caracteres" {
-	below := feed(editorFor("one\ntwo", 0), "yyp")
+	below := fed("one\ntwo", 0, "yyp")
 	assert below.text == "one\none\ntwo"
 	assert below.caret == 4
-	above := feed(editorFor("one\ntwo", 4), "yyP")
+	above := fed("one\ntwo", 4, "yyP")
 	assert above.text == "one\ntwo\ntwo"
 	assert above.caret == 4
-	word := feed(editorFor("foo bar", 4), "ywP")
+	word := fed("foo bar", 4, "ywP")
 	assert word.text == "foo barbar"
 	assert word.caret == 6
-	assert feed(editorFor("a\nb", 2), "yyp").text == "a\nb\nb"
-	assert feed(editorFor("a\nb", 0), "yy3p").text == "a\na\na\na\nb"
-	assert feed(editorFor("ab", 0), "xp").text == "ba"
-	copied := feed(editorFor("a\nb\nc", 0), "yj")
+	assert fed("a\nb", 2, "yyp").text == "a\nb\nb"
+	assert fed("a\nb", 0, "yy3p").text == "a\na\na\na\nb"
+	assert fed("ab", 0, "xp").text == "ba"
+	copied := fed("a\nb\nc", 0, "yj")
 	assert copied.clip == "a\nb\n"
 	assert copied.caret == 0
-	assert feed(editorFor("a", 0), "p").vim.error
+	assert fed("a", 0, "p").vim.error
 }
 
 test "inserir: i, a, I, A, o e O, com indentação e contagem" {
-	appended := feed(editorFor("foo", 0), "A")
+	appended := fed("foo", 0, "A")
 	assert appended.caret == 3
 	assert appended.vim.mode == model.VimMode.InsertMode()
-	done := feed(typeText(appended, "!"), "<Esc>")
+	doneBefore := appended
+	mut done := doneBefore
+	typeText(done, "!")
+	feed(done, "<Esc>")
 	assert done.text == "foo!"
 	assert done.caret == 3
-	opened := feed(editorFor("\tfoo \{", 0), "o")
+	opened := fed("\tfoo \{", 0, "o")
 	assert opened.text == "\tfoo \{\n\t\t"
 	assert opened.caret == len(opened.text)
-	above := feed(editorFor("\tfoo", 1), "O")
+	above := fed("\tfoo", 1, "O")
 	assert above.text == "\t\n\tfoo"
 	assert above.caret == 1
-	assert feed(editorFor("\t  x", 0), "I").caret == 3
-	assert feed(editorFor("ab", 0), "a").caret == 1
-	assert feed(typeText(feed(editorFor("", 0), "3i"), "hi"), "<Esc>").text == "hihihi"
-	assert feed(typeText(feed(editorFor("a", 0), "2o"), "x"), "<Esc>").text == "a\nx\nx"
+	assert fed("\t  x", 0, "I").caret == 3
+	assert fed("ab", 0, "a").caret == 1
+	mut probe2 := fed("", 0, "3i")
+	typeText(probe2, "hi")
+	feed(probe2, "<Esc>")
+	assert probe2.text == "hihihi"
+	mut probe3 := fed("a", 0, "2o")
+	typeText(probe3, "x")
+	feed(probe3, "<Esc>")
+	assert probe3.text == "a\nx\nx"
 }
 
 test "o ponto repete a última alteração, inclusive o que foi digitado" {
-	assert feed(editorFor("a b c d", 0), "dw.").text == "c d"
-	changed := feed(typeText(feed(editorFor("foo bar", 0), "ciw"), "x"), "<Esc>")
-	again := feed(changed, "w.")
+	assert fed("a b c d", 0, "dw.").text == "c d"
+	mut changed := fed("foo bar", 0, "ciw")
+	typeText(changed, "x")
+	feed(changed, "<Esc>")
+	againBefore := changed
+	mut again := againBefore
+	feed(again, "w.")
 	assert again.text == "x x"
 	assert again.caret == 2
-	semicolons := feed(typeText(feed(editorFor("a\nb", 0), "A"), ";"), "<Esc>j.")
+	mut semicolons := fed("a\nb", 0, "A")
+	typeText(semicolons, ";")
+	feed(semicolons, "<Esc>j.")
 	assert semicolons.text == "a;\nb;"
-	assert feed(editorFor("abcdef", 0), "x2.").text == "def"
-	assert feed(editorFor("a\nb\nc", 0), "ddu.").text == "b\nc"
+	assert fed("abcdef", 0, "x2.").text == "def"
+	assert fed("a\nb\nc", 0, "ddu.").text == "b\nc"
 }
 
 test "u e Ctrl+R, e uma inserção inteira é um passo só" {
-	undone := feed(editorFor("a\nb", 0), "ddu")
+	undone := fed("a\nb", 0, "ddu")
 	assert undone.text == "a\nb"
 	assert undone.caret == 0
-	assert feed(undone, "<C-r>").text == "b"
-	typed := feed(typeText(feed(editorFor("x", 0), "A"), "yz"), "<Esc>")
+	probe4Before := undone
+	mut probe4 := probe4Before
+	feed(probe4, "<C-r>")
+	assert probe4.text == "b"
+	mut typed := fed("x", 0, "A")
+	typeText(typed, "yz")
+	feed(typed, "<Esc>")
 	assert typed.text == "xyz"
 	assert len(typed.undo) == 1
-	back := feed(typed, "u")
+	backBefore := typed
+	mut back := backBefore
+	feed(back, "u")
 	assert back.text == "x"
-	oldest := feed(back, "u")
+	oldestBefore := back
+	mut oldest := oldestBefore
+	feed(oldest, "u")
 	assert oldest.vim.message == "Já está na alteração mais antiga"
-	assert len(feed(editorFor("abc", 0), "i<Esc>").undo) == 0
-	assert feed(editorFor("abc", 0), "xxx3u").text == "abc"
+	assert len(fed("abc", 0, "i<Esc>").undo) == 0
+	assert fed("abc", 0, "xxx3u").text == "abc"
 }
 
 test "objetos de texto: palavras, aspas, blocos e parágrafos" {
-	assert feed(editorFor("f(a, b)", 3), "di(").text == "f()"
-	assert feed(editorFor("f(a, b)", 3), "da(").text == "f"
-	assert feed(editorFor("f(a, (b))", 7), "d2i(").text == "f()"
-	assert feed(typeText(feed(editorFor("x = \"hello\"", 0), "ci\""), "bye"), "<Esc>").text == "x = \"bye\""
-	assert feed(editorFor("say 'hi' now", 5), "da'").text == "say now"
-	assert feed(editorFor("foo bar", 5), "diw").text == "foo "
-	assert feed(editorFor("foo bar baz", 4), "daw").text == "foo baz"
-	assert feed(editorFor("foo bar", 6), "daw").text == "foo"
+	assert fed("f(a, b)", 3, "di(").text == "f()"
+	assert fed("f(a, b)", 3, "da(").text == "f"
+	assert fed("f(a, (b))", 7, "d2i(").text == "f()"
+	mut probe5 := fed("x = \"hello\"", 0, "ci\"")
+	typeText(probe5, "bye")
+	feed(probe5, "<Esc>")
+	assert probe5.text == "x = \"bye\""
+	assert fed("say 'hi' now", 5, "da'").text == "say now"
+	assert fed("foo bar", 5, "diw").text == "foo "
+	assert fed("foo bar baz", 4, "daw").text == "foo baz"
+	assert fed("foo bar", 6, "daw").text == "foo"
 	block := "f() \{\n\ta\n\tb\n}"
-	assert feed(editorFor(block, 7), "di\{").text == "f() \{\n}"
-	changed := feed(editorFor(block, 7), "ci\{")
+	assert fed(block, 7, "di\{").text == "f() \{\n}"
+	changed := fed(block, 7, "ci\{")
 	assert changed.text == "f() \{\n\t\n}"
 	assert changed.caret == 7
-	assert feed(editorFor(block, 7), "yiB").vim.linewise
-	assert feed(editorFor("x [1, 2]", 4), "di]").text == "x []"
-	assert feed(editorFor("a\nb\n\nc", 0), "dip").text == "\nc"
-	assert feed(editorFor("a\nb\n\nc", 0), "dap").text == "c"
-	assert feed(editorFor("f(a)", 0), "dix").text == "f(a)"
+	assert fed(block, 7, "yiB").vim.linewise
+	assert fed("x [1, 2]", 4, "di]").text == "x []"
+	assert fed("a\nb\n\nc", 0, "dip").text == "\nc"
+	assert fed("a\nb\n\nc", 0, "dap").text == "c"
+	assert fed("f(a)", 0, "dix").text == "f(a)"
 }
 
 test "maiúsculas, r, ~, J, gJ, >> e <<" {
-	assert feed(editorFor("foo bar", 4), "gUiw").text == "foo BAR"
-	assert feed(editorFor("FOO BAR", 0), "guu").text == "foo bar"
-	assert feed(editorFor("ação", 0), "gUU").text == "AÇÃO"
-	assert feed(editorFor("abc", 0), "rx").text == "xbc"
-	replaced := feed(editorFor("abcd", 0), "3r-")
+	assert fed("foo bar", 4, "gUiw").text == "foo BAR"
+	assert fed("FOO BAR", 0, "guu").text == "foo bar"
+	assert fed("ação", 0, "gUU").text == "AÇÃO"
+	assert fed("abc", 0, "rx").text == "xbc"
+	replaced := fed("abcd", 0, "3r-")
 	assert replaced.text == "---d"
 	assert replaced.caret == 2
-	assert feed(editorFor("abc", 1), "5rx").text == "abc"
-	toggled := feed(editorFor("aBc", 0), "~")
+	assert fed("abc", 1, "5rx").text == "abc"
+	toggled := fed("aBc", 0, "~")
 	assert toggled.text == "ABc"
 	assert toggled.caret == 1
-	assert feed(editorFor("aBc", 0), "3~").text == "AbC"
-	joined := feed(editorFor("a\n  b", 0), "J")
+	assert fed("aBc", 0, "3~").text == "AbC"
+	joined := fed("a\n  b", 0, "J")
 	assert joined.text == "a b"
 	assert joined.caret == 1
-	assert feed(editorFor("a\n  b", 0), "gJ").text == "a  b"
-	assert feed(editorFor("f(\n)", 0), "J").text == "f()"
-	assert feed(editorFor("a\nb\nc", 0), "3J").text == "a b c"
-	assert feed(editorFor("a", 0), ">>").text == "\ta"
-	assert feed(editorFor("\t\ta", 0), "<<").text == "\ta"
-	assert feed(editorFor("a\nb\nc", 0), "2>>").text == "\ta\n\tb\nc"
-	assert feed(editorFor("  x\ny", 4), ">>").text == "  x\n    y"
-	assert feed(editorFor("f \{\n\ta\n}", 7), ">i\{").text == "f \{\n\t\ta\n}"
+	assert fed("a\n  b", 0, "gJ").text == "a  b"
+	assert fed("f(\n)", 0, "J").text == "f()"
+	assert fed("a\nb\nc", 0, "3J").text == "a b c"
+	assert fed("a", 0, ">>").text == "\ta"
+	assert fed("\t\ta", 0, "<<").text == "\ta"
+	assert fed("a\nb\nc", 0, "2>>").text == "\ta\n\tb\nc"
+	assert fed("  x\ny", 4, ">>").text == "  x\n    y"
+	assert fed("f \{\n\ta\n}", 7, ">i\{").text == "f \{\n\t\ta\n}"
 }
 
 test "visual: v, V, o, operadores e objetos" {
-	yanked := feed(editorFor("hello world", 0), "vey")
+	yanked := fed("hello world", 0, "vey")
 	assert yanked.vim.register == "hello"
 	assert yanked.vim.mode == model.VimMode.NormalMode()
 	assert yanked.caret == 0
-	assert feed(editorFor("hello world", 0), "ved").text == " world"
-	assert feed(editorFor("a\nb\nc", 0), "Vjd").text == "c"
-	assert feed(editorFor("ab\ncd", 1), "vjd").text == "a"
-	assert feed(editorFor("foo bar", 5), "viwU").text == "foo BAR"
-	assert feed(editorFor("a\nb", 0), "Vj>").text == "\ta\n\tb"
-	swapped := feed(editorFor("abcdef", 1), "vllo")
+	assert fed("hello world", 0, "ved").text == " world"
+	assert fed("a\nb\nc", 0, "Vjd").text == "c"
+	assert fed("ab\ncd", 1, "vjd").text == "a"
+	assert fed("foo bar", 5, "viwU").text == "foo BAR"
+	assert fed("a\nb", 0, "Vj>").text == "\ta\n\tb"
+	swapped := fed("abcdef", 1, "vllo")
 	assert swapped.caret == 1
 	assert swapped.vim.anchor == 3
-	over := feed(editorFor("foo bar", 0), "yiwwviwp")
+	over := fed("foo bar", 0, "yiwwviwp")
 	assert over.text == "foo foo"
 	assert over.vim.register == "bar"
-	selecting := feed(editorFor("a\nb\nc", 0), "Vj")
+	selecting := fed("a\nb\nc", 0, "Vj")
 	assert selecting.vim.mode == model.VimMode.VisualLineMode()
 	span := shown(selecting.text, selecting.caret, selecting.vim)
 	assert span.from == 0 && span.to == 4
-	assert feed(selecting, "<Esc>").vim.mode == model.VimMode.NormalMode()
-	assert feed(editorFor("abc", 0), "vlrx").text == "xxc"
+	probe6Before := selecting
+	mut probe6 := probe6Before
+	feed(probe6, "<Esc>")
+	assert probe6.vim.mode == model.VimMode.NormalMode()
+	assert fed("abc", 0, "vlrx").text == "xxc"
 }
 
 test "a busca: /, n, N, *, # e smartcase" {
 	text := "foo bar foo baz foo"
-	found := submit(feed(editorFor(text, 0), "/"), "foo")
+	mut found := fed(text, 0, "/")
+	submit(found, "foo")
 	assert found.caret == 8
 	assert found.vim.highlight
-	assert feed(found, "n").caret == 16
-	wrapped := feed(found, "nn")
+	probe7Before := found
+	mut probe7 := probe7Before
+	feed(probe7, "n")
+	assert probe7.caret == 16
+	wrappedBefore := found
+	mut wrapped := wrappedBefore
+	feed(wrapped, "nn")
 	assert wrapped.caret == 0
 	assert wrapped.vim.message == "a busca chegou ao FIM, continuando do INÍCIO"
-	assert feed(found, "N").caret == 0
-	assert feed(found, "dn").text == "foo bar foo"
-	backward := submit(feed(editorFor(text, 10), "?"), "foo")
+	probe8Before := found
+	mut probe8 := probe8Before
+	feed(probe8, "N")
+	assert probe8.caret == 0
+	probe9Before := found
+	mut probe9 := probe9Before
+	feed(probe9, "dn")
+	assert probe9.text == "foo bar foo"
+	mut backward := fed(text, 10, "?")
+	submit(backward, "foo")
 	assert backward.caret == 8
-	assert feed(backward, "n").caret == 0
-	assert submit(feed(editorFor("Foo foo", 0), "/"), "foo").caret == 4
-	assert submit(feed(editorFor("Foo foo", 1), "/"), "Foo").caret == 0
-	assert feed(editorFor("ab abc ab", 0), "*").caret == 7
-	assert feed(editorFor("ab abc ab", 7), "#").caret == 0
-	missing := submit(feed(editorFor(text, 0), "/"), "zzz")
+	probe10Before := backward
+	mut probe10 := probe10Before
+	feed(probe10, "n")
+	assert probe10.caret == 0
+	mut probe11 := fed("Foo foo", 0, "/")
+	submit(probe11, "foo")
+	assert probe11.caret == 4
+	mut probe12 := fed("Foo foo", 1, "/")
+	submit(probe12, "Foo")
+	assert probe12.caret == 0
+	assert fed("ab abc ab", 0, "*").caret == 7
+	assert fed("ab abc ab", 7, "#").caret == 0
+	mut missing := fed(text, 0, "/")
+	submit(missing, "zzz")
 	assert missing.vim.error
 	assert missing.vim.args == ["zzz"]
 	assert len(highlights(text, found.vim)) == 3
-	assert len(highlights(text, submit(found, "noh").vim)) == 0
+	probe13Before := found
+	mut probe13 := probe13Before
+	submit(probe13, "noh")
+	assert len(highlights(text, probe13.vim)) == 0
 }
 
 test "linha de comando: endereços, :s, :d, :m, :t, :sort e :>" {
-	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "3").caret == 4
-	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "$").caret == 4
-	all := submit(feed(editorFor("foo\nboo", 0), ":"), "%s/o/0/g")
+	mut probe14 := fed("a\nb\nc", 0, ":")
+	submit(probe14, "3")
+	assert probe14.caret == 4
+	mut probe15 := fed("a\nb\nc", 0, ":")
+	submit(probe15, "$")
+	assert probe15.caret == 4
+	mut all := fed("foo\nboo", 0, ":")
+	submit(all, "%s/o/0/g")
 	assert all.text == "f00\nb00"
 	assert all.vim.args == ["4", "2"]
-	assert submit(feed(editorFor("foo", 0), ":"), "s/o/[&]/").text == "f[o]o"
-	assert submit(feed(editorFor("a.b", 0), ":"), "s#.#\\n#").text == "a\nb"
-	assert submit(feed(editorFor("a\nb\nc\nd", 0), ":"), "2,3d").text == "a\nd"
-	assert submit(feed(editorFor("a\nb\nc", 4), ":"), "m0").text == "c\na\nb"
-	assert submit(feed(editorFor("a\nb\nc", 0), ":"), "m$").text == "b\nc\na"
-	assert submit(feed(editorFor("a\nb", 0), ":"), "t.").text == "a\na\nb"
-	assert submit(feed(editorFor("c\na\nb", 0), ":"), "sort").text == "a\nb\nc"
-	assert submit(feed(editorFor("c\na\nb", 0), ":"), "sort!").text == "c\nb\na"
-	assert submit(feed(editorFor("a\nb", 0), ":"), "%>").text == "\ta\n\tb"
-	assert submit(feed(editorFor("a\nb\nc", 0), ":"), ".,+1j").text == "a b\nc"
-	ranged := submit(feed(editorFor("a\nb\nc", 0), "Vj:"), "'<,'>d")
+	mut probe16 := fed("foo", 0, ":")
+	submit(probe16, "s/o/[&]/")
+	assert probe16.text == "f[o]o"
+	mut probe17 := fed("a.b", 0, ":")
+	submit(probe17, "s#.#\\n#")
+	assert probe17.text == "a\nb"
+	mut probe18 := fed("a\nb\nc\nd", 0, ":")
+	submit(probe18, "2,3d")
+	assert probe18.text == "a\nd"
+	mut probe19 := fed("a\nb\nc", 4, ":")
+	submit(probe19, "m0")
+	assert probe19.text == "c\na\nb"
+	mut probe20 := fed("a\nb\nc", 0, ":")
+	submit(probe20, "m$")
+	assert probe20.text == "b\nc\na"
+	mut probe21 := fed("a\nb", 0, ":")
+	submit(probe21, "t.")
+	assert probe21.text == "a\na\nb"
+	mut probe22 := fed("c\na\nb", 0, ":")
+	submit(probe22, "sort")
+	assert probe22.text == "a\nb\nc"
+	mut probe23 := fed("c\na\nb", 0, ":")
+	submit(probe23, "sort!")
+	assert probe23.text == "c\nb\na"
+	mut probe24 := fed("a\nb", 0, ":")
+	submit(probe24, "%>")
+	assert probe24.text == "\ta\n\tb"
+	mut probe25 := fed("a\nb\nc", 0, ":")
+	submit(probe25, ".,+1j")
+	assert probe25.text == "a b\nc"
+	mut ranged := fed("a\nb\nc", 0, "Vj:")
+	submit(ranged, "'<,'>d")
 	assert ranged.text == "c"
-	assert feed(editorFor("a\nb\nc", 0), "Vj:").vim.command == "'<,'>"
-	assert feed(editorFor("a\nb\nc", 0), "3:").vim.command == ".,.+2"
-	unknown := submit(feed(editorFor("a", 0), ":"), "frobnicate")
+	assert fed("a\nb\nc", 0, "Vj:").vim.command == "'<,'>"
+	assert fed("a\nb\nc", 0, "3:").vim.command == ".,.+2"
+	mut unknown := fed("a", 0, ":")
+	submit(unknown, "frobnicate")
 	assert unknown.vim.error
 	assert unknown.vim.args == ["frobnicate"]
-	assert submit(feed(editorFor("a", 0), ":"), "5,2d").text == "a"
+	mut probe26 := fed("a", 0, ":")
+	submit(probe26, "5,2d")
+	assert probe26.text == "a"
 }
 
 test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
@@ -3566,81 +3751,188 @@ test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
 	mut dirty := editorFor("a", 0)
 	dirty.active = 2
 	dirty.dirty = true
-	assert submit(clean, "w").effects == [model.Msg.Save()]
-	assert submit(clean, "q").effects == [model.Msg.CloseDoc(2)]
-	assert submit(clean, "x").effects == [model.Msg.CloseDoc(2)]
-	assert submit(clean, "wq").effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
-	refused := submit(dirty, "q")
+	probe27Before := clean
+	mut probe27 := probe27Before
+	submit(probe27, "w")
+	assert probe27.effects == [model.Msg.Save()]
+	probe28Before := clean
+	mut probe28 := probe28Before
+	submit(probe28, "q")
+	assert probe28.effects == [model.Msg.CloseDoc(2)]
+	probe29Before := clean
+	mut probe29 := probe29Before
+	submit(probe29, "x")
+	assert probe29.effects == [model.Msg.CloseDoc(2)]
+	probe30Before := clean
+	mut probe30 := probe30Before
+	submit(probe30, "wq")
+	assert probe30.effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	refusedBefore := dirty
+	mut refused := refusedBefore
+	submit(refused, "q")
 	assert refused.vim.error
 	assert len(refused.effects) == 0
-	assert submit(dirty, "q!").effects == [model.Msg.CloseDoc(2)]
-	assert submit(dirty, "x").effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
-	assert submit(clean, "e lib/novo.hive").effects == [model.Msg.VimEdit("lib/novo.hive")]
-	assert submit(dirty, "e!").effects == [model.Msg.VimReload()]
-	assert submit(clean, "set nonu").effects == [model.Msg.ToggleSetting("lineNumbers")]
-	assert len(submit(clean, "set nu").effects) == 0
-	assert submit(clean, "set ts=2").effects == [model.Msg.SetTabSize(2)]
-	assert submit(clean, "bn").effects == [model.Msg.CycleTab(1)]
-	assert submit(clean, "run").effects == [model.Msg.Invoke("run")]
-	assert submit(clean, "make").effects == [model.Msg.Invoke("build")]
-	assert submit(clean, "check").effects == [model.Msg.Invoke("check")]
-	assert submit(clean, "!ls").effects == [model.Msg.ShowPane(model.Pane.TerminalPane()), model.Msg.TermSubmit("ls")]
-	assert submit(clean, "Ex").effects == [model.Msg.FocusExplorer("")]
-	assert submit(clean, "Vex lib").effects == [model.Msg.FocusExplorer("lib")]
-	assert submit(clean, "Claude").effects == [model.Msg.ShowAgent("claude")]
-	assert submit(clean, "Codex").effects == [model.Msg.ShowAgent("codex")]
-	assert submit(clean, "OpenCode").effects == [model.Msg.ShowAgent("opencode")]
-	assert submit(clean, "Agent Codex").effects == [model.Msg.ShowAgent("codex")]
-	assert feed(clean, "gd").effects == [model.Msg.GotoDefinition(0)]
-	assert feed(clean, "ZZ").effects == [model.Msg.CloseDoc(2)]
-	history := submit(submit(feed(clean, ":"), "set nu"), "noh")
+	probe31Before := dirty
+	mut probe31 := probe31Before
+	submit(probe31, "q!")
+	assert probe31.effects == [model.Msg.CloseDoc(2)]
+	probe32Before := dirty
+	mut probe32 := probe32Before
+	submit(probe32, "x")
+	assert probe32.effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	probe33Before := clean
+	mut probe33 := probe33Before
+	submit(probe33, "e lib/novo.hive")
+	assert probe33.effects == [model.Msg.VimEdit("lib/novo.hive")]
+	probe34Before := dirty
+	mut probe34 := probe34Before
+	submit(probe34, "e!")
+	assert probe34.effects == [model.Msg.VimReload()]
+	probe35Before := clean
+	mut probe35 := probe35Before
+	submit(probe35, "set nonu")
+	assert probe35.effects == [model.Msg.ToggleSetting("lineNumbers")]
+	probe36Before := clean
+	mut probe36 := probe36Before
+	submit(probe36, "set nu")
+	assert len(probe36.effects) == 0
+	probe37Before := clean
+	mut probe37 := probe37Before
+	submit(probe37, "set ts=2")
+	assert probe37.effects == [model.Msg.SetTabSize(2)]
+	probe38Before := clean
+	mut probe38 := probe38Before
+	submit(probe38, "bn")
+	assert probe38.effects == [model.Msg.CycleTab(1)]
+	probe39Before := clean
+	mut probe39 := probe39Before
+	submit(probe39, "run")
+	assert probe39.effects == [model.Msg.Invoke("run")]
+	probe40Before := clean
+	mut probe40 := probe40Before
+	submit(probe40, "make")
+	assert probe40.effects == [model.Msg.Invoke("build")]
+	probe41Before := clean
+	mut probe41 := probe41Before
+	submit(probe41, "check")
+	assert probe41.effects == [model.Msg.Invoke("check")]
+	probe42Before := clean
+	mut probe42 := probe42Before
+	submit(probe42, "!ls")
+	assert probe42.effects == [model.Msg.ShowPane(model.Pane.TerminalPane()), model.Msg.TermSubmit("ls")]
+	probe43Before := clean
+	mut probe43 := probe43Before
+	submit(probe43, "Ex")
+	assert probe43.effects == [model.Msg.FocusExplorer("")]
+	probe44Before := clean
+	mut probe44 := probe44Before
+	submit(probe44, "Vex lib")
+	assert probe44.effects == [model.Msg.FocusExplorer("lib")]
+	probe45Before := clean
+	mut probe45 := probe45Before
+	submit(probe45, "Claude")
+	assert probe45.effects == [model.Msg.ShowAgent("claude")]
+	probe46Before := clean
+	mut probe46 := probe46Before
+	submit(probe46, "Codex")
+	assert probe46.effects == [model.Msg.ShowAgent("codex")]
+	probe47Before := clean
+	mut probe47 := probe47Before
+	submit(probe47, "OpenCode")
+	assert probe47.effects == [model.Msg.ShowAgent("opencode")]
+	probe48Before := clean
+	mut probe48 := probe48Before
+	submit(probe48, "Agent Codex")
+	assert probe48.effects == [model.Msg.ShowAgent("codex")]
+	probe49Before := clean
+	mut probe49 := probe49Before
+	feed(probe49, "gd")
+	assert probe49.effects == [model.Msg.GotoDefinition(0)]
+	probe50Before := clean
+	mut probe50 := probe50Before
+	feed(probe50, "ZZ")
+	assert probe50.effects == [model.Msg.CloseDoc(2)]
+	historyBefore := clean
+	mut history := historyBefore
+	feed(history, ":")
+	submit(history, "set nu")
+	submit(history, "noh")
 	mut browsing := history.vim
 	browsing.prompt = ":"
-	assert browseHistory(browsing, -1).command == "noh"
-	assert browseHistory(browseHistory(browsing, -1), -1).command == "set nu"
+	probe51Before := browsing
+	mut probe51 := probe51Before
+	browseHistory(probe51, -1)
+	assert probe51.command == "noh"
+	probe52Before := browsing
+	mut probe52 := probe52Before
+	browseHistory(probe52, -1)
+	browseHistory(probe52, -1)
+	assert probe52.command == "set nu"
 }
 
 test "Ctrl+A, Ctrl+X, rolagem e clique" {
-	plus := feed(editorFor("x = 41", 0), "<C-a>")
+	plus := fed("x = 41", 0, "<C-a>")
 	assert plus.text == "x = 42"
 	assert plus.caret == 5
-	assert feed(editorFor("x = 41", 0), "5<C-x>").text == "x = 36"
-	assert feed(editorFor("-3", 0), "<C-a>").text == "-2"
+	assert fed("x = 41", 0, "5<C-x>").text == "x = 36"
+	assert fed("-3", 0, "<C-a>").text == "-2"
 	mut Str[dyn] many = []
 	for n := 0; n < 100; n++ {
 		append(many, "line {n}")
 	}
 	long := join(many, "\n")
-	down := feed(editorFor(long, 0), "<C-d>")
+	down := fed(long, 0, "<C-d>")
 	assert lineOf(split(long, ""), down.caret) == 10
 	assert down.scroll == 10
 	mut middle := editorFor(long, lineOffset(split(long, ""), 50))
 	middle.top = 45
-	assert feed(middle, "zz").scroll == 40
-	assert feed(middle, "zt").scroll == 50
-	assert lineOf(split(long, ""), feed(middle, "H").caret) == 45
-	assert lineOf(split(long, ""), feed(middle, "L").caret) == 64
-	selected := click(editorFor("hello", 0), 1, 4)
+	probe53Before := middle
+	mut probe53 := probe53Before
+	feed(probe53, "zz")
+	assert probe53.scroll == 40
+	probe54Before := middle
+	mut probe54 := probe54Before
+	feed(probe54, "zt")
+	assert probe54.scroll == 50
+	probe55Before := middle
+	mut probe55 := probe55Before
+	feed(probe55, "H")
+	assert lineOf(split(long, ""), probe55.caret) == 45
+	probe56Before := middle
+	mut probe56 := probe56Before
+	feed(probe56, "L")
+	assert lineOf(split(long, ""), probe56.caret) == 64
+	mut selected := editorFor("hello", 0)
+	click(selected, 1, 4)
 	assert selected.vim.mode == model.VimMode.VisualMode()
 	assert selected.vim.anchor == 1
 	assert selected.caret == 3
-	assert click(selected, 2, 2).vim.mode == model.VimMode.NormalMode()
-	assert click(editorFor("ab\n", 0), 3, 3).caret == 1
+	probe57Before := selected
+	mut probe57 := probe57Before
+	click(probe57, 2, 2)
+	assert probe57.vim.mode == model.VimMode.NormalMode()
+	mut probe58 := editorFor("ab\n", 0)
+	click(probe58, 3, 3)
+	assert probe58.caret == 1
 }
 
 test "teclas que chegam atrasadas no modo de inserção viram texto" {
-	typed := feed(editorFor("\tf(", 2), "a<CR>x<BS>y<Esc>")
+	typed := fed("\tf(", 2, "a<CR>x<BS>y<Esc>")
 	assert typed.text == "\tf(\n\t\ty"
 	assert typed.vim.mode == model.VimMode.NormalMode()
 	assert typed.vim.typed == "\n\t\ty"
-	mut v := feed(editorFor("a", 0), ":").vim
-	v = promptKey(promptKey(promptKey(v, "w"), "q"), "<BS>")
+	mut v := fed("a", 0, ":").vim
+	promptKey(v, "w")
+	promptKey(v, "q")
+	promptKey(v, "<BS>")
 	assert v.command == "w"
-	assert feed(editorFor("abc def", 0), "g_").caret == 6
+	assert fed("abc def", 0, "g_").caret == 6
 }
 
 test "macros: q grava, @ repete, e a repetição para no primeiro erro" {
-	recorded := feed(typeText(feed(editorFor("a\nb\nc", 0), "qaA"), ";"), "<Esc>jq")
+	mut recorded := fed("a\nb\nc", 0, "qaA")
+	typeText(recorded, ";")
+	feed(recorded, "<Esc>jq")
 	assert recorded.text == "a;\nb\nc"
 	assert recorded.vim.recordingTo == ""
 	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
@@ -3648,61 +3940,105 @@ test "macros: q grava, @ repete, e a repetição para no primeiro erro" {
 	} else {
 		assert false
 	}
-	once := feed(recorded, "@a")
+	onceBefore := recorded
+	mut once := onceBefore
+	feed(once, "@a")
 	assert once.text == "a;\nb;\nc"
 	assert lineOf(split(once.text, ""), once.caret) == 2
 	// No fim, o `j` falha e a macro para, mas o que já fez fica.
-	assert feed(once, "@@").text == "a;\nb;\nc;"
-	assert feed(recorded, "5@a").text == "a;\nb;\nc;"
-	assert feed(recorded, "u").text == "a\nb\nc"
-	lines := feed(editorFor("x\nx\nx\nx", 0), "qb0rYjq100@b")
+	probe59Before := once
+	mut probe59 := probe59Before
+	feed(probe59, "@@")
+	assert probe59.text == "a;\nb;\nc;"
+	probe60Before := recorded
+	mut probe60 := probe60Before
+	feed(probe60, "5@a")
+	assert probe60.text == "a;\nb;\nc;"
+	probe61Before := recorded
+	mut probe61 := probe61Before
+	feed(probe61, "u")
+	assert probe61.text == "a\nb\nc"
+	lines := fed("x\nx\nx\nx", 0, "qb0rYjq100@b")
 	assert lines.text == "Y\nY\nY\nY"
-	recording := feed(editorFor("a", 0), "qc")
+	recording := fed("a", 0, "qc")
 	assert recording.vim.recordingTo == "c"
-	assert feed(recording, "vq").vim.recordingTo == ""
+	probe62Before := recording
+	mut probe62 := probe62Before
+	feed(probe62, "vq")
+	assert probe62.vim.recordingTo == ""
 }
 
 test "macros: comandos de :, visual, maiúscula acrescenta, @: e macro que chama a si mesma" {
-	started := submit(feed(editorFor("foo\nfoo\nfoo", 0), "qa:"), "s/o/0/g")
-	recorded := feed(started, "jq")
+	mut started := fed("foo\nfoo\nfoo", 0, "qa:")
+	submit(started, "s/o/0/g")
+	recordedBefore := started
+	mut recorded := recordedBefore
+	feed(recorded, "jq")
 	assert recorded.text == "f00\nfoo\nfoo"
 	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
 		assert keys == [":", "<Text>s/o/0/g", "<CR>", "j"]
 	}
-	assert feed(recorded, "@a").text == "f00\nf00\nfoo"
-	assert feed(recorded, "@:").text == "f00\nf00\nfoo"
-	assert feed(feed(recorded, "j@:"), "").caret == 8
-	visual := feed(submit(feed(editorFor("a\nb\nc\nd", 0), "qvVj:"), "'<,'>d"), "q")
+	probe63Before := recorded
+	mut probe63 := probe63Before
+	feed(probe63, "@a")
+	assert probe63.text == "f00\nf00\nfoo"
+	probe64Before := recorded
+	mut probe64 := probe64Before
+	feed(probe64, "@:")
+	assert probe64.text == "f00\nf00\nfoo"
+	probe65Before := recorded
+	mut probe65 := probe65Before
+	feed(probe65, "j@:")
+	feed(probe65, "")
+	assert probe65.caret == 8
+	mut visual := fed("a\nb\nc\nd", 0, "qvVj:")
+	submit(visual, "'<,'>d")
+	feed(visual, "q")
 	assert visual.text == "c\nd"
-	assert feed(visual, "@v").text == ""
-	appended := feed(editorFor("abcdef", 0), "qbxqqBxq")
+	probe66Before := visual
+	mut probe66 := probe66Before
+	feed(probe66, "@v")
+	assert probe66.text == ""
+	appended := fed("abcdef", 0, "qbxqqBxq")
 	if hive.map.get(appended.vim.macros, "b") is Result.Ok(keys) {
 		assert keys == ["x", "x"]
 	}
-	assert feed(appended, "@b").text == "ef"
-	cancelled := cancel(feed(editorFor("abc", 0), "qd:"))
+	probe67Before := appended
+	mut probe67 := probe67Before
+	feed(probe67, "@b")
+	assert probe67.text == "ef"
+	mut cancelled := fed("abc", 0, "qd:")
+	cancel(cancelled)
 	assert cancelled.vim.prompt == ""
-	assert feed(cancelled, "xq@d").text == "c"
-	endless := feed(editorFor("abc", 0), "qeq")
+	probe68Before := cancelled
+	mut probe68 := probe68Before
+	feed(probe68, "xq@d")
+	assert probe68.text == "c"
+	endless := fed("abc", 0, "qeq")
 	mut looping := endless
 	looping.vim.macros = endless.vim.macros
 	mut hive.map.Map<Str, Str[dyn]> macros = endless.vim.macros
 	hive.map.set(macros, "e", ["l", "@", "e"])
 	looping.vim.macros = macros
-	stopped := feed(looping, "@e")
+	stoppedBefore := looping
+	mut stopped := stoppedBefore
+	feed(stopped, "@e")
 	assert stopped.vim.replaying == 0
 	assert len(stopped.vim.pending) == 0
-	assert feed(editorFor("abc", 0), "@z").text == "abc"
-	assert feed(editorFor("abc", 0), "q!").vim.recordingTo == ""
+	assert fed("abc", 0, "@z").text == "abc"
+	assert fed("abc", 0, "q!").vim.recordingTo == ""
 }
 
 test "teclas incompletas esperam, e Esc esquece" {
-	waiting := feed(editorFor("abc", 0), "2d")
+	waiting := fed("abc", 0, "2d")
 	assert waiting.vim.pending == ["2", "d"]
 	assert waiting.text == "abc"
-	assert len(feed(waiting, "<Esc>").vim.pending) == 0
-	assert len(feed(editorFor("abc", 0), "dq").vim.pending) == 0
-	assert feed(editorFor("abc", 0), "dq").text == "abc"
-	assert modeName(feed(editorFor("abc", 0), "v").vim) == "visual"
-	assert modeLabel(feed(editorFor("abc", 0), "i").vim) == "-- INSERÇÃO --"
+	probe69Before := waiting
+	mut probe69 := probe69Before
+	feed(probe69, "<Esc>")
+	assert len(probe69.vim.pending) == 0
+	assert len(fed("abc", 0, "dq").vim.pending) == 0
+	assert fed("abc", 0, "dq").text == "abc"
+	assert modeName(fed("abc", 0, "v").vim) == "visual"
+	assert modeLabel(fed("abc", 0, "i").vim) == "-- INSERÇÃO --"
 }
