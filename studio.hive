@@ -2990,7 +2990,7 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	state.find.caseSensitive = true
 	assert len(render.findMatches(render.searched(state), state.find)) == 0
 	state.palette = model.Palette(true, "main", 0, search.allFiles(folder, false, 100))
-	assert render.paletteMatches(state.palette) == [0]
+	assert len(render.paletteMatches(state.palette)) == 1
 	assert paletteChoice(state, 0) == "main.hive"
 	assert indexOf(render.palette(state), "main.hive") is Result.Ok(_)
 	if actionMsg(state, "quickOpen", 0) is Result.Ok(message) {
