@@ -105,7 +105,10 @@ func value(chars: Str[], from: Int, depth: Int, budget: Int): Node {
 		return leaf("<span class=\"ts\">" + read.html + "</span>", read.at)
 	} else if highlight.isDigit(c) || c == "-" {
 		mut j := i + 1
-		for ; j < len(chars) && isNumberChar(charAt(chars, j)); j++ {
+		for ; j < len(chars); j++ {
+			if !isNumberChar(charAt(chars, j)) {
+				break
+			}
 		}
 		return leaf("<span class=\"tn\">" + highlight.escape(highlight.piece(chars, i, j)) + "</span>", j)
 	}

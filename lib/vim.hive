@@ -10,6 +10,7 @@
 
 import ./model
 import ./highlight
+import ./native.go
 import ./complete
 import ./search
 import ./analysis
@@ -221,11 +222,15 @@ func repeatText(text: Str, times: Int): Str {
 }
 
 func trim(text: Str): Str {
-	mut rest := analysis.trimLeft(text)
-	for ; endsWith(rest, " ") || endsWith(rest, "\t"); {
-		rest = complete.take(rest, len(rest) - 1)
+	rest := analysis.trimLeft(text)
+	chars := split(rest, "")
+	mut end := len(chars)
+	for ; end > 0; end-- {
+		if !isBlank(at(chars, end - 1)) {
+			break
+		}
 	}
-	return rest
+	return complete.take(rest, end)
 }
 
 func leadingBlanks(line: Str): Str {
@@ -233,15 +238,7 @@ func leadingBlanks(line: Str): Str {
 }
 
 func upper(text: Str): Str {
-	mut out := text
-	small := split("abcdefghijklmnopqrstuvwxyzàáâãäçèéêëìíîïñòóôõöùúûü", "")
-	big := split("ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜ", "")
-	for i := 0; i < len(small); i++ {
-		if big bounds i {
-			out = replaceAll(out, small[i], big[i])
-		}
-	}
-	return out
+	return native.upper(text)
 }
 
 func toggleCase(text: Str): Str {
@@ -458,7 +455,10 @@ func nextWord(chars: Str[], pos: Int, big: Bool): Int {
 	mut i := pos
 	kind := classOf(at(chars, i), big)
 	if kind != 0 {
-		for ; i < size && classOf(at(chars, i), big) == kind; i++ {
+		for ; i < size; i++ {
+			if classOf(at(chars, i), big) != kind {
+				break
+			}
 		}
 	}
 	for ; i < size; i++ {
@@ -477,13 +477,19 @@ func nextWord(chars: Str[], pos: Int, big: Bool): Int {
 func wordEnd(chars: Str[], pos: Int, big: Bool): Int {
 	size := len(chars)
 	mut i := pos + 1
-	for ; i < size && isSpace(at(chars, i)); i++ {
+	for ; i < size; i++ {
+		if !isSpace(at(chars, i)) {
+			break
+		}
 	}
 	if i >= size {
 		return maxInt(size - 1, 0)
 	}
 	kind := classOf(at(chars, i), big)
-	for ; i + 1 < size && classOf(at(chars, i + 1), big) == kind; i++ {
+	for ; i + 1 < size; i++ {
+		if classOf(at(chars, i + 1), big) != kind {
+			break
+		}
 	}
 	return i
 }
@@ -504,7 +510,10 @@ func wordBack(chars: Str[], pos: Int, big: Bool): Int {
 		return 0
 	}
 	kind := classOf(at(chars, i), big)
-	for ; i > 0 && classOf(at(chars, i - 1), big) == kind; i-- {
+	for ; i > 0; i-- {
+		if classOf(at(chars, i - 1), big) != kind {
+			break
+		}
 	}
 	return i
 }
@@ -514,7 +523,10 @@ func wordEndBack(chars: Str[], pos: Int, big: Bool): Int {
 	mut i := pos
 	kind := classOf(at(chars, i), big)
 	if kind != 0 {
-		for ; i >= 0 && classOf(at(chars, i), big) == kind; i-- {
+		for ; i >= 0; i-- {
+			if classOf(at(chars, i), big) != kind {
+				break
+			}
 		}
 	}
 	for ; i > 0; i-- {
@@ -609,7 +621,10 @@ func partnerOf(c: Str): Str {
 func matchPair(chars: Str[], pos: Int): Result<Int, Bool> {
 	end := lineEnd(chars, pos)
 	mut i := pos
-	for ; i < end && partnerOf(at(chars, i)) == ""; i++ {
+	for ; i < end; i++ {
+		if partnerOf(at(chars, i)) != "" {
+			break
+		}
 	}
 	if i >= end {
 		return Result.Error(false)
@@ -966,16 +981,25 @@ func searchTarget(ed: Editor, chars: Str[], reverse: Bool, count: Int): Target {
 func wordUnder(chars: Str[], pos: Int): Span {
 	end := lineEnd(chars, pos)
 	mut i := pos
-	for ; i < end && !isKeyword(at(chars, i)); i++ {
+	for ; i < end; i++ {
+		if isKeyword(at(chars, i)) {
+			break
+		}
 	}
 	if i >= end {
 		return noSpan()
 	}
 	mut from := i
-	for ; from > 0 && isKeyword(at(chars, from - 1)); from-- {
+	for ; from > 0; from-- {
+		if !isKeyword(at(chars, from - 1)) {
+			break
+		}
 	}
 	mut to := i
-	for ; to < end && isKeyword(at(chars, to)); to++ {
+	for ; to < end; to++ {
+		if !isKeyword(at(chars, to)) {
+			break
+		}
 	}
 	return Span(from, to, false, true)
 }
@@ -985,7 +1009,10 @@ func wordUnder(chars: Str[], pos: Int): Span {
 func runStart(chars: Str[], i: Int, big: Bool): Int {
 	kind := kindOf(at(chars, i), big)
 	mut s := i
-	for ; s > 0 && kindOf(at(chars, s - 1), big) == kind; s-- {
+	for ; s > 0; s-- {
+		if kindOf(at(chars, s - 1), big) != kind {
+			break
+		}
 	}
 	return s
 }
@@ -993,7 +1020,10 @@ func runStart(chars: Str[], i: Int, big: Bool): Int {
 func runEnd(chars: Str[], i: Int, big: Bool): Int {
 	kind := kindOf(at(chars, i), big)
 	mut e := i
-	for ; e < len(chars) && kindOf(at(chars, e), big) == kind; e++ {
+	for ; e < len(chars); e++ {
+		if kindOf(at(chars, e), big) != kind {
+			break
+		}
 	}
 	return e
 }
@@ -1055,7 +1085,10 @@ func quoteObject(chars: Str[], pos: Int, inner: Bool, quote: Str): Span {
 		return Span(open + 1, close, false, true)
 	}
 	mut to := close + 1
-	for ; isBlank(at(chars, to)); to++ {
+	for ; true; to++ {
+		if !isBlank(at(chars, to)) {
+			break
+		}
 	}
 	return Span(open, to, false, true)
 }
@@ -1145,19 +1178,31 @@ func paragraphObject(text: Str, chars: Str[], pos: Int, inner: Bool) : Span {
 	current := lineOf(chars, pos)
 	empty := lineText(lines, current) == ""
 	mut first := current
-	for ; first > 0 && (lineText(lines, first - 1) == "") == empty; first-- {
+	for ; first > 0; first-- {
+		if (lineText(lines, first - 1) == "") != empty {
+			break
+		}
 	}
 	mut last := current
-	for ; last < final && (lineText(lines, last + 1) == "") == empty; last++ {
+	for ; last < final; last++ {
+		if (lineText(lines, last + 1) == "") != empty {
+			break
+		}
 	}
 	if !inner {
 		if last < final {
 			last++
-			for ; last < final && (lineText(lines, last + 1) == "") == !empty; last++ {
+			for ; last < final; last++ {
+				if (lineText(lines, last + 1) == "") != !empty {
+					break
+				}
 			}
 		} else if first > 0 {
 			first--
-			for ; first > 0 && (lineText(lines, first - 1) == "") == !empty; first-- {
+			for ; first > 0; first-- {
+				if (lineText(lines, first - 1) == "") != !empty {
+					break
+				}
 			}
 		}
 	}
@@ -1214,16 +1259,22 @@ proc undoSteps(ed: mut Editor, count: Int, back: Bool): void {
 		from = ed.redo
 		into = ed.undo
 	}
-	mut done := 0
-	for n := 0; n < count; n++ {
-		last := len(from) - 1
-		if from bounds last {
-			snap := from[last]
-			drop(from, last, last)
-			append(into, model.Snapshot(ed.text, ed.caret))
-			ed.text = snap.text
-			ed.caret = snap.caret
-			done++
+	size := len(from)
+	done := maxInt(minInt(count, size), 0)
+	target := size - done
+	if done > 0 && from bounds target {
+		snap := from[target]
+		append(into, model.Snapshot(ed.text, ed.caret))
+		for j := size - 1; j > target; j-- {
+			if from bounds j {
+				append(into, from[j])
+			}
+		}
+		ed.text = snap.text
+		ed.caret = snap.caret
+		last := size - 1
+		if from bounds last && from bounds target {
+			drop(from, target, last)
 		}
 	}
 	if back {
@@ -1381,14 +1432,23 @@ func indentUnit(text: Str, tab: Int): Str {
 }
 
 func unindent(line: Str, tab: Int): Str {
-	if complete.startsWith(line, "\t") {
-		return complete.skip(line, 1)
+	return complete.skip(line, indentCut(split(line, ""), 0, tab))
+}
+
+// Quantos caracteres um nível de recuo ocupa a partir de `from`: um tab, ou
+// até `tab` espaços.
+func indentCut(chars: Str[], from: Int, tab: Int): Int {
+	if at(chars, from) == "\t" {
+		return 1
 	}
-	mut rest := line
-	for n := 0; n < maxInt(tab, 1) && complete.startsWith(rest, " "); n++ {
-		rest = complete.skip(rest, 1)
+	limit := maxInt(tab, 1)
+	mut n := 0
+	for ; n < limit; n++ {
+		if at(chars, from + n) != " " {
+			break
+		}
 	}
-	return rest
+	return n
 }
 
 // Uma linha indentada (ou desindentada) `levels` níveis. Linha vazia não ganha
@@ -1400,11 +1460,12 @@ func shiftedLine(line: Str, unit: Str, right: Bool, levels: Int, tab: Int): Str 
 		}
 		return repeatText(unit, levels) + line
 	}
-	mut rest := line
+	chars := split(line, "")
+	mut cut := 0
 	for n := 0; n < levels; n++ {
-		rest = unindent(rest, tab)
+		cut = cut + indentCut(chars, cut, tab)
 	}
-	return rest
+	return complete.skip(line, cut)
 }
 
 // `>` e `<`: indenta ou desindenta as linhas do trecho, `levels` vezes.
@@ -1667,16 +1728,31 @@ proc replaceChars(ed: mut Editor, chars: Str[], c: Str, count: Int): Outcome {
 proc increment(ed: mut Editor, chars: Str[], amount: Int): Outcome {
 	end := lineEnd(chars, ed.caret)
 	mut i := ed.caret
-	for ; i > lineStart(chars, i) && highlight.isDigit(at(chars, i)) && highlight.isDigit(at(chars, i - 1)); i-- {
+	for ; true; i-- {
+		if i <= lineStart(chars, i) {
+			break
+		}
+		if !highlight.isDigit(at(chars, i)) {
+			break
+		}
+		if !highlight.isDigit(at(chars, i - 1)) {
+			break
+		}
 	}
-	for ; i < end && !highlight.isDigit(at(chars, i)); i++ {
+	for ; i < end; i++ {
+		if highlight.isDigit(at(chars, i)) {
+			break
+		}
 	}
 	if i >= end {
 		return failed()
 	}
 	mut start := i
 	mut stop := i
-	for ; stop < end && highlight.isDigit(at(chars, stop)); stop++ {
+	for ; stop < end; stop++ {
+		if !highlight.isDigit(at(chars, stop)) {
+			break
+		}
 	}
 	if at(chars, start - 1) == "-" {
 		start--
@@ -2858,7 +2934,10 @@ proc execute(ed: mut Editor, typed: Str): void {
 	current := lineOf(chars, ed.caret)
 	final := lastLine(chars)
 	mut i := 0
-	for ; at(cmd, i) == " " || at(cmd, i) == ":"; i++ {
+	for ; true; i++ {
+		if at(cmd, i) != " " && at(cmd, i) != ":" {
+			break
+		}
 	}
 	mut from := -1
 	mut to := -1
@@ -2883,7 +2962,10 @@ proc execute(ed: mut Editor, typed: Str): void {
 			}
 		}
 	}
-	for ; at(cmd, i) == " "; i++ {
+	for ; true; i++ {
+		if at(cmd, i) != " " {
+			break
+		}
 	}
 	mut Str[dyn] letters = []
 	for ; isLetter(at(cmd, i)); i++ {
@@ -3606,6 +3688,16 @@ test "u e Ctrl+R, e uma inserção inteira é um passo só" {
 	mut oldest := oldestBefore
 	feed(oldest, "u")
 	assert oldest.vim.message == "Já está na alteração mais antiga"
+	several := fed("a\nb\nc\nd", 0, "dddddd2u")
+	assert several.text == "b\nc\nd"
+	assert len(several.undo) == 1
+	assert len(several.redo) == 2
+	severalBefore := several
+	mut forward := severalBefore
+	feed(forward, "5<C-r>")
+	assert forward.text == "d"
+	assert len(forward.undo) == 3
+	assert len(forward.redo) == 0
 	assert len(fed("abc", 0, "i<Esc>").undo) == 0
 	assert fed("abc", 0, "xxx3u").text == "abc"
 }
@@ -3655,6 +3747,11 @@ test "maiúsculas, r, ~, J, gJ, >> e <<" {
 	assert fed("a\nb\nc", 0, "3J").text == "a b c"
 	assert fed("a", 0, ">>").text == "\ta"
 	assert fed("\t\ta", 0, "<<").text == "\ta"
+	assert shiftedLine("      x", "\t", false, 2, 4) == "  x"
+	assert shiftedLine("\t  x", "\t", false, 2, 4) == "x"
+	assert shiftedLine(" x", "\t", false, 3, 4) == "x"
+	assert trim("  a b \t ") == "a b"
+	assert upper("olá ção") == "OLÁ ÇÃO"
 	assert fed("a\nb\nc", 0, "2>>").text == "\ta\n\tb\nc"
 	assert fed("  x\ny", 4, ">>").text == "  x\n    y"
 	assert fed("f \{\n\ta\n}", 7, ">i\{").text == "f \{\n\t\ta\n}"

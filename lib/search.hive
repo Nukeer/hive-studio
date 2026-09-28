@@ -4,19 +4,12 @@
 import ./workspace
 import ./model
 import ./complete
+import ./native.go
 
 // Minúsculas sem mudar o comprimento — cada letra vira uma letra —, então uma
 // posição no texto em minúsculas é a mesma posição no original.
 func lower(text: Str): Str {
-	mut out := text
-	upper := split("ABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÄÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜ", "")
-	small := split("abcdefghijklmnopqrstuvwxyzàáâãäçèéêëìíîïñòóôõöùúûü", "")
-	for i := 0; i < len(upper); i++ {
-		if small bounds i {
-			out = replaceAll(out, upper[i], small[i])
-		}
-	}
-	return out
+	return native.lower(text)
 }
 
 // As posições (em caracteres) onde `wanted` aparece em `text`, no máximo `limit`.

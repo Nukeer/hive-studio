@@ -159,6 +159,16 @@ func Stamp(path string) (string, error) {
 	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10), nil
 }
 
+// Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra
+// por outra: o texto continua com o mesmo número de caracteres.
+func Lower(text string) string {
+	return strings.ToLower(text)
+}
+
+func Upper(text string) string {
+	return strings.ToUpper(text)
+}
+
 func Run(name string, args []string, dir string) (string, error) {
 	cmd := exec.Command(name, args...)
 	if dir != "" {
