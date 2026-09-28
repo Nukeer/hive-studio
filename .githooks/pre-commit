@@ -3,6 +3,10 @@
 #   HIVE_SKIP_TESTS=1 git commit ...   pula a suíte de testes
 set -e
 cd "$(git rev-parse --show-toplevel)"
+# Num worktree, o git passa GIT_DIR e GIT_INDEX_FILE para o hook; os testes
+# que rodam git numa pasta própria (git-test/) não podem herdá-los, ou agem
+# no repositório de verdade.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_COMMON_DIR
 
 if ! command -v hivec >/dev/null 2>&1; then
 	echo "pre-commit: hivec não está no PATH" >&2

@@ -49,7 +49,7 @@ func members(module: Str): Str[dyn] {
 			"socketConnect", "socketServe", "socketSend", "socketReceive", "socketReceiveLine", "socketPeer", "socketClose",
 			"resolve", "localAddress", "urlEncode", "queryParamsCodec", "HttpRequest", "HttpResponse", "HttpError", "WsConnection", "WsError"]
 	} else if module == "syslink" {
-		return ["spawn", "register", "at", "on", "self", "answer", "monitor", "stop", "listen", "node", "peers", "Address", "Envelope", "SyslinkError"]
+		return ["spawn", "spawnAddressed", "register", "at", "on", "monitor", "stop", "listen", "node", "peers", "Address", "SyslinkError"]
 	} else if module == "task" {
 		return ["sleep", "TimeoutError"]
 	} else if module == "time" {

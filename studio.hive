@@ -73,7 +73,7 @@ proc watchTerminal(db: hive.syslink.Address, session: Int): void {
 }
 
 // Abre o shell se ainda não houver um vivo.
-proc ensureTerminal(state: model.State, from: hive.syslink.Envelope): model.State {
+proc ensureTerminal(state: model.State, from: hive.syslink.Address): model.State {
 	mut next := state
 	if state.term.session != 0 && native.alive(state.term.session) {
 		return next
@@ -81,7 +81,7 @@ proc ensureTerminal(state: model.State, from: hive.syslink.Envelope): model.Stat
 	started := native.start(state.root)
 	if started is Result.Ok(session) {
 		next.term.session = session
-		async watchTerminal(hive.syslink.self(from), session)
+		async watchTerminal(from, session)
 	} else if started is Result.Error(why) {
 		next.term.log = state.term.log + "não foi possível abrir o terminal: " + why + "\n"
 	}
@@ -711,7 +711,7 @@ func vimEditor(state: model.State, caret: Int, view: Str): vim.Editor {
 
 // Leva o que o motor devolveu ao documento ativo e despacha os efeitos
 // (salvar, fechar, abrir…) como mensagens comuns.
-proc vimApply(state: model.State, out: vim.Editor, from: hive.syslink.Envelope): model.State {
+proc vimApply(state: model.State, out: vim.Editor, from: hive.syslink.Address): model.State {
 	mut next := state
 	index := state.active
 	mut model.Doc[dyn] docs = state.docs
@@ -823,7 +823,7 @@ proc vimEdit(state: model.State, path: Str): model.State {
 	return openDoc(state, target)
 }
 
-proc updateVim(state: model.State, message: model.Msg, from: hive.syslink.Envelope): Result<model.State, Bool> {
+proc updateVim(state: model.State, message: model.Msg, from: hive.syslink.Address): Result<model.State, Bool> {
 	mut next := state
 	if message is model.Msg.VimKey(key, caret, view) {
 		next.vim.acked = state.vim.acked + 1
@@ -929,10 +929,10 @@ func withAgent(state: model.State, session: model.AgentSession): model.State {
 }
 
 // Abre o agente na pasta aberta: o programa do próprio usuário, num terminal de verdade.
-proc launchAgent(state: model.State, agent: Str, from: hive.syslink.Envelope): model.State {
+proc launchAgent(state: model.State, agent: Str, from: hive.syslink.Address): model.State {
 	started := agents.start(state.settings, agent, state.root)
 	if started is Result.Ok(session) {
-		async watchAgent(hive.syslink.self(from), session)
+		async watchAgent(from, session)
 		return withAgent(state, model.AgentSession(agent, session, false, 0, ""))
 	} else if started is Result.Error(why) {
 		return withAgent(state, model.AgentSession(agent, 0, false, 0, why))
@@ -943,7 +943,7 @@ func showingAgent(state: model.State): Bool {
 	return state.panelOpen && state.pane == model.Pane.AgentPane()
 }
 
-proc updateAgents(state: model.State, message: model.Msg, from: hive.syslink.Envelope): Result<model.State, Bool> {
+proc updateAgents(state: model.State, message: model.Msg, from: hive.syslink.Address): Result<model.State, Bool> {
 	mut next := state
 	if message is model.Msg.ShowAgent(agent) {
 		mut chosen := agent
@@ -1167,7 +1167,7 @@ proc treeKey(state: model.State, key: Str): model.State {
 
 // Painel, terminal, git e navegação: separados da dobra principal para cada
 // proc continuar pequeno. `Error` quando a mensagem não é daqui.
-proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Envelope): Result<model.State, Bool> {
+proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Address): Result<model.State, Bool> {
 	mut next := state
 	mut prefs := state.settings
 	if message is model.Msg.TogglePanelMax {
@@ -1257,21 +1257,21 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 			next = saveAll(state)
 		}
 		next.git.busy = "commit"
-		async git.commitAsync(hive.syslink.self(from), state.git.top, state.git.message, git.count(state.git, true) == 0)
+		async git.commitAsync(from, state.git.top, state.git.message, git.count(state.git, true) == 0)
 	} else if message is model.Msg.GitPush {
 		if state.git.busy != "" || !state.git.repo {
 			return Result.Ok(state)
 		}
 		next.git.busy = "push"
 		Str[dyn] arguments = ["push", "-u", "origin", "HEAD"]
-		async git.runAsync(hive.syslink.self(from), state.git.top, "push", arguments)
+		async git.runAsync(from, state.git.top, "push", arguments)
 	} else if message is model.Msg.GitPull {
 		if state.git.busy != "" || !state.git.repo {
 			return Result.Ok(state)
 		}
 		next.git.busy = "pull"
 		Str[dyn] arguments = ["pull", "--ff-only"]
-		async git.runAsync(hive.syslink.self(from), state.git.top, "pull", arguments)
+		async git.runAsync(from, state.git.top, "pull", arguments)
 	} else if message is model.Msg.GitInit {
 		return Result.Ok(afterGit(state, process.run("git", ["init"], state.root)))
 	} else if message is model.Msg.GitDone(command, output, ok) {
@@ -1387,13 +1387,13 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 		if state.git.repo {
 			start = state.git.top
 		}
-		async dialogs.pickAsync(hive.syslink.self(from), "folder", start, render.tx(state, "Abrir pasta"))
+		async dialogs.pickAsync(from, "folder", start, render.tx(state, "Abrir pasta"))
 	} else if message is model.Msg.PickFile {
 		mut start := state.root
 		if state.git.repo {
 			start = state.git.top
 		}
-		async dialogs.pickAsync(hive.syslink.self(from), "file", start, render.tx(state, "Abrir arquivo…"))
+		async dialogs.pickAsync(from, "file", start, render.tx(state, "Abrir arquivo…"))
 	} else if message is model.Msg.Picked(mode, path) {
 		if mode == "file" {
 			return Result.Ok(openDoc(state, path))
@@ -1465,7 +1465,7 @@ proc updateTools(state: model.State, message: model.Msg, from: hive.syslink.Enve
 	return Result.Ok(next)
 }
 
-proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope): model.State {
+proc update(state: model.State, message: model.Msg, from: hive.syslink.Address): model.State {
 	mut next := state
 	mut prefs := state.settings
 	if updateTools(state, message, from) is Result.Ok(done) {
@@ -1613,7 +1613,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 		next.pane = model.Pane.OutputPane()
 		next.panelOpen = true
 		next.status = "{command} {workspace.baseName(target)}…"
-		async toolchain.invoke(hive.syslink.self(from), state.settings.compiler, command, target)
+		async toolchain.invoke(from, state.settings.compiler, command, target)
 	} else if message is model.Msg.Finished(command, output, ok) {
 		found := analysis.parseDiagnostics(output)
 		next.running = ""
@@ -1708,7 +1708,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Envelope)
 
 // Um passo da dobra. Quando o documento ativo muda, a página precisa receber
 // o texto novo: é o `textSerial` que avisa.
-proc step(state: model.State, message: model.Msg, from: hive.syslink.Envelope): model.State {
+proc step(state: model.State, message: model.Msg, from: hive.syslink.Address): model.State {
 	mut next := update(state, message, from)
 	jumping := message is model.Msg.GotoDefinition(_) || message is model.Msg.OpenAt(_, _, _)
 	if render.activePath(next) != render.activePath(state) {
@@ -2103,52 +2103,57 @@ func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 
 // ── o serviço ────────────────────────────────────────────────────────────
 
-proc serve(state: model.State, command: model.Cmd, from: hive.syslink.Envelope): model.State {
+// Um turno do serviço: o estado é escrito no lugar, e o que o turno devolve é
+// a resposta de quem perguntou. `from` é o endereço do próprio serviço, para o
+// trabalho que ele começa em outra thread mandar o resultado de volta.
+proc serve(state: mut model.State, command: model.Cmd, from: hive.syslink.Address): model.Cmd {
+	current := state
 	if command is model.Cmd.Ui(text) {
 		decoded := model.Event.decode(text, hive.json.codec())
 		if decoded is Result.Ok(hovered) {
 			if hovered.kind == "hover" {
 				mut ok := false
-				if render.activeDoc(state) is Result.Ok(doc) {
+				if render.activeDoc(current) is Result.Ok(doc) {
 					ok = navigate.locate(doc.path, doc.text, hovered.caret) is Result.Ok(_)
 				}
-				hive.syslink.answer(from, model.Cmd.Reply(encode(model.HoverReply(true, hovered.caret, ok), hive.json.codec())))
-				return state
+				return model.Cmd.Reply(encode(model.HoverReply(true, hovered.caret, ok), hive.json.codec()))
 			}
 		}
 		if decoded is Result.Ok(event) {
 			if event.kind == "resync" || event.kind == "hello" {
-				return reply(resynced(state), from)
+				return reply(state, resynced(current))
 			}
-			if toMsg(state, event) is Result.Ok(message) {
-				return reply(step(state, message, from), from)
+			if toMsg(current, event) is Result.Ok(message) {
+				return reply(state, step(current, message, from))
 			}
 		}
-		return reply(state, from)
+		return reply(state, current)
 	} else if command is model.Cmd.Post(message) {
-		mut next := step(state, message, from)
+		mut next := step(current, message, from)
 		// As checagens periódicas (git, arquivos no disco) só redesenham quando algo mudou.
 		quiet := message is model.Msg.GitPoll || message is model.Msg.DiskPoll
-		if !quiet || next.git != state.git || next.textSerial != state.textSerial || next.status != state.status ||
-			next.tree != state.tree || next.docs != state.docs {
-			next.pulse = state.pulse + 1
+		if !quiet || next.git != current.git || next.textSerial != current.textSerial || next.status != current.status ||
+			next.tree != current.tree || next.docs != current.docs {
+			next.pulse = current.pulse + 1
 		}
-		return next
+		state = next
+		return command
 	} else if command is model.Cmd.Render {
-		return reply(state, from)
+		return reply(state, current)
 	} else if command is model.Cmd.Pulse {
-		hive.syslink.answer(from, model.Cmd.PulseIs(state.pulse))
+		return model.Cmd.PulseIs(current.pulse)
 	} else if command is model.Cmd.Clients {
-		hive.syslink.answer(from, model.Cmd.ClientsAre(state.clients))
+		return model.Cmd.ClientsAre(current.clients)
 	}
-	return state
+	return command
 }
 
 // Manda o frame de agora e lembra o que a página passou a ter: o próximo frame
 // só leva o texto e o realce se eles mudarem.
-proc reply(state: model.State, from: hive.syslink.Envelope): model.State {
-	hive.syslink.answer(from, model.Cmd.Reply(render.encodeFrame(state)))
-	return delivered(state)
+proc reply(state: mut model.State, shown: model.State): model.Cmd {
+	frame := render.encodeFrame(shown)
+	state = delivered(shown)
+	return model.Cmd.Reply(frame)
 }
 
 func delivered(state: model.State): model.State {
@@ -2197,8 +2202,8 @@ func fallbackView(url: Str): hive.ui.View {
 	])
 }
 
-proc fallbackUpdate(url: Str, message: model.Msg, from: hive.syslink.Envelope): Str {
-	return url
+proc fallbackUpdate(url: mut Str, message: model.Msg): model.Msg {
+	return message
 }
 
 proc main(): void {
@@ -2210,7 +2215,7 @@ proc main(): void {
 	prefs := settings.load()
 	start := openRoot(model.initial(folder, prefs), folder)
 	_watching := watch.set(watchedFolders(start))
-	db := hive.syslink.spawn(serve, start)
+	db := hive.syslink.spawnAddressed(serve, start)
 
 	token := hive.crypto.randomHex(16)
 	port := server.freePort()
@@ -2545,7 +2550,7 @@ proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
 
 test "o frame só leva o texto e o realce que a página ainda não tem" {
 	folder := scratch()
-	db := hive.syslink.spawn(serve, openDoc(fresh(folder), folder + "/main.hive"))
+	db := hive.syslink.spawnAddressed(serve, openDoc(fresh(folder), folder + "/main.hive"))
 	first := answer(db, event("hello", "", "", "", 0))
 	assert first.hasText && first.text == "proc main(): void \{\n\techo 1\n}\n"
 	assert first.hl.mode == "full" && len(first.hl.lines) == 4 && first.lineCount == 4
@@ -2584,7 +2589,7 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 	mut start := fresh(folder)
 	start.settings.vim = true
 	start = openDoc(start, folder + "/main.hive")
-	db := hive.syslink.spawn(serve, start)
+	db := hive.syslink.spawnAddressed(serve, start)
 
 	first := vimKeys(db, "")
 	assert first.vim == "normal"
@@ -2737,7 +2742,7 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	mut start := fresh(folder)
 	start.settings.vim = true
 	start = openDoc(start, folder + "/lib/util.hive")
-	db := hive.syslink.spawn(serve, start)
+	db := hive.syslink.spawnAddressed(serve, start)
 
 	// O explorador começa aberto: `:Ex` o fecha e deixa o foco no código.
 	_toClose := vimKeys(db, ":")
@@ -2818,7 +2823,7 @@ test "sem o modo Vim, as setas andam no explorador mas j e k não" {
 	folder := explorerFolder("explorer-plain-test")
 	mut start := fresh(folder)
 	start.selected = folder + "/lib"
-	db := hive.syslink.spawn(serve, start)
+	db := hive.syslink.spawnAddressed(serve, start)
 	assert selectedName(treeKeys(db, "")) == "lib"
 	assert selectedName(treeKeys(db, "j")) == "lib"
 	assert selectedName(treeKeys(db, "<Down>")) == "LEIAME.md"
@@ -2848,7 +2853,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	start.settings.claudeCommand = "sh"
 	start.settings.codexCommand = "programa-que-nao-existe-hive --flag"
 	start = openDoc(start, folder + "/main.hive")
-	db := hive.syslink.spawn(serve, start)
+	db := hive.syslink.spawnAddressed(serve, start)
 
 	opened := ask(db, event("act", "agent", "claude", "", 0))
 	session := opened.agentShown
@@ -3032,7 +3037,7 @@ func rowName(row: model.TreeRow): Str {
 test "sem o modo Vim, as teclas do Vim não fazem nada e o frame não mostra a barra" {
 	folder := scratch()
 	state := openDoc(fresh(folder), folder + "/main.hive")
-	db := hive.syslink.spawn(serve, state)
+	db := hive.syslink.spawnAddressed(serve, state)
 	frame := vimKeys(db, "dd")
 	assert frame.vim == ""
 	assert regionOf(frame, "vimbar") == ""
