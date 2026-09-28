@@ -1,5 +1,59 @@
 # Changelog
 
+## Não lançado
+
+### Precisa de
+
+* **`hivec` v0.2.9** ou mais novo: o serviço que guarda o estado segue o novo
+  formato do `hive.syslink` (o estado entra como `mut` e o turno devolve a
+  resposta). O CI passa a usar a v0.2.9.
+
+### Editor
+
+* **Error Lens**: o erro aparece na própria linha, em vermelho, com a mensagem
+  no fim dela — pouco depois de parar de digitar (sem precisar salvar: o check
+  roda numa cópia do projeto com o texto ainda não salvo) e a cada Check, Run,
+  Test e Build. O erro de um módulo importado vai para o arquivo e a linha
+  dele, e não para a declaração no arquivo de entrada. As funções caras do
+  último Analyze aparecem em amarelo. Liga e desliga em Configurações → Editor.
+  A cópia tem só os arquivos que o programa importa (seguindo os imports, com
+  `as`, aspas e `../`) e é incremental: o arquivo que não mudou de tamanho nem
+  de data não é relido nem regravado, e o que saiu do programa sai da cópia.
+* **TODO do projeto**: um painel na barra lateral lista os comentários
+  marcados com `TODO`, `FIXME`, `HACK` e `XXX` de todos os arquivos de texto
+  da pasta, por arquivo e com a contagem no ícone; o clique abre na linha. A
+  lista acompanha a digitação no arquivo aberto e é refeita ao salvar, ao
+  trocar de pasta e no ⟳. As marcas também se destacam nos comentários do
+  editor.
+* **Leitor de JSON**: `.json` ganha cores (chaves, textos, números,
+  `true`/`false`/`null`) e abre como uma árvore que abre e fecha, com a troca
+  Editor / Dividir / Preview do Markdown. Um JSON inválido diz a linha, a
+  coluna e o que faltou, na árvore e na própria linha (Error Lens).
+
+### Desempenho
+
+* **Arquivos enormes**: num arquivo de 10 MB, uma tecla caiu de ~480 ms para
+  ~45 ms. O programa não guarda mais o HTML de cada linha (só as linhas que
+  terminam com um texto aberto), e o documento ficou leve de copiar; o
+  autocomplete só lê perto do cursor e só aparece sozinho em arquivos Hive.
+* **Visualização guardada**: a árvore do JSON e o preview do Markdown são
+  refeitos quando a digitação para, e não a cada tecla, e o frame só os leva
+  quando mudam; num arquivo grande eles são feitos numa thread à parte. A
+  árvore mostra até 20000 valores (com aviso) e o arquivo inteiro é conferido:
+  o erro de um JSON grande também aparece na linha.
+* **TODO**: salvar não relê mais o projeto inteiro, e um arquivo sem nenhuma
+  marca é descartado sem ser partido em linhas.
+
+### Correções
+
+* **Error Lens**: a marca guarda o texto que a linha tinha quando o erro foi
+  achado, e some assim que a linha é editada.
+* **Ctrl+P e sugestões**: com as setas, a lista rola junto com o item
+  escolhido (antes voltava ao topo a cada tecla).
+* **Tela inicial** fica centralizada na área toda e o painel de baixo passa por
+  cima dela quando cresce, em vez de o conteúdo vazar para cima da barra de
+  título e para baixo do painel.
+
 ## v0.1.1
 
 ### Desempenho

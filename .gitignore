@@ -7,6 +7,7 @@ studio-test/
 tree-test/
 lens-test/
 lens-test-copia/
+view-test/
 *.exe~
 studio-*-*
 dist/

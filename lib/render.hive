@@ -10,6 +10,7 @@ import ./theme
 import ./settings
 import ./highlight
 import ./markdown
+import ./jsonview
 import ./keys
 import ./git
 import ./i18n
@@ -88,7 +89,7 @@ func layoutOf(state: model.State): Str {
 		return "settings"
 	}
 	if activeDoc(state) is Result.Ok(doc) {
-		if model.isMarkdown(doc.path) {
+		if model.hasPreview(doc.path) {
 			return doc.mode
 		}
 		return "edit"
@@ -205,6 +206,7 @@ func menuBar(state: model.State): Str {
 			menuItem(state, "Buscar", "searchProject", true),
 			menuItem(state, "Controle de código", "git", true),
 			menuItem(state, "Estrutura", "outline", true),
+			menuItem(state, "TODO", "todo", true),
 			separator(),
 			menuItem(state, "Mostrar/ocultar barra lateral", "toggleSidebar", true),
 			menuItem(state, "Mostrar/ocultar painel (Problemas, Saída)", "togglePanel", true),
@@ -214,7 +216,7 @@ func menuBar(state: model.State): Str {
 			menuItem(state, "Saída", "output", true),
 			menuItem(state, "Terminal", "terminal", true),
 			separator(),
-			menuItem(state, "Preview do Markdown", "preview", hasDoc && model.isMarkdown(path)),
+			menuItem(state, "Preview do Markdown", "preview", hasDoc && model.hasPreview(path)),
 			menuItem(state, "Tema de cor…", "colorTheme", true)
 		]) +
 		menu(state, "Executar", [
@@ -285,6 +287,10 @@ func activityBar(state: model.State): Str {
 		settingsCls = "ai on"
 	}
 	changes := len(state.git.files)
+	mut todoGlyph := todoIcon()
+	if len(state.todos) > 0 {
+		todoGlyph = todoIcon() + "<span class=\"count\">{len(state.todos)}</span>"
+	}
 	mut gitGlyph := gitIcon()
 	if changes > 0 {
 		gitGlyph = gitIcon() + "<span class=\"count\">{changes}</span>"
@@ -293,6 +299,7 @@ func activityBar(state: model.State): Str {
 		activityItem(state, searchIcon(), tx(state, "Buscar"), model.SideView.SearchSide(), "search", "searchProject") +
 		activityItem(state, gitGlyph, tx(state, "Controle de código"), model.SideView.GitSide(), "git", "git") +
 		activityItem(state, outlineIcon(), tx(state, "Estrutura"), model.SideView.OutlineSide(), "outline", "outline") +
+		activityItem(state, todoGlyph, "TODO", model.SideView.TodoSide(), "todo", "todo") +
 		"<div class=\"grow\"></div>" +
 		"<div class=\"" + settingsCls + "\"" + act("settings", "") + attr("title", tx(state, "Configurações") + keyHint(state, "settings")) + ">" + gearIcon() + "</div>"
 }
@@ -321,6 +328,11 @@ func gitIcon(): Str {
 // Lista com marcadores: a estrutura do arquivo.
 func outlineIcon(): Str {
 	return svg("<path d=\"M9 6.5h11M9 12h11M9 17.5h11\"/><circle cx=\"4.8\" cy=\"6.5\" r=\"1.1\"/><circle cx=\"4.8\" cy=\"12\" r=\"1.1\"/><circle cx=\"4.8\" cy=\"17.5\" r=\"1.1\"/>")
+}
+
+// Caixa marcada: os TODO do projeto.
+func todoIcon(): Str {
+	return svg("<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"2.5\"/><path d=\"M8.2 12.3 10.8 14.8 15.8 9.2\"/>")
 }
 
 // Engrenagem: configurações.
@@ -594,6 +606,50 @@ func symbolGlyph(kind: Str): theme.FileIcon {
 	return theme.FileIcon("↳", "#8a8a8a")
 }
 
+// Os TODO do projeto, por arquivo; o clique abre na linha.
+func todoPanel(state: model.State): Str {
+	mut Str[dyn] rows = ["<div class=\"hdr\">TODO<span class=\"grow\"></span>" +
+		headerAction("⟳", tx(state, "Atualizar"), "todoRefresh", "") + "</div>"]
+	if !state.todoScanned {
+		append(rows, "<div class=\"empty\">" + tx(state, "Procurando…") + "</div>")
+		return join(rows, "")
+	}
+	mut file := ""
+	for each t in state.todos {
+		if t.file != file {
+			file = t.file
+			icon := theme.iconFor(workspace.baseName(file))
+			append(rows, "<div class=\"tdfile\"" + attr("title", file) + "><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
+				"<span class=\"nm\">" + esc(workspace.baseName(file)) + "</span><span class=\"dir\">" + esc(relFolder(state, file)) + "</span></div>")
+		}
+		append(rows, "<div class=\"sym tdrow\"" + act("openAt", t.file) + attr("data-text", "{t.line}:{t.column}") + attr("title", t.tag + ": " + t.text) + ">" +
+			"<span class=\"tdtag " + lowerTag(t.tag) + "\">" + esc(t.tag) + "</span><span class=\"tdtext\">" + esc(t.text) + "</span><span class=\"ln\">{t.line}</span></div>")
+	}
+	if len(state.todos) == 0 {
+		append(rows, "<div class=\"empty\">" + tx(state, "Nenhum TODO no projeto.") + "</div>")
+	}
+	return join(rows, "")
+}
+
+func lowerTag(tag: Str): Str {
+	if tag == "FIXME" {
+		return "fixme"
+	} else if tag == "HACK" || tag == "XXX" {
+		return "hack"
+	}
+	return "todo"
+}
+
+// A pasta de um arquivo, relativa à raiz ("" na raiz).
+func relFolder(state: model.State, path: Str): Str {
+	parts := split(relPath(state, path), "/")
+	last := len(parts) - 2
+	if parts bounds 0 && parts bounds last {
+		return join(parts[0:last], "/")
+	}
+	return ""
+}
+
 func outlinePanel(state: model.State): Str {
 	mut Str[dyn] rows = ["<div class=\"hdr\">" + tx(state, "ESTRUTURA") + "</div>"]
 	if activeDoc(state) is Result.Ok(doc) {
@@ -712,6 +768,8 @@ func gitPanel(state: model.State): Str {
 func sidePanel(state: model.State): Str {
 	if state.side is model.SideView.OutlineSide {
 		return outlinePanel(state)
+	} else if state.side is model.SideView.TodoSide {
+		return todoPanel(state)
 	} else if state.side is model.SideView.GitSide {
 		return gitPanel(state)
 	} else if state.side is model.SideView.SearchSide {
@@ -797,7 +855,7 @@ func breadcrumb(state: model.State): Str {
 			extra = "<span>📌 " + tx(state, "entrada") + "</span>"
 		}
 		mut switch := ""
-		if model.isMarkdown(doc.path) {
+		if model.hasPreview(doc.path) {
 			switch = modeSwitch(state, doc)
 		}
 		return "<span>" + join(parts, "  ›  ") + "</span>" + extra + "<span class=\"grow\"></span>" + switch
@@ -820,18 +878,29 @@ func hlUpdate(state: model.State): model.HlUpdate {
 				return model.HlUpdate("patch", doc.patch.from, doc.patch.remove, doc.patch.lines, doc.patch.source, doc.version)
 			}
 		}
-		return model.HlUpdate("full", 0, 0, doc.hl.lines, split(doc.text, "\n"), doc.version)
+		return model.HlUpdate("full", 0, 0, highlight.htmlLines(doc.text, model.language(doc.path)), split(doc.text, "\n"), doc.version)
 	}
 	return model.HlUpdate("none", 0, 0, none, none, -1)
 }
 
+// A visualização guardada no documento (ver `refreshView` no estúdio).
 func preview(state: model.State): Str {
 	if activeDoc(state) is Result.Ok(doc) {
-		if model.isMarkdown(doc.path) && doc.mode != "edit" {
-			return "<div class=\"md\">" + markdown.render(doc.text) + "</div>"
+		if model.hasPreview(doc.path) && doc.mode != "edit" {
+			return doc.view
 		}
 	}
 	return ""
+}
+
+// O que a página tem na visualização: o frame só a manda quando isso muda.
+func previewKey(state: model.State): Str {
+	if activeDoc(state) is Result.Ok(doc) {
+		if model.hasPreview(doc.path) && doc.mode != "edit" {
+			return doc.path + "#{doc.viewOf}"
+		}
+	}
+	return "-"
 }
 
 func kindGlyph(kind: Str): theme.FileIcon {
@@ -1336,6 +1405,8 @@ func statusBar(state: model.State): Str {
 				language = "Markdown"
 			} else if doc.path is "{stem}.go" {
 				language = "Go"
+			} else if model.isJson(doc.path) {
+				language = "JSON"
 			}
 			append(items, statusItem(language, "", "", ""))
 			if doc.path != state.entrypoint && doc.path is "{stem}.hive" {
@@ -1477,7 +1548,7 @@ func frame(state: model.State): model.Frame {
 	mut lineCount := 0
 	if activeDoc(state) is Result.Ok(doc) {
 		text = doc.text
-		lineCount = len(doc.hl.lines)
+		lineCount = doc.hl.count
 	}
 	// O texto só vai quando a página não o tem; enquanto se digita, ela é que o tem.
 	hasText := state.clientSerial != state.textSerial
@@ -1507,7 +1578,6 @@ func frame(state: model.State): model.Frame {
 		region("side", sidePanel(state)),
 		region("tabs", tabStrip(state)),
 		region("crumbs", breadcrumb(state)),
-		region("preview", preview(state)),
 		region("settings", settingsHtml),
 		region("commit", commitHtml),
 		region("welcome", welcomeHtml),
@@ -1519,7 +1589,10 @@ func frame(state: model.State): model.Frame {
 		region("overlay", overlay(state)),
 		region("vimbar", vimBar(state))
 	]
-	model.Region[dyn] all = regions
+	mut model.Region[dyn] all = regions
+	if previewKey(state) != state.clientView {
+		append(all, region("preview", preview(state)))
+	}
 	inEditor := layout == "edit" || layout == "split"
 	mut vimMode := ""
 	mut selStart := state.caret
@@ -1598,21 +1671,17 @@ func lensMarks(state: model.State): model.LensMark[dyn] {
 	}
 	if activeDoc(state) is Result.Ok(doc) {
 		path := workspace.normalize(doc.path)
-		mut Str[dyn] lines = []
+		if model.isJson(doc.path) && doc.problem.line > 0 {
+			append(marks, model.LensMark(doc.problem.line, "error", doc.problem.message, doc.problem.source))
+		}
 		for each d in state.diagnostics {
 			if workspace.normalize(d.file) == path {
-				if len(lines) == 0 {
-					lines = split(doc.text, "\n")
-				}
-				append(marks, model.LensMark(d.line, "error", d.message, lineOf(lines, d.line)))
+				append(marks, model.LensMark(d.line, "error", d.message, d.source))
 			}
 		}
 		for each spot in state.hotspots {
 			if spot.score <= 30 && workspace.normalize(spot.file) == path {
-				if len(lines) == 0 {
-					lines = split(doc.text, "\n")
-				}
-				append(marks, model.LensMark(spot.line, "warning", tx(state, "custo") + " {spot.score}/100 — " + spot.detail, lineOf(lines, spot.line)))
+				append(marks, model.LensMark(spot.line, "warning", tx(state, "custo") + " {spot.score}/100 — " + spot.detail, spot.source))
 			}
 		}
 	}

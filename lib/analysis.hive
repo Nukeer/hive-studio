@@ -30,7 +30,7 @@ func parseDiagnostics(output: Str): model.Diagnostic[dyn] {
 			}
 		} else if raw is "{file}:{digits is (\d+)}: {message}" {
 			if hive.conv.sti(digits) is Result.Ok(line) {
-				append(found, model.Diagnostic(file, line, message))
+				append(found, model.Diagnostic(file, line, message, ""))
 			}
 		}
 	}
@@ -66,7 +66,7 @@ func parseAnalyze(output: Str): AnalyzeReport {
 			if where == "line" && kindText is "{kind}," {
 				if hive.conv.sti(scoreText) is Result.Ok(score) {
 					if hive.conv.sti(lineText) is Result.Ok(line) {
-						append(spots, model.Hotspot(score, name, kind, "", line, ""))
+						append(spots, model.Hotspot(score, name, kind, "", line, "", ""))
 						callable = true
 					}
 				}
@@ -222,6 +222,34 @@ func importsOf(text: Str, folder: Str): ModuleRef[dyn] {
 	return found
 }
 
+// A linha `line` (a partir de 1) de um texto, sem partir o texto inteiro.
+func lineText(text: Str, line: Int): Str {
+	if line < 1 {
+		return ""
+	}
+	mut rest := text
+	for n := 1; n < line; n++ {
+		if indexOf(rest, "\n") is Result.Ok(at) {
+			next := at + 1
+			if rest bounds next {
+				rest = rest[next:]
+			} else {
+				return ""
+			}
+		} else {
+			return ""
+		}
+	}
+	if indexOf(rest, "\n") is Result.Ok(end) {
+		last := end - 1
+		if rest bounds last {
+			return rest[:last]
+		}
+		return ""
+	}
+	return rest
+}
+
 // O módulo de `vim.keyStep` é `vim`; o de `update` é o próprio arquivo ("").
 func moduleOf(name: Str): Str {
 	if name is "{module}.{rest}" {
@@ -285,6 +313,7 @@ test "erro de módulo importado volta para o arquivo e a linha certos" {
 	assert refineLine(main, 1, own.message) == 3
 	assert refineLine(main, 1, "main: sem trecho nenhum") == 1
 	assert fragments("`settings_0_Settings` has 17 fields") == ["Settings"]
+	assert lineText("a\nb\nc", 2) == "b" && lineText("a\nb", 1) == "a" && lineText("a\nb", 3) == "" && lineText("só", 1) == "só"
 }
 
 test "os imports de arquivo, com as, aspas e ../" {

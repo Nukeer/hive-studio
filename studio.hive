@@ -26,6 +26,9 @@ import ./lib/i18n
 import ./lib/search
 import ./lib/vim
 import ./lib/agents
+import ./lib/todo
+import ./lib/jsonview
+import ./lib/markdown
 import ./lib/pty.go
 import ./lib/watch.go
 
@@ -315,7 +318,7 @@ func targetFolder(state: model.State): Str {
 // Troca o texto de um documento refazendo o realce só das linhas que mudaram;
 // a página recebe só essas linhas (`patch`, sobre a versão anterior).
 proc retext(doc: mut model.Doc, text: Str): void {
-	done := highlight.rehighlight(doc.hl, doc.text, text, model.colored(doc.path))
+	done := highlight.rehighlight(doc.hl, doc.text, text, model.language(doc.path))
 	doc.hl = done.result
 	doc.patch = done.patch
 	doc.version = doc.version + 1
@@ -347,7 +350,7 @@ proc openDoc(state: model.State, path: Str): model.State {
 		}
 		text := replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n")
 		mut mode := "edit"
-		if model.isMarkdown(path) {
+		if model.hasPreview(path) {
 			mode = "preview"
 		}
 		mut model.Doc[dyn] docs = state.docs
@@ -355,6 +358,9 @@ proc openDoc(state: model.State, path: Str): model.State {
 		next.docs = docs
 		next.active = len(docs) - 1
 		next.status = render.tx(state, "aberto") + " {workspace.baseName(path)}"
+		if model.hasPreview(path) && len(text) <= bigView() && (mode != "edit" || model.isJson(path)) {
+			next = withView(next, path, 0, renderView(path, text, labelsOf(state)))
+		}
 	} else if read is Result.Error(why) {
 		next.status = render.tx(state, "não foi possível ler") + " {path}: {why.message}"
 	}
@@ -499,7 +505,9 @@ func clearSuggestions(state: model.State): model.State {
 // Sugere só enquanto um nome está sendo digitado, ou logo depois de um ponto.
 func autoSuggest(state: model.State): model.State {
 	mut next := clearSuggestions(state)
-	if !state.settings.autocomplete {
+	// As sugestões são do Hive: em JSON, Markdown e texto elas só atrapalham
+	// (Ctrl+Space ainda pede na mão).
+	if !state.settings.autocomplete || model.language(render.activePath(state)) != "hive" {
 		return next
 	}
 	text := activeText(state)
@@ -567,7 +575,7 @@ proc toggleSetting(state: model.State, name: Str): model.State {
 
 // Pede um check para quando a digitação parar (o último pedido vence).
 proc lensSoon(state: model.State, from: hive.syslink.Address): model.State {
-	if !state.settings.errorLens || render.targetOf(state) == "" {
+	if (!state.settings.errorLens || render.targetOf(state) == "") && !state.todoScanned && !model.hasPreview(render.activePath(state)) {
 		return state
 	}
 	mut next := state
@@ -594,6 +602,108 @@ proc startLens(state: model.State, from: hive.syslink.Address): model.State {
 	return next
 }
 
+// ── visualização (Markdown, JSON) ────────────────────────────────────────
+
+// O que a visualização mostra de um texto: o HTML e, num JSON, o erro.
+type Rendered {
+	view:    Str
+	problem: model.Diagnostic
+}
+
+func labelsOf(state: model.State): jsonview.Labels {
+	return jsonview.Labels(render.tx(state, "JSON inválido"), render.tx(state, "linha"), render.tx(state, "coluna"),
+		render.tx(state, "Arquivo grande: a árvore mostra só os primeiros 20000 valores (o arquivo inteiro foi conferido)."))
+}
+
+func renderView(path: Str, text: Str, labels: jsonview.Labels): Rendered {
+	if model.isJson(path) {
+		seen := jsonview.view(text, 20000, labels)
+		return Rendered(seen.html, model.Diagnostic(path, seen.problem.line, labels.column + " {seen.problem.column}: " + seen.problem.message,
+			analysis.lineText(text, seen.problem.line)))
+	}
+	return Rendered("<div class=\"md\">" + markdown.render(text) + "</div>", model.Diagnostic(path, 0, "", ""))
+}
+
+// Acima disto (em caracteres), a visualização é feita numa thread à parte.
+// Uma função, e não o número direto na comparação: assim o checker não
+// tenta provar nada sobre o tamanho do texto.
+func bigView(): Int {
+	return 300000
+}
+
+// Um arquivo grande tem a visualização feita numa thread própria: a janela
+// continua respondendo, e o resultado chega em `ViewReady`.
+proc viewWorker(window: hive.syslink.Address, path: Str, version: Int, text: Str, labels: jsonview.Labels): void {
+	done := renderView(path, text, labels)
+	async window(model.Cmd.Post(model.Msg.ViewReady(path, version, done.view, done.problem)))
+}
+
+// Refaz a visualização guardada do documento à vista, se o texto mudou desde
+// a última: o preview do Markdown (quando está à vista) e, num JSON, a árvore
+// e o erro — este também no modo Editor, para o Error Lens.
+proc refreshView(state: model.State, from: hive.syslink.Address): model.State {
+	index := state.active
+	mut found := false
+	mut doc := model.newDoc("", "", "", "\n", "edit")
+	if state.docs bounds index {
+		doc = state.docs[index]
+		found = true
+	}
+	if !found || !model.hasPreview(doc.path) || doc.viewOf == doc.version {
+		return state
+	}
+	if model.isMarkdown(doc.path) && doc.mode == "edit" {
+		return state
+	}
+	mut next := state
+	if len(doc.text) > bigView() {
+		pending := doc.path + "#{doc.version}"
+		if state.viewPending != pending {
+			next.viewPending = pending
+			async viewWorker(from, doc.path, doc.version, doc.text, labelsOf(state))
+		}
+		return next
+	}
+	return withView(state, doc.path, doc.version, renderView(doc.path, doc.text, labelsOf(state)))
+}
+
+// Guarda a visualização no documento, se ela ainda é do texto que ele tem.
+proc withView(state: model.State, path: Str, version: Int, done: Rendered): model.State {
+	mut next := state
+	mut model.Doc[dyn] docs = state.docs
+	for i := 0; i < len(docs); i++ {
+		if docs bounds i {
+			mut doc := docs[i]
+			if doc.path == path && doc.version == version {
+				doc.view = done.view
+				doc.viewOf = version
+				doc.problem = done.problem
+				docs[i] = doc
+			}
+		}
+	}
+	next.docs = docs
+	return next
+}
+
+// ── TODO ─────────────────────────────────────────────────────────────────
+
+// Procura os TODO da pasta numa thread própria (com o texto não salvo dos
+// documentos abertos); a lista chega em `TodosFound`.
+proc scanTodos(state: model.State, from: hive.syslink.Address): model.State {
+	if state.todoScanning {
+		return state
+	}
+	mut next := state
+	mut todo.Buffer[dyn] buffers = []
+	for each doc in state.docs {
+		append(buffers, todo.Buffer(doc.path, doc.text))
+	}
+	next.todoScanning = true
+	async todo.scan(from, state.root, state.settings.showHidden, buffers)
+	return next
+}
+
 // Os erros do compilador no arquivo e na linha onde estão de fato.
 proc located(state: model.State, found: model.Diagnostic[]): model.Diagnostic[dyn] {
 	target := render.targetOf(state)
@@ -609,7 +719,7 @@ proc located(state: model.State, found: model.Diagnostic[]): model.Diagnostic[dy
 		if where.name != "" {
 			line = analysis.refineLine(textOf(state, file), d.line, where.message)
 		}
-		append(out, model.Diagnostic(file, line, where.message))
+		append(out, model.Diagnostic(file, line, where.message, analysis.lineText(textOf(state, file), line)))
 	}
 	return out
 }
@@ -638,6 +748,7 @@ proc withAnalysis(state: model.State, output: Str): model.State {
 	for each spot in report.spots {
 		mut found := spot
 		found.file = moduleFile(target, modules, analysis.moduleOf(spot.name))
+		found.source = analysis.lineText(textOf(state, found.file), found.line)
 		append(spots, found)
 	}
 	next.analysisHead = report.head
@@ -1671,7 +1782,7 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Address):
 		next.docs = docs
 	} else if message is model.Msg.TogglePreview {
 		if render.activeDoc(state) is Result.Ok(doc) {
-			if model.isMarkdown(doc.path) {
+			if model.hasPreview(doc.path) {
 				mut mode := "preview"
 				if doc.mode != "edit" {
 					mode = "edit"
@@ -1707,11 +1818,19 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Address):
 			next.panelOpen = true
 		}
 	} else if message is model.Msg.LensDue(n) {
-		if n == state.lensDue && state.settings.errorLens {
+		if n == state.lensDue {
+			next = refreshView(next, from)
+		}
+		if n == state.lensDue && state.todoScanned {
+			if render.activeDoc(state) is Result.Ok(doc) {
+				next.todos = todo.withTodosOf(state.todos, doc.path, doc.text)
+			}
+		}
+		if n == state.lensDue && state.settings.errorLens && render.targetOf(state) != "" {
 			if state.lensRunning {
 				next.lensAgain = true
 			} else {
-				return startLens(state, from)
+				return startLens(next, from)
 			}
 		}
 	} else if message is model.Msg.LensDone(output) {
@@ -1740,7 +1859,19 @@ proc update(state: model.State, message: model.Msg, from: hive.syslink.Address):
 		} else {
 			next.sideOpen = true
 			next.side = side
+			if side is model.SideView.TodoSide {
+				return scanTodos(next, from)
+			}
 		}
+	} else if message is model.Msg.ViewReady(path, version, view, problem) {
+		next.viewPending = ""
+		return withView(next, path, version, Rendered(view, problem))
+	} else if message is model.Msg.ScanTodos {
+		return scanTodos(state, from)
+	} else if message is model.Msg.TodosFound(found) {
+		next.todos = found
+		next.todoScanned = true
+		next.todoScanning = false
 	} else if message is model.Msg.ToggleSidebar {
 		next.sideOpen = !state.sideOpen
 	} else if message is model.Msg.OpenSettings {
@@ -1819,6 +1950,19 @@ proc step(state: model.State, message: model.Msg, from: hive.syslink.Address): m
 	if next.root != state.root || next.expanded != state.expanded || len(next.docs) != len(state.docs) {
 		_watching := watch.set(watchedFolders(next))
 	}
+	// Outra pasta (ou o ⟳ do explorador) procura os TODO de novo; salvar só
+	// atualiza os dos documentos abertos, que o editor já tem.
+	if state.todoScanned && (next.root != state.root || message is model.Msg.Refresh) {
+		next = scanTodos(next, from)
+	} else if state.todoScanned && (message is model.Msg.Save || message is model.Msg.SaveAll) {
+		for each doc in next.docs {
+			next.todos = todo.withTodosOf(next.todos, doc.path, doc.text)
+		}
+	}
+	// Outro documento, ou outro modo de ver: a visualização é refeita na hora.
+	if render.activePath(next) != render.activePath(state) || message is model.Msg.SetMode(_) || message is model.Msg.TogglePreview {
+		next = refreshView(next, from)
+	}
 	// O Error Lens confere de novo quando o texto à vista muda ou outro arquivo aparece.
 	if activeText(next) != activeText(state) || render.activePath(next) != render.activePath(state) {
 		next = lensSoon(next, from)
@@ -1873,6 +2017,8 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 		return Result.Ok(model.Msg.ShowSide(model.SideView.ExplorerSide()))
 	} else if action == "outline" {
 		return Result.Ok(model.Msg.ShowSide(model.SideView.OutlineSide()))
+	} else if action == "todo" {
+		return Result.Ok(model.Msg.ShowSide(model.SideView.TodoSide()))
 	} else if action == "settings" {
 		return Result.Ok(model.Msg.OpenSettings())
 	} else if action == "suggest" {
@@ -1990,6 +2136,8 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 	} else if a == "side" {
 		if arg == "outline" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.OutlineSide()))
+		} else if arg == "todo" {
+			return Result.Ok(model.Msg.ShowSide(model.SideView.TodoSide()))
 		} else if arg == "git" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.GitSide()))
 		} else if arg == "search" {
@@ -2084,6 +2232,8 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.TogglePanel())
 	} else if a == "clear" {
 		return Result.Ok(model.Msg.ClearOutput())
+	} else if a == "todoRefresh" {
+		return Result.Ok(model.Msg.ScanTodos())
 	} else if a == "openReport" {
 		return Result.Ok(model.Msg.OpenReport())
 	} else if a == "peek" {
@@ -2261,6 +2411,7 @@ func delivered(state: model.State): model.State {
 	next.frameSeq = state.frameSeq + 1
 	next.clientHv = -1
 	next.clientHvPath = ""
+	next.clientView = render.previewKey(state)
 	if render.activeDoc(state) is Result.Ok(doc) {
 		next.clientHv = doc.version
 		next.clientHvPath = doc.path
@@ -2275,6 +2426,7 @@ func resynced(state: model.State): model.State {
 	next.clientSerial = -1
 	next.clientHv = -1
 	next.clientHvPath = ""
+	next.clientView = ""
 	return next
 }
 
@@ -2393,10 +2545,10 @@ test "o Error Lens põe o erro de um módulo no arquivo e na linha dele" {
 	state.entrypoint = folder + "/main.hive"
 	output := folder + "/main.hive:5: in `util_0_ruim`: cannot prove `3` is in range: `v` has no length\n"
 	found := located(state, analysis.parseDiagnostics(output))
-	assert found == [model.Diagnostic(folder + "/lib/util.hive", 7, "ruim: cannot prove `3` is in range: `v` has no length")]
+	assert found == [model.Diagnostic(folder + "/lib/util.hive", 7, "ruim: cannot prove `3` is in range: `v` has no length", "\tt = v[3]")]
 	state.diagnostics = found
 	assert render.lensMarks(state) == [model.LensMark(7, "error", "ruim: cannot prove `3` is in range: `v` has no length", "\tt = v[3]")]
-	mut spot := model.Hotspot(0, "util.dobro", "func", folder + "/lib/util.hive", 1, "a copy")
+	mut spot := model.Hotspot(0, "util.dobro", "func", folder + "/lib/util.hive", 1, "a copy", "func dobro(n: Int): Int \{")
 	state.hotspots = [spot]
 	marks := render.lensMarks(state)
 	assert len(marks) == 2
@@ -2405,6 +2557,44 @@ test "o Error Lens põe o erro de um módulo no arquivo e na linha dele" {
 	}
 	state.settings.errorLens = false
 	assert len(render.lensMarks(state)) == 0
+}
+
+func hasRegion(frame: model.Frame, id: Str): Bool {
+	for each r in frame.regions {
+		if r.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+test "a visualização fica guardada: o frame só a manda quando muda, e ela é refeita quando a digitação para" {
+	folder := explorerFolder("view-test")
+	if hive.file.write(folder + "/dados.json", "\{\"a\": 1}\n") is Result.Error(why) {
+		panic why
+	}
+	db := hive.syslink.spawnAddressed(serve, openDoc(fresh(folder), folder + "/dados.json"))
+	first := answer(db, event("hello", "", "", "", 0))
+	assert indexOf(regionOf(first, "preview"), "<span class=\"jk\">&quot;a&quot;</span>") is Result.Ok(_)
+	quiet := answer(db, event("caret", "", "", "", 1))
+	assert !hasRegion(quiet, "preview")
+	typed := answer(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
+	assert !hasRegion(typed, "preview") && len(typed.lens) == 0
+	hive.task.sleep(1200)
+	answered := db(model.Cmd.Render())
+	mut later := first
+	if answered is Result.Ok(reply) {
+		if reply is model.Cmd.Reply(text) {
+			if model.Frame.decode(text, hive.json.codec()) is Result.Ok(frame) {
+				later = frame
+			}
+		}
+	}
+	assert indexOf(regionOf(later, "preview"), "JSON inválido") is Result.Ok(_)
+	assert len(later.lens) == 1
+	if later.lens bounds 0 {
+		assert later.lens[0].line == 1 && later.lens[0].source == "x\{\"a\": 1}"
+	}
 }
 
 test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {
@@ -2416,7 +2606,7 @@ test "abrir, editar, salvar e fechar mantém o fim de linha do arquivo" {
 	if render.activeDoc(state) is Result.Ok(doc) {
 		assert doc.eol == "\r\n"
 		assert indexOf(doc.text, "\r") is Result.Error(_)
-		assert indexOf(join(doc.hl.lines, "\n"), "<span class=\"tk\">proc</span>") is Result.Ok(_)
+		assert indexOf(join(highlight.htmlLines(doc.text, "hive"), "\n"), "<span class=\"tk\">proc</span>") is Result.Ok(_)
 	}
 	state = withText(state, "proc main(): void \{\n\techo 2\n}\n")
 	assert model.anyDirty(state.docs)

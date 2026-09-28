@@ -1,0 +1,183 @@
+// Os TODO do projeto: comentários marcados com TODO, FIXME, HACK ou XXX, para
+// o painel TODO da barra lateral.
+
+import ./model
+import ./highlight
+import ./complete
+import ./search
+import ./workspace
+
+// Um documento aberto: a busca usa o texto do editor, mesmo o não salvo.
+type Buffer {
+	path: Str
+	text: Str
+}
+
+func tags(): Str[dyn] {
+	return ["TODO", "FIXME", "HACK", "XXX"]
+}
+
+// O que vem antes da marca abre um comentário (de Hive, Go, JS, shell,
+// SQL, HTML…) ou continua um bloco `/* … */`.
+func inComment(before: Str): Bool {
+	for each marker in ["//", "#", "/*", "<!--", "--", ";"] {
+		if indexOf(before, marker) is Result.Ok(_) {
+			return true
+		}
+	}
+	trimmed := replaceAll(replaceAll(before, " ", ""), "\t", "")
+	return trimmed == "*"
+}
+
+func lastChar(text: Str): Str {
+	last := len(text) - 1
+	if text bounds last {
+		return text[last:]
+	}
+	return ""
+}
+
+func firstChar(text: Str): Str {
+	if text bounds 0 {
+		return text[:0]
+	}
+	return ""
+}
+
+// O texto depois da marca, sem o `:` e sem o fim de um comentário de bloco.
+func tidyText(after: Str): Str {
+	mut rest := after
+	for ; firstChar(rest) == ":" || firstChar(rest) == " " || firstChar(rest) == "\t"; {
+		rest = complete.skip(rest, 1)
+	}
+	for each ending in ["*/", "-->"] {
+		cut := len(rest) - len(ending)
+		if cut >= 0 && complete.skip(rest, cut) == ending {
+			rest = complete.take(rest, cut)
+		}
+	}
+	for ; lastChar(rest) == " " || lastChar(rest) == "\t"; {
+		rest = complete.take(rest, len(rest) - 1)
+	}
+	return rest
+}
+
+// Os TODO de um texto, um por linha, na ordem em que aparecem.
+func todosIn(file: Str, text: Str): model.Todo[dyn] {
+	mut model.Todo[dyn] found = []
+	mut any := false
+	for each tag in tags() {
+		if indexOf(text, tag) is Result.Ok(_) {
+			any = true
+		}
+	}
+	if !any {
+		return found
+	}
+	lines := split(replaceAll(text, "\r", ""), "\n")
+	for i := 0; i < len(lines); i++ {
+		if lines bounds i {
+			line := lines[i]
+			for each tag in tags() {
+				if indexOf(line, tag) is Result.Ok(at) {
+					before := complete.take(line, at)
+					after := complete.skip(line, at + len(tag))
+					// Uma palavra inteira: TODOS e XXXL não contam.
+					if !highlight.isIdent(lastChar(before)) && !highlight.isIdent(firstChar(after)) && inComment(before) {
+						append(found, model.Todo(file, i + 1, at, tag, tidyText(after)))
+						break
+					}
+				}
+			}
+		}
+	}
+	return found
+}
+
+// Troca os TODO de `file` pelos do texto novo, no mesmo lugar da lista.
+func withTodosOf(todos: model.Todo[], file: Str, text: Str): model.Todo[dyn] {
+	fresh := todosIn(file, text)
+	mut model.Todo[dyn] out = []
+	mut placed := false
+	for each t in todos {
+		if t.file == file {
+			if !placed {
+				for each f in fresh {
+					append(out, f)
+				}
+				placed = true
+			}
+		} else {
+			append(out, t)
+		}
+	}
+	if !placed {
+		for each f in fresh {
+			append(out, f)
+		}
+	}
+	return out
+}
+
+// Procura em todos os arquivos de texto da pasta (até 1 MB cada), numa thread
+// própria, e manda o que achou de volta para a janela.
+proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool, buffers: Buffer[]): void {
+	mut model.Todo[dyn] found = []
+	mut hive.map.Map<Str, Str> open = hive.map.new()
+	for each b in buffers {
+		hive.map.set(open, workspace.normalize(b.path), b.text)
+	}
+	for each rel in search.allFiles(root, showHidden, 20000) {
+		if search.isTextFile(rel) {
+			path := workspace.joinPath(root, rel)
+			mut text := ""
+			mut known := false
+			if hive.map.get(open, workspace.normalize(path)) is Result.Ok(buffer) {
+				text = buffer
+				known = true
+			}
+			if !known {
+				mut small := true
+				if hive.file.size(path) is Result.Ok(bytes) {
+					small = bytes < 1000000
+				}
+				if small {
+					if hive.file.read(path) is Result.Ok(content) {
+						text = content
+					}
+				}
+			}
+			for each t in todosIn(path, text) {
+				append(found, t)
+			}
+		}
+	}
+	async window(model.Cmd.Post(model.Msg.TodosFound(found)))
+}
+
+test "TODO, FIXME, HACK e XXX em comentários viram itens" {
+	text := "// TODO: trocar isto\nx := 1 // FIXME conta errada\n# HACK(ana): provisório\n/* XXX: bloco */\n * TODO continuação\ny := \"TODO: num texto\"\n// TODOS os casos\n<!-- TODO: html -->\n"
+	found := todosIn("a.hive", text)
+	assert len(found) == 6
+	if found bounds 5 {
+		assert found[0] == model.Todo("a.hive", 1, 3, "TODO", "trocar isto")
+		assert found[1].tag == "FIXME" && found[1].text == "conta errada" && found[1].line == 2
+		assert found[2].tag == "HACK" && found[2].text == "(ana): provisório"
+		assert found[3].tag == "XXX" && found[3].text == "bloco"
+		assert found[4].line == 5 && found[4].text == "continuação"
+		assert found[5].line == 8 && found[5].text == "html"
+	}
+}
+
+test "os TODO de um arquivo são trocados no mesmo lugar da lista" {
+	first := model.Todo("a", 1, 0, "TODO", "a")
+	second := model.Todo("b", 1, 0, "TODO", "b")
+	third := model.Todo("c", 1, 0, "TODO", "c")
+	updated := withTodosOf([first, second, third], "b", "// TODO: um\n// FIXME: dois\n")
+	assert len(updated) == 4
+	if updated bounds 3 {
+		assert updated[0].file == "a" && updated[1].text == "um" && updated[2].text == "dois" && updated[3].file == "c"
+	}
+	assert len(withTodosOf([first], "b", "nada")) == 1
+	assert len(withTodosOf([first], "a", "nada")) == 0
+}
