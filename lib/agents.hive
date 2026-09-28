@@ -130,7 +130,10 @@ test "um agente roda num terminal de verdade: tty, tamanho, digitação e saída
 		assert indexOf(second, "ação-xterm-256color") is Result.Ok(_)
 		assert pty.alive(session)
 		_quit := pty.write(session, "exit 3\r")
-		for waited := 0; waited < 3000 && pty.alive(session); waited = waited + 50 {
+		for waited := 0; waited < 3000; waited = waited + 50 {
+			if !pty.alive(session) {
+				break
+			}
 			hive.task.sleep(50)
 		}
 		assert !pty.alive(session)

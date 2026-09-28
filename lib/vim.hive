@@ -1672,31 +1672,39 @@ proc joinLines(ed: mut Editor, chars: Str[], count: Int, spaces: Bool): void {
 		return
 	}
 	mut Str[dyn] lines = split(ed.text, "\n")
+	first := lineText(lines, line)
+	mut Str[dyn] pieces = [first]
+	// O fim do que já foi juntado, e quantos caracteres ele tem.
+	mut tail := first
+	mut size := len(first)
 	mut joinAt := 0
 	mut joined := 0
-	for n := 0; n < maxInt(count - 1, 1); n++ {
-		next := line + 1
-		if next > final - joined {
-			break
-		}
-		current := lineText(lines, line)
-		following := lineText(lines, next)
+	times := maxInt(count - 1, 1)
+	for n := 0; n < times && line + 1 + joined <= final; n++ {
+		following := lineText(lines, line + 1 + joined)
 		mut rest := following
 		mut gap := ""
 		if spaces {
 			rest = analysis.trimLeft(following)
-			if current != "" && rest != "" && !endsWith(current, " ") && !endsWith(current, "\t") && !complete.startsWith(rest, ")") {
+			if size > 0 && rest != "" && !endsWith(tail, " ") && !endsWith(tail, "\t") && !complete.startsWith(rest, ")") {
 				gap = " "
 			}
 		}
-		joinAt = len(current)
-		if lines bounds line {
-			lines[line] = current + gap + rest
+		joinAt = size
+		append(pieces, gap + rest)
+		if gap + rest != "" {
+			tail = gap + rest
 		}
-		if lines bounds next {
-			drop(lines, next, next)
-		}
+		size = size + len(gap) + len(rest)
 		joined++
+	}
+	lastJoined := line + joined
+	if lines bounds line {
+		lines[line] = join(pieces, "")
+	}
+	start := line + 1
+	if joined > 0 && lines bounds start && lines bounds lastJoined {
+		drop(lines, start, lastJoined)
 	}
 	pushUndo(ed, snapshot(ed))
 	ed.text = join(lines, "\n")
@@ -1881,17 +1889,16 @@ func failed(): Outcome {
 }
 
 // Guarda o último `f`/`t`/`F`/`T`, para `;` e `,`.
-proc remember(ed: mut Editor, keys: Str[]): void {
-	k := at(keys, 0)
-	if (k == "f" || k == "F" || k == "t" || k == "T") && literal(at(keys, 1)) != "" {
-		ed.vim.find = [k, literal(at(keys, 1))]
+proc remember(ed: mut Editor, k: Str, target: Str): void {
+	if (k == "f" || k == "F" || k == "t" || k == "T") && literal(target) != "" {
+		ed.vim.find = [k, literal(target)]
 	}
 }
 
 // Um movimento sozinho: leva o cursor (no visual, a ponta da seleção).
-proc moveStep(ed: mut Editor, chars: Str[], keys: Str[dyn], count: Int, hasCount: Bool): Outcome {
+proc moveStep(ed: mut Editor, chars: Str[], keys: mut Str[dyn], count: Int, hasCount: Bool): Outcome {
 	t := motion(ed, chars, keys, count, hasCount)
-	remember(ed, keys)
+	remember(ed, at(keys, 0), at(keys, 1))
 	if !t.ok {
 		say(ed, t.note, t.arg, t.bad)
 		return failed()
@@ -1957,7 +1964,7 @@ proc operatorStep(ed: mut Editor, chars: Str[], keys: Str[dyn], start: Int, op: 
 	}
 	mut Str[dyn] moves = []
 	keysFrom(keys, i, size, moves)
-	remember(ed, moves)
+	remember(ed, at(moves, 0), at(moves, 1))
 	big := k == "W"
 	if op == "c" && (k == "w" || k == "W") && !isSpace(at(chars, caret)) && at(chars, caret) != "" {
 		span := Span(caret, minInt(changeWordEnd(chars, caret, big, total) + 1, len(chars)), false, true)
@@ -2046,7 +2053,7 @@ proc repeatChange(ed: mut Editor, count: Int, hasCount: Bool): void {
 }
 
 // As teclas pendentes no modo normal.
-proc normalStep(ed: mut Editor, keys: Str[dyn]): Outcome {
+proc normalStep(ed: mut Editor, keys: mut Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -2274,7 +2281,7 @@ proc toNormal(ed: mut Editor): void {
 }
 
 // As teclas pendentes no modo visual.
-proc visualStep(ed: mut Editor, keys: Str[dyn]): Outcome {
+proc visualStep(ed: mut Editor, keys: mut Str[dyn]): Outcome {
 	chars := split(ed.text, "")
 	mut i := 0
 	mut count := 0
@@ -2971,7 +2978,10 @@ proc execute(ed: mut Editor, typed: Str): void {
 		}
 	}
 	mut Str[dyn] letters = []
-	for ; isLetter(at(cmd, i)); i++ {
+	for ; true; i++ {
+		if !isLetter(at(cmd, i)) {
+			break
+		}
 		append(letters, at(cmd, i))
 	}
 	mut name := join(letters, "")
@@ -2981,7 +2991,10 @@ proc execute(ed: mut Editor, typed: Str): void {
 	}
 	mut levels := 1
 	if name == ">" || name == "<" {
-		for ; at(cmd, i) == name; i++ {
+		for ; true; i++ {
+			if at(cmd, i) != name {
+				break
+			}
 			levels++
 		}
 	}
@@ -3188,7 +3201,10 @@ proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): vo
 	}
 	mut i := 1
 	mut Str[dyn] wanted = []
-	for ; i < len(parts) && at(parts, i) != delimiter; i++ {
+	for ; i < len(parts); i++ {
+		if at(parts, i) == delimiter {
+			break
+		}
 		c := at(parts, i)
 		if c == "\\" && i + 1 < len(parts) {
 			escaped := at(parts, i + 1)
@@ -3207,7 +3223,10 @@ proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): vo
 	i++
 	mut Str[dyn] pieces = []
 	mut Str[dyn] current = []
-	for ; i < len(parts) && at(parts, i) != delimiter; i++ {
+	for ; i < len(parts); i++ {
+		if at(parts, i) == delimiter {
+			break
+		}
 		c := at(parts, i)
 		if c == "\\" && i + 1 < len(parts) {
 			escaped := at(parts, i + 1)

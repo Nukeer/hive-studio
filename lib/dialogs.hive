@@ -45,8 +45,7 @@ proc pick(mode: Str, start: Str, title: Str): Result<Str, Str> {
 		}
 		return Result.Ok(process.firstLine(result.text))
 	}
-	Str[dyn] base = ["--file-selection", "--title=" + title]
-	mut Str[dyn] arguments = base
+	mut Str[dyn] arguments = ["--file-selection", "--title=" + title]
 	if folder {
 		append(arguments, "--directory")
 	}

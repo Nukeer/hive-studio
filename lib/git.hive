@@ -69,14 +69,20 @@ func parseFile(line: Str, prefix: Str): Result<model.GitFile, Bool> {
 
 // Lê o estado do repositório que contém `root`. O rascunho da mensagem de
 // commit e o que estiver em andamento sobrevivem à releitura.
-proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
-	mut info := model.emptyGit()
-	info.message = previous.message
-	info.busy = previous.busy
-	info.confirm = previous.confirm
+proc refresh(root: Str, info: mut model.GitInfo): void {
+	model.GitFile[dyn] noFiles = []
+	Str[dyn] noLog = []
+	info.repo = false
+	info.top = ""
+	info.prefix = ""
+	info.branch = ""
+	info.ahead = 0
+	info.behind = 0
+	info.files = noFiles
+	info.log = noLog
 	top := process.run("git", ["rev-parse", "--show-toplevel"], root)
 	if top.code != 0 {
-		return info
+		return
 	}
 	info.repo = true
 	info.top = process.firstLine(top.text)
@@ -101,7 +107,6 @@ proc refresh(root: Str, previous: model.GitInfo): model.GitInfo {
 		}
 		info.log = log
 	}
-	return info
 }
 
 func kindOf(file: model.GitFile): Str {

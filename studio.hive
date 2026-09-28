@@ -39,11 +39,13 @@ import ./lib/watch.go
 // quem só o lê em vez de copiá-lo a cada chamada.
 
 proc reload(state: mut model.State): void {
-	state.tree = workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden)
+	mut model.TreeRow[dyn] rows = []
+	workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden, rows)
+	state.tree = rows
 }
 
 proc gitRefresh(state: mut model.State): void {
-	state.git = git.refresh(state.root, state.git)
+	git.refresh(state.root, state.git)
 }
 
 // Pede para a página focar um campo (`prompt`, `termInput`…) no próximo frame.
@@ -251,7 +253,8 @@ proc present(path: Str): Bool {
 proc refreshTree(state: mut model.State): void {
 	before := len(state.expanded)
 	pruneExpanded(state)
-	fresh := workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden)
+	mut model.TreeRow[dyn] fresh = []
+	workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden, fresh)
 	if fresh == state.tree && len(state.expanded) == before {
 		return
 	}
@@ -1243,10 +1246,15 @@ proc updateAgents(state: mut model.State, message: model.Msg, from: hive.syslink
 		launchAgent(state, chosen, from)
 		withFocus(state, "agent")
 	} else if message is model.Msg.AgentExited(session, code) {
-		sessions := state.agents.sessions
-		for each s in sessions {
-			if s.session == session && session != 0 {
-				withAgent(state, model.AgentSession(s.agent, session, true, code, ""))
+		for i := 0; i < len(state.agents.sessions) && session != 0; i++ {
+			mut agent := ""
+			if state.agents.sessions bounds i {
+				if state.agents.sessions[i].session == session {
+					agent = state.agents.sessions[i].agent
+				}
+			}
+			if agent != "" {
+				withAgent(state, model.AgentSession(agent, session, true, code, ""))
 			}
 		}
 	} else if message is model.Msg.AgentCommand(agent, text) {
@@ -1292,7 +1300,10 @@ proc revealPath(state: mut model.State, path: Str): void {
 	mut Str[dyn] expanded = state.expanded
 	root := workspace.normalize(state.root)
 	mut folder := workspace.parentOf(path)
-	for n := 0; n < 64 && complete.startsWith(folder, root + "/"); n++ {
+	for n := 0; n < 64; n++ {
+		if !complete.startsWith(folder, root + "/") {
+			break
+		}
 		if !workspace.isExpanded(expanded, folder) {
 			append(expanded, folder)
 		}
@@ -2029,7 +2040,7 @@ proc step(state: mut model.State, message: model.Msg, from: hive.syslink.Address
 	wasPath := render.activePath(state)
 	wasText := activeText(state)
 	wasRoot := state.root
-	wasExpanded := state.expanded
+	wasExpanded := join(state.expanded, "\n")
 	wasDocs := len(state.docs)
 	wasScanned := state.todoScanned
 	update(state, message, from)
@@ -2045,7 +2056,7 @@ proc step(state: mut model.State, message: model.Msg, from: hive.syslink.Address
 	}
 	// Outra pasta, uma pasta aberta ou fechada na árvore, um arquivo aberto ou
 	// fechado: as pastas vigiadas acompanham.
-	if state.root != wasRoot || state.expanded != wasExpanded || len(state.docs) != wasDocs {
+	if state.root != wasRoot || join(state.expanded, "\n") != wasExpanded || len(state.docs) != wasDocs {
 		watchFolders(state)
 	}
 	// Outra pasta (ou o ⟳ do explorador) procura os TODO de novo; salvar só
@@ -3340,7 +3351,10 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	restarted := ask(db, event("act", "agentRestart", "claude", "", 0))
 	assert restarted.agentShown != session
 	assert restarted.agentSessions == [restarted.agentShown]
-	for waited := 0; waited < 2000 && pty.alive(session); waited = waited + 50 {
+	for waited := 0; waited < 2000; waited = waited + 50 {
+		if !pty.alive(session) {
+			break
+		}
 		hive.task.sleep(50)
 	}
 	assert !pty.alive(session)
@@ -3348,7 +3362,10 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	// Quando o programa termina, o painel diz o código e oferece abrir de novo.
 	_quit := pty.write(restarted.agentShown, "exit 5\r")
 	mut notice := ""
-	for waited := 0; waited < 3000 && indexOf(notice, "(código 5)") is Result.Error(_); waited = waited + 100 {
+	for waited := 0; waited < 3000; waited = waited + 100 {
+		if indexOf(notice, "(código 5)") is Result.Ok(_) {
+			break
+		}
 		hive.task.sleep(100)
 		notice = regionOf(ask(db, event("hello", "", "", "", 0)), "panelview")
 	}

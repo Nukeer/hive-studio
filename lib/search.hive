@@ -47,34 +47,38 @@ func skippedFolder(name: Str): Bool {
 proc allFiles(root: Str, showHidden: Bool, limit: Int): Str[dyn] {
 	mut Str[dyn] found = []
 	mut Str[dyn] pending = [""]
-	for ; len(pending) > 0 && len(found) < limit; {
+	for next := 0; next < len(pending) && len(found) < limit; next++ {
 		mut current := ""
-		last := len(pending) - 1
-		if pending bounds last {
-			current = pending[last]
-			drop(pending, last, last)
+		if pending bounds next {
+			current = pending[next]
 		}
 		mut folder := root
 		if current != "" {
 			folder = workspace.joinPath(root, current)
 		}
 		if workspace.listEntries(folder, showHidden) is Result.Ok(entries) {
-			for each entry in entries {
-				mut rel := entry.name
-				if current != "" {
-					rel = current + "/" + entry.name
-				}
-				if entry.folder {
-					if !skippedFolder(entry.name) {
-						append(pending, rel)
-					}
-				} else if len(found) < limit {
-					append(found, rel)
-				}
-			}
+			queueEntries(entries, current, limit, found, pending)
 		}
 	}
 	return sort(found)
+}
+
+// As entradas de uma pasta (`current`, relativa à raiz): arquivos em `found`,
+// até `limit`, e pastas em `pending`, para listar depois.
+proc queueEntries(entries: model.Entry[], current: Str, limit: Int, found: mut Str[dyn], pending: mut Str[dyn]): void {
+	for each entry in entries {
+		mut rel := entry.name
+		if current != "" {
+			rel = current + "/" + entry.name
+		}
+		if entry.folder {
+			if !skippedFolder(entry.name) {
+				append(pending, rel)
+			}
+		} else if len(found) < limit {
+			append(found, rel)
+		}
+	}
 }
 
 func isTextFile(path: Str): Bool {

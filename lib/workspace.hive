@@ -1,6 +1,7 @@
 // Caminhos e listagem de pastas. Tudo usa `/`, que o Windows também aceita.
 
 import ./model
+import ./native.go
 
 func normalize(path: Str): Str {
 	clean := replaceAll(path, "\\", "/")
@@ -30,6 +31,13 @@ func isDrive(part: Str): Bool {
 }
 
 // Resolve os `.` e `..` do meio de um caminho, para um arquivo ter um nome só.
+proc popLast(list: mut Str[dyn]): void {
+	last := len(list) - 1
+	if list bounds last {
+		drop(list, last, last)
+	}
+}
+
 func tidy(path: Str): Str {
 	mut Str[dyn] kept = []
 	parts := split(replaceAll(path, "\\", "/"), "/")
@@ -42,7 +50,7 @@ func tidy(path: Str): Str {
 		if part == ".." && kept bounds last {
 			previous := kept[last]
 			if previous != ".." && previous != "." && previous != "" && !isDrive(previous) {
-				drop(kept, last, last)
+				popLast(kept)
 				continue
 			}
 		}
@@ -111,8 +119,7 @@ func listEntries(folder: Str, showHidden: Bool): Result<model.Entry[dyn], Str> {
 		for each name in names {
 			if showHidden || !isHidden(name) {
 				path := joinPath(folder, name)
-				isFolder := hive.file.list(path) is Result.Ok(_)
-				append(found, model.Entry(name, path, isFolder))
+				append(found, model.Entry(name, path, native.isDir(path)))
 			}
 		}
 	}
@@ -124,20 +131,16 @@ func isExpanded(expanded: Str[], path: Str): Bool {
 }
 
 // As linhas visíveis da árvore: cada pasta expandida mostra seus filhos logo abaixo.
-func buildTree(folder: Str, depth: Int, expanded: Str[], showHidden: Bool): model.TreeRow[dyn] {
-	mut model.TreeRow[dyn] rows = []
+proc buildTree(folder: Str, depth: Int, expanded: mut Str[dyn], showHidden: Bool, rows: mut model.TreeRow[dyn]): void {
 	if listEntries(folder, showHidden) is Result.Ok(entries) {
 		for each entry in entries {
 			open := entry.folder && isExpanded(expanded, entry.path)
 			append(rows, model.TreeRow(entry, depth, open))
 			if open {
-				for each child in buildTree(entry.path, depth + 1, expanded, showHidden) {
-					append(rows, child)
-				}
+				buildTree(entry.path, depth + 1, expanded, showHidden, rows)
 			}
 		}
 	}
-	return rows
 }
 
 // `path` visto a partir de `root`, em pedaços — o breadcrumb.
@@ -202,10 +205,13 @@ test "a árvore mostra os filhos só das pastas expandidas" {
 	if hive.file.write("./tree-test/lib/a.hive", "") is Result.Error(why) {
 		panic why
 	}
-	Str[dyn] closed = []
-	collapsed := buildTree("./tree-test", 0, closed, false)
+	mut Str[dyn] closed = []
+	mut model.TreeRow[dyn] collapsed = []
+	buildTree("./tree-test", 0, closed, false, collapsed)
 	assert len(collapsed) == 2
-	opened := buildTree("./tree-test", 0, ["./tree-test/lib"], false)
+	mut Str[dyn] expanded = ["./tree-test/lib"]
+	mut model.TreeRow[dyn] opened = []
+	buildTree("./tree-test", 0, expanded, false, opened)
 	assert len(opened) == 4
 	if opened is [lib, inner, a, main] {
 		assert lib.open && lib.entry.folder

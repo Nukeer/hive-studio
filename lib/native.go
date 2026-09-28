@@ -159,6 +159,12 @@ func Stamp(path string) (string, error) {
 	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10), nil
 }
 
+// IsDir diz se o caminho é uma pasta, sem precisar listá-la.
+func IsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 // Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra
 // por outra: o texto continua com o mesmo número de caracteres.
 func Lower(text string) string {
