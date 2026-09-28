@@ -28,7 +28,9 @@ type Snapshot {
 // suja quando `text != saved`. O texto fica sempre com `\n`; `eol` lembra o
 // fim de linha do arquivo para salvar do jeito que veio. `html` é o realce
 // guardado, refeito só quando o texto muda. `mode` é `edit`, `preview` ou `split`.
-// `undo` e `redo` são as pilhas do `u` e do `Ctrl+R` do modo Vim.
+// `undo` e `redo` são as pilhas do `u` e do `Ctrl+R` do modo Vim. `gone` diz
+// que o arquivo foi apagado do disco (a aba continua aberta, riscada; salvar
+// o cria de novo).
 type Doc {
 	path:  Str
 	name:  Str
@@ -39,6 +41,7 @@ type Doc {
 	mode:  Str
 	undo:  Snapshot[dyn]
 	redo:  Snapshot[dyn]
+	gone:  Bool
 }
 
 // Uma linha `arquivo:linha: mensagem` do compilador.
@@ -208,6 +211,24 @@ type Pane {
 	OutputPane
 	ProblemsPane
 	TerminalPane
+	AgentPane
+}
+
+// Um agente do painel AGENTE (Claude Code, Codex, OpenCode) e o terminal de
+// verdade (lib/pty.go) onde ele roda. `session` é 0 quando nunca abriu;
+// `problem` diz por que não abriu (o programa não está no PATH…).
+type AgentSession {
+	agent:   Str
+	session: Int
+	exited:  Bool
+	code:    Int
+	problem: Str
+}
+
+// `current` é o agente mostrado no painel; cada um guarda a própria sessão.
+type Agents {
+	current:  Str
+	sessions: AgentSession[dyn]
 }
 
 type SideView {
@@ -351,6 +372,11 @@ type Msg {
 	VimReload
 	TreeKey          { key: Str }
 	FocusExplorer    { path: Str }
+	ShowAgent        { agent: Str }
+	AgentRestart     { agent: Str }
+	AgentExited      { session: Int, code: Int }
+	AgentCommand     { agent: Str, text: Str }
+	DiskPoll
 }
 
 type State {
@@ -397,6 +423,8 @@ type State {
 	palette:       Palette
 	vim:           Vim
 	treeKeys:      Str
+	agents:        Agents
+	quietSerial:   Int
 }
 
 // ── o que viaja entre a página e o programa ──────────────────────────────
@@ -418,6 +446,8 @@ type Region {
 
 // Tudo o que a página precisa para se desenhar. O texto do editor só é
 // aplicado quando `serial` muda — digitar não reescreve o que se digita.
+// `textQuiet` diz que o texto novo veio do disco (um agente mudou o arquivo):
+// a página o troca sem mexer no foco nem na rolagem.
 type Frame {
 	regions:   Region[dyn]
 	css:       Str
@@ -448,6 +478,10 @@ type Frame {
 	clip:       Str
 	clipSerial: Int
 	vimAck:     Int
+	agentSessions: Int[dyn]
+	agentShown:    Int
+	agentKeys:     Str[dyn]
+	textQuiet:     Bool
 }
 
 // A resposta a "dá para ir à definição do nome em `caret`?", mandada enquanto
@@ -519,8 +553,15 @@ func initial(root: Str, prefs: settings.Settings): State {
 		search: emptySearch(),
 		palette: emptyPalette(),
 		vim: emptyVim(),
-		treeKeys: ""
+		treeKeys: "",
+		agents: emptyAgents(),
+		quietSerial: -1
 	)
+}
+
+func emptyAgents(): Agents {
+	AgentSession[dyn] none = []
+	return Agents("claude", none)
 }
 
 func emptyVim(): Vim {
@@ -571,7 +612,7 @@ func emptyVim(): Vim {
 // Um documento recém-aberto, sem nada para desfazer.
 func newDoc(path: Str, name: Str, text: Str, eol: Str, html: Str, mode: Str): Doc {
 	Snapshot[dyn] none = []
-	return Doc(path, name, text, text, eol, html, mode, none, none)
+	return Doc(path, name, text, text, eol, html, mode, none, none, false)
 }
 
 func emptySearch(): SearchPanel {

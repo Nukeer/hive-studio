@@ -17,6 +17,7 @@ import ./search
 import ./complete
 import ./version
 import ./vim
+import ./agents
 
 // O texto da interface no idioma escolhido.
 func tx(state: model.State, text: Str): Str {
@@ -129,6 +130,12 @@ func menuItem(state: model.State, label: Str, action: Str, enabled: Bool): Str {
 		esc(keys.keysFor(state.settings.keymap, action)) + "</span></div>"
 }
 
+// Um item com um nome próprio (não traduzido), recuado sob o anterior.
+func menuPlain(state: model.State, label: Str, action: Str): Str {
+	return "<div class=\"mi\"" + act("action", action) + "><span>   " + esc(label) + "</span><span class=\"mk\">" +
+		esc(keys.keysFor(state.settings.keymap, action)) + "</span></div>"
+}
+
 // Um item que liga e desliga algo, com ✓ quando está ligado.
 func menuCheck(state: model.State, label: Str, action: Str, on: Bool): Str {
 	mut mark := ""
@@ -223,7 +230,13 @@ func menuBar(state: model.State): Str {
 			menuItem(state, "Terminal", "terminal", true),
 			separator(),
 			menuItem(state, "Limpar terminal", "termClear", true),
-			menuItem(state, "Encerrar processo", "termRestart", state.term.session != 0)
+			menuItem(state, "Encerrar processo", "termRestart", state.term.session != 0),
+			separator(),
+			menuItem(state, "Agente", "agent", true),
+			menuPlain(state, "Claude Code", "agentClaude"),
+			menuPlain(state, "Codex", "agentCodex"),
+			menuPlain(state, "OpenCode", "agentOpencode"),
+			menuItem(state, "Reiniciar agente", "agentRestart", agents.sessionOf(state.agents, state.agents.current).session != 0)
 		]) +
 		menu(state, "Ajuda", [
 			menuItem(state, "Documentação do Hive", "docs", true),
@@ -717,9 +730,15 @@ func tab(state: model.State, index: Int, doc: model.Doc): Str {
 		closer = "<span class=\"x dirty\"" + act("close", "{index}") + attr("title", tx(state, "Não salvo — fechar")) + ">●</span>"
 	}
 	icon := theme.iconFor(doc.name)
-	return "<div class=\"" + cls + "\"" + act("focus", "{index}") + attr("title", doc.path) + ">" +
+	mut nameCls := git.cssOf(gitKindOf(state, doc.path))
+	mut tip := doc.path
+	if doc.gone {
+		nameCls = "g-del"
+		tip = doc.path + " — " + tx(state, "apagado do disco (salvar cria de novo)")
+	}
+	return "<div class=\"" + cls + "\"" + act("focus", "{index}") + attr("title", tip) + ">" +
 		"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
-		"<span class=\"" + git.cssOf(gitKindOf(state, doc.path)) + "\">" + esc(doc.name) + "</span>" + closer + "</div>"
+		"<span class=\"" + nameCls + "\">" + esc(doc.name) + "</span>" + closer + "</div>"
 }
 
 func tabStrip(state: model.State): Str {
@@ -949,6 +968,11 @@ func keyRow(state: model.State, a: keys.Action): Str {
 		"<td style=\"text-align:right\"><button class=\"btn\"" + act("record", a.id) + ">" + tx(state, "Gravar") + "</button>" + resetButton + "</td></tr>"
 }
 
+func agentCommandItem(state: model.State, agent: Str, command: Str): Str {
+	return item(agents.labelOf(agent), tx(state, "Comando (com argumentos, se precisar)."),
+		"<input class=\"field\" style=\"width:420px\"" + attr("data-input", agent + "Command") + attr("placeholder", agent) + attr("value", command) + ">")
+}
+
 func settingsPage(state: model.State): Str {
 	prefs := state.settings
 	mut Str[dyn] cards = []
@@ -976,6 +1000,11 @@ func settingsPage(state: model.State): Str {
 			check("vim", tx(state, "Usar as teclas do Vim no editor"), prefs.vim)) +
 		"<h2>" + tx(state, "Explorador") + "</h2>" +
 		item(tx(state, "Arquivos ocultos"), "", check("showHidden", tx(state, "Mostrar arquivos ocultos e artefatos de build"), prefs.showHidden)) +
+		"<h2>" + tx(state, "Agentes") + "</h2>" +
+		"<div class=\"item\"><div class=\"dsc\">" + tx(state, "Programas que rodam no painel AGENTE, num terminal de verdade, na pasta aberta. Cada um usa o próprio login (a sua assinatura); o Hive Studio não vê nem guarda credenciais.") + "</div></div>" +
+		agentCommandItem(state, "claude", prefs.claudeCommand) +
+		agentCommandItem(state, "codex", prefs.codexCommand) +
+		agentCommandItem(state, "opencode", prefs.opencodeCommand) +
 		"<h2>" + tx(state, "Execução") + "</h2>" +
 		item(tx(state, "Salvar antes de rodar"), "", check("saveBeforeRun", tx(state, "Salvar arquivos antes de Check, Run, Test e Build"), prefs.saveBeforeRun)) +
 		item(tx(state, "Compilador"), tx(state, "Caminho do hivec. A variável HIVEC, se existir, tem prioridade."),
@@ -1121,9 +1150,43 @@ func terminalBody(state: model.State): Str {
 		attr("placeholder", tx(state, "comando (↑ ↓ histórico, Ctrl+C encerra o processo)")) + attr("value", term.input) + "></div>"
 }
 
+// Os agentes, lado a lado, com o mostrado aceso.
+func agentPicker(state: model.State): Str {
+	mut Str[dyn] items = []
+	for each preset in agents.presets() {
+		mut cls := ""
+		if preset.id == state.agents.current {
+			cls = " class=\"on\""
+		}
+		append(items, "<span" + cls + act("agent", preset.id) + ">" + esc(preset.label) + "</span>")
+	}
+	return "<div class=\"seg\">" + join(items, "") + "</div>"
+}
+
+// O aviso acima do terminal do agente: por que ele não abriu, ou que terminou.
+// Rodando, não há aviso — o terminal ocupa o painel.
+func agentNotice(state: model.State): Str {
+	current := agents.sessionOf(state.agents, state.agents.current)
+	if current.problem != "" {
+		mut problem := current.problem
+		if problem is "{program}: não encontrado no PATH" {
+			problem = program + ": " + tx(state, "não encontrado no PATH")
+		}
+		return "<div class=\"empty\">" + esc(problem) + ". " +
+			tx(state, "Instale o programa ou ajuste o comando em Configurações → Agentes.") + " " +
+			"<span class=\"act\"" + act("settings", "") + ">" + tx(state, "Configurações") + "</span></div>"
+	}
+	if current.exited {
+		return "<div class=\"empty\">" + tx(state, "O agente terminou") + " (" + tx(state, "código") + " {current.code}). " +
+			"<span class=\"act\"" + act("agentRestart", current.agent) + ">↻ " + tx(state, "Abrir de novo") + "</span></div>"
+	}
+	return ""
+}
+
 func panel(state: model.State): Str {
 	problems := state.pane is model.Pane.ProblemsPane
 	terminal := state.pane is model.Pane.TerminalPane
+	agent := state.pane is model.Pane.AgentPane
 	mut body := esc(state.output)
 	mut bodyClass := "body"
 	mut actions := headerAction("⌫", tx(state, "Limpar"), "clear", "")
@@ -1132,6 +1195,11 @@ func panel(state: model.State): Str {
 		bodyClass = "body termbody"
 		actions = headerAction("⌫", tx(state, "Limpar"), "termClear", "") +
 			headerAction("■", tx(state, "Encerrar o processo (reinicia o shell)"), "termRestart", "")
+	} else if agent {
+		body = agentNotice(state)
+		bodyClass = "body agentbody"
+		actions = agentPicker(state) +
+			headerAction("↻", tx(state, "Reiniciar o agente") + keyHint(state, "agentRestart"), "agentRestart", state.agents.current)
 	}
 	mut maxGlyph := "⤢"
 	mut maxTip := tx(state, "Maximizar painel")
@@ -1153,8 +1221,9 @@ func panel(state: model.State): Str {
 	}
 	return "<div class=\"head\">" +
 		paneTab(tx(state, "PROBLEMAS") + "  {len(state.diagnostics)}", "problems", problems) +
-		paneTab(tx(state, "SAÍDA"), "output", !problems && !terminal) +
+		paneTab(tx(state, "SAÍDA"), "output", !problems && !terminal && !agent) +
 		paneTab(tx(state, "TERMINAL"), "terminal", terminal) +
+		paneTab(tx(state, "AGENTE"), "agent", agent) +
 		"<span class=\"grow\"></span>" + actions +
 		headerAction(maxGlyph, maxTip + keyHint(state, "maximizePanel"), "panelMax", "") +
 		headerAction("✕", tx(state, "Fechar painel") + keyHint(state, "togglePanel"), "togglePanel", "") +
@@ -1386,7 +1455,7 @@ func frame(state: model.State): model.Frame {
 		region("popup", popup(state)),
 		region("find", findBox(state)),
 		region("palette", palette(state)),
-		region("panel", panel(state)),
+		region("panelview", panel(state)),
 		region("status", statusBar(state)),
 		region("overlay", overlay(state)),
 		region("vimbar", vimBar(state))
@@ -1448,8 +1517,45 @@ func frame(state: model.State): model.Frame {
 		vimScroll: state.vim.scroll,
 		clip: state.vim.clip,
 		clipSerial: state.vim.clipSerial,
-		vimAck: state.vim.acked
+		vimAck: state.vim.acked,
+		agentSessions: agentSessions(state),
+		agentShown: agentShown(state),
+		agentKeys: agentKeys(prefs.keymap),
+		textQuiet: state.textSerial == state.quietSerial
 	)
+}
+
+// Os terminais de agente que a página mantém conectados (inclusive os que
+// terminaram, para a última tela continuar à vista).
+func agentSessions(state: model.State): Int[dyn] {
+	mut Int[dyn] found = []
+	for each s in state.agents.sessions {
+		if s.session != 0 {
+			append(found, s.session)
+		}
+	}
+	return found
+}
+
+// Os atalhos que ainda valem com o foco no terminal de um agente; o resto das
+// teclas é do programa (Esc, Ctrl+C, Ctrl+R…).
+func agentKeys(keymap: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	for each action in ["agent", "togglePanel", "maximizePanel"] {
+		combo := keys.keysFor(keymap, action)
+		if combo != "" {
+			append(found, combo)
+		}
+	}
+	return found
+}
+
+// O terminal de agente à vista agora (0 = nenhum).
+func agentShown(state: model.State): Int {
+	if state.panelOpen && state.pane == model.Pane.AgentPane() {
+		return agents.sessionOf(state.agents, state.agents.current).session
+	}
+	return 0
 }
 
 func encodeFrame(state: model.State): Str {

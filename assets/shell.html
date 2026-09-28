@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>Hive Studio</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z' fill='%23f5a623'/%3E%3Cpath d='M16 10 21.2 13v6L16 22l-5.2-3v-6z' fill='%231b1d23' opacity='.82'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/vendor/xterm.css?token=__TOKEN__">
+<script src="/vendor/xterm.js?token=__TOKEN__"></script>
+<script src="/vendor/addon-fit.js?token=__TOKEN__"></script>
 <style id="theme"></style>
 <style>
 :root{--mono:"Cascadia Code","Cascadia Mono",Consolas,"JetBrains Mono","Fira Code",monospace}
@@ -136,6 +139,14 @@ button,input,select{font:inherit}
 #welcome tr.wl:hover td:first-child{text-decoration:underline}
 #panel{height:260px;flex:none;background:var(--panel);border-top:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
 #app.nopanel #panel,#app.nopanel #grip{display:none}
+#panelview{flex:1;display:flex;flex-direction:column;min-height:0}
+#app.agentpane #panelview{flex:none}
+#agenthost{display:none;flex:1;min-height:0;position:relative;margin:0 6px 4px 12px}
+#app.agentpane #agenthost{display:block}
+#agenthost .agentterm{position:absolute;inset:0}
+#panel .agentbody{flex:none}
+#panel .agentbody:empty{display:none}
+#panel .head .seg{font-size:11px}
 #grip{height:5px;margin-top:-3px;position:relative;z-index:5;cursor:ns-resize;flex:none}
 #grip:hover,#grip.drag{background:color-mix(in srgb,var(--accent) 70%,transparent)}
 #app.panelmax #work,#app.panelmax #tabs,#app.panelmax #crumbs{display:none}
@@ -334,7 +345,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			</div>
 			<div id="vimbar"></div>
 			<div id="grip" title="Arraste para redimensionar — duplo clique maximiza"></div>
-			<div id="panel"></div>
+			<div id="panel"><div id="panelview"></div><div id="agenthost"></div></div>
 		</div>
 	</div>
 	<div id="status"></div>
@@ -362,6 +373,9 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	var clipSerial = -1, composing = null;
 	var vimCursor = document.getElementById("vimcur");
 	var side = document.getElementById("side");
+	// Os terminais dos agentes (Claude Code, Codex, OpenCode): um xterm.js por
+	// sessão, ligado ao programa por um WebSocket próprio.
+	var agentHost = document.getElementById("agenthost"), agentTerms = {}, agentKeys = [];
 
 	// ── menus: abrir e fechar é só da página ──
 	function menuIndex(menu) {
@@ -444,10 +458,10 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	}
 
 	function apply(frame) {
-		if (sheet.textContent !== frame.css) { sheet.textContent = frame.css; charWidth = 0; }
+		if (sheet.textContent !== frame.css) { sheet.textContent = frame.css; charWidth = 0; restyleAgents(); }
 		document.title = frame.title;
 		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") +
-			(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "");
+			(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "") + (frame.agentShown ? " agentpane" : "");
 		if (!dragging) { panel.style.height = frame.panelHeight + "px"; }
 		for (var i = 0; i < frame.regions.length; i++) { region(frame.regions[i].id, frame.regions[i].html); }
 		if (document.activeElement === side) {
@@ -459,16 +473,26 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			if (menus[openMenu]) { menus[openMenu].classList.add("open"); }
 		}
 		keys = frame.keys; recording = frame.recording; popupOpen = frame.popup;
+		agentKeys = frame.agentKeys || [];
 		popup.classList.toggle("open", popupOpen);
 		vimMode = frame.vim || "";
 		vimAck = Math.max(vimAck, frame.vimAck || 0);
 		if (vimAck > vimSent) { vimSent = vimAck; }
 		code.classList.toggle("vimblock", vimMode !== "" && vimMode !== "insert");
 		var textChanged = frame.serial !== serial;
-		if (textChanged) {
+		if (textChanged && frame.textQuiet) {
+			// Relido do disco (um agente mudou o arquivo): troca o texto sem tirar o
+			// foco de ninguém e sem mexer na rolagem nem no cursor.
+			serial = frame.serial;
+			var top = ta.scrollTop, left = ta.scrollLeft, from = ta.selectionStart, to = ta.selectionEnd;
+			ta.value = frame.text;
+			try { ta.setSelectionRange(Math.min(from, frame.text.length), Math.min(to, frame.text.length)); } catch (e) {}
+			ta.scrollTop = top; ta.scrollLeft = left;
+		} else if (textChanged) {
 			serial = frame.serial;
 			ta.value = frame.text;
-			if (frame.layout === "edit" || frame.layout === "split") { ta.focus(); }
+			var typingInAgent = document.activeElement && document.activeElement.closest && document.activeElement.closest("#agenthost");
+			if ((frame.layout === "edit" || frame.layout === "split") && !typingInAgent) { ta.focus(); }
 			try { ta.setSelectionRange(frame.caret, frame.caret); } catch (e) {}
 			if (!vimMode) { reveal(frame.caret); }
 		}
@@ -476,6 +500,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			focusSerial = frame.focusSerial;
 			if (frame.focus === "editor") { ta.focus(); }
 			if (frame.focus === "explorer") { side.focus({ preventScroll: true }); }
+			if (frame.focus === "agent") { focusAgent = true; }
 			var wanted = document.querySelector('[data-input="' + frame.focus + '"]');
 			if (wanted) {
 				wanted.focus();
@@ -495,11 +520,14 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			}
 		}
 		if (vimMode && (frame.vimSerial > vimSerial || textChanged)) {
+			var quietOnly = textChanged && frame.textQuiet && !(frame.vimSerial > vimSerial);
 			vimSerial = frame.vimSerial;
 			try { ta.setSelectionRange(frame.selStart, frame.selEnd); } catch (e) {}
 			vimApplied = [ta.selectionStart, ta.selectionEnd];
 			vimCaret = frame.caret;
-			if (frame.vimScroll >= 0) { ta.scrollTop = frame.vimScroll * lineHeight(); } else { keepVisible(frame.caret); }
+			if (!quietOnly) {
+				if (frame.vimScroll >= 0) { ta.scrollTop = frame.vimScroll * lineHeight(); } else { keepVisible(frame.caret); }
+			}
 		}
 		if (frame.clipSerial !== clipSerial) {
 			// O que o "y" do Vim copiou vai também para a área de transferência.
@@ -508,8 +536,82 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 			}
 			clipSerial = frame.clipSerial;
 		}
+		syncAgents(frame);
 		sync();
 		if (popupOpen) { place(); }
+	}
+
+	// ── os terminais dos agentes ──
+	var focusAgent = false;
+	function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+	function agentTheme() {
+		return { background: cssVar("--panel"), foreground: cssVar("--text"), cursor: cssVar("--text"), cursorAccent: cssVar("--panel"),
+			selectionBackground: "rgba(128,128,128,.4)" };
+	}
+	function agentFont() { return parseInt(cssVar("--font-size"), 10) || 14; }
+	function bytesOf(encoded) {
+		var raw = atob(encoded), out = new Uint8Array(raw.length);
+		for (var i = 0; i < raw.length; i++) { out[i] = raw.charCodeAt(i); }
+		return out;
+	}
+	function restyleAgents() {
+		for (var key in agentTerms) {
+			agentTerms[key].term.options.theme = agentTheme();
+			agentTerms[key].term.options.fontSize = agentFont();
+			fitAgent(agentTerms[key]);
+		}
+	}
+	function fitAgent(item) {
+		if (!item || item.el.style.display === "none") { return; }
+		try { item.fit.fit(); } catch (e) {}
+		if (item.socket.readyState === 1) { item.socket.send("r" + item.term.cols + " " + item.term.rows); }
+	}
+	function openAgent(session) {
+		var el = document.createElement("div");
+		el.className = "agentterm"; el.style.display = "none";
+		agentHost.appendChild(el);
+		var term = new Terminal({ fontFamily: cssVar("--mono") || "monospace", fontSize: agentFont(), theme: agentTheme(),
+			cursorBlink: true, scrollback: 5000 });
+		var fit = new FitAddon.FitAddon();
+		term.loadAddon(fit);
+		term.open(el);
+		var socket = new WebSocket("ws://127.0.0.1:__WSPORT__/pty?session=" + session + "&token=" + encodeURIComponent(token));
+		var item = { term: term, fit: fit, socket: socket, el: el };
+		socket.onopen = function () { fitAgent(item); };
+		socket.onmessage = function (e) {
+			var data = e.data;
+			if (data.charAt(0) === "o") { term.write(bytesOf(data.slice(1))); }
+		};
+		term.onData(function (data) { if (socket.readyState === 1) { socket.send("i" + data); } });
+		term.onBinary(function (data) { if (socket.readyState === 1) { socket.send("b" + btoa(data)); } });
+		term.onResize(function (size) { if (socket.readyState === 1) { socket.send("r" + size.cols + " " + size.rows); } });
+		return item;
+	}
+	function syncAgents(frame) {
+		if (typeof Terminal === "undefined") { return; }
+		var live = frame.agentSessions || [], shown = frame.agentShown || 0;
+		for (var i = 0; i < live.length; i++) {
+			if (!agentTerms[live[i]]) { agentTerms[live[i]] = openAgent(live[i]); }
+		}
+		for (var key in agentTerms) {
+			var item = agentTerms[key], number = Number(key);
+			if (live.indexOf(number) < 0) {
+				try { item.socket.close(); } catch (e) {}
+				item.term.dispose(); item.el.remove(); delete agentTerms[key];
+				continue;
+			}
+			var visible = number === shown;
+			if ((item.el.style.display !== "none") !== visible) {
+				item.el.style.display = visible ? "" : "none";
+				if (visible) { fitAgent(item); }
+			}
+		}
+		if (focusAgent && agentTerms[shown]) { focusAgent = false; agentTerms[shown].term.focus(); }
+	}
+	if (window.ResizeObserver) {
+		new ResizeObserver(function () {
+			for (var key in agentTerms) { fitAgent(agentTerms[key]); }
+		}).observe(agentHost);
 	}
 
 	function sync() {
@@ -848,6 +950,12 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		var combo = comboOf(e);
 		if (recording) { e.preventDefault(); send({ kind: "key", text: combo, caret: ta.selectionStart }); return; }
 		if (e.key === "Escape" && openMenu !== null) { closeMenus(); return; }
+		// No terminal de um agente as teclas são do programa (Esc, Ctrl+C, Ctrl+R…),
+		// menos os poucos atalhos que saem dele: mostrar/ocultar o agente e o painel.
+		if (e.target.closest && e.target.closest("#agenthost")) {
+			if (agentKeys.indexOf(combo) >= 0) { e.preventDefault(); e.stopPropagation(); send({ kind: "key", text: combo, caret: 0 }); }
+			return;
+		}
 		// Com o foco no explorador, as teclas andam pela árvore (e, no modo Vim, abrem a linha de comando).
 		if (e.target === side && !(e.ctrlKey || e.metaKey || e.altKey) && e.key !== "Tab") {
 			var treeKey = vimKeyName(e);

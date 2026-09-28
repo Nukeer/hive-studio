@@ -28,6 +28,7 @@ func actions(): Action[dyn] {
 		Action("togglePanel", "Mostrar/ocultar painel (Problemas, Saída)", "Ctrl+`"),
 		Action("toggleSidebar", "Mostrar/ocultar barra lateral", "Ctrl+B"),
 		Action("terminal", "Terminal", "Ctrl+Shift+`"),
+		Action("agent", "Agente (Claude Code, Codex, OpenCode)", "Ctrl+Shift+A"),
 		Action("maximizePanel", "Maximizar/restaurar painel", "Ctrl+Shift+M"),
 		Action("explorer", "Explorador", "Ctrl+Shift+E"),
 		Action("git", "Controle de código (git)", "Ctrl+Shift+G"),

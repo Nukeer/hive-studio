@@ -14,10 +14,13 @@ type Settings {
 	panelHeight:   Int  -- JSON as panel_height; Default as 260;
 	language:      Str  -- Default as "pt-BR";
 	vim:           Bool -- Default as false;
+	claudeCommand:   Str -- JSON as claude_command; Default as "claude";
+	codexCommand:    Str -- JSON as codex_command; Default as "codex";
+	opencodeCommand: Str -- JSON as opencode_command; Default as "opencode";
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false)
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false, "claude", "codex", "opencode")
 }
 
 func envOr(name: Str, fallback: Str): Str {
@@ -66,7 +69,7 @@ func save(value: Settings): Result<Bool, Str> {
 }
 
 test "configurações vão e voltam em JSON, com padrões para o que falta" {
-	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true)
+	custom := Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true, "npx @anthropic-ai/claude-code", "codex", "opencode")
 	text := encode(custom, hive.json.codec())
 	if Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
 		assert back == custom
@@ -80,6 +83,8 @@ test "configurações vão e voltam em JSON, com padrões para o que falta" {
 		assert partial.fontSize == 14
 		assert partial.keymap == ""
 		assert !partial.vim
+		assert partial.claudeCommand == "claude"
+		assert partial.opencodeCommand == "opencode"
 	} else {
 		assert false
 	}

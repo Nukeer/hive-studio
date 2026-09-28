@@ -2908,6 +2908,14 @@ func command(ed: Editor, chars: Str[], name: Str, bang: Bool, args: Str, from: I
 		return effect(e, model.Msg.TermSubmit(args))
 	} else if isAny(name, ["Ex", "Explore", "Sex", "Sexplore", "Vex", "Vexplore", "Lex", "Lexplore", "Hex", "Hexplore", "Tex", "Texplore"]) {
 		return effect(ed, model.Msg.FocusExplorer(args))
+	} else if isAny(name, ["Agent", "Agente"]) {
+		return effect(ed, model.Msg.ShowAgent(search.lower(args)))
+	} else if name == "Claude" {
+		return effect(ed, model.Msg.ShowAgent("claude"))
+	} else if name == "Codex" {
+		return effect(ed, model.Msg.ShowAgent("codex"))
+	} else if isAny(name, ["OpenCode", "Opencode"]) {
+		return effect(ed, model.Msg.ShowAgent("opencode"))
 	} else if isAny(name, ["u", "un", "undo"]) {
 		return undoSteps(ed, 1, true)
 	} else if isAny(name, ["red", "redo"]) {
@@ -3577,6 +3585,10 @@ test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
 	assert submit(clean, "!ls").effects == [model.Msg.ShowPane(model.Pane.TerminalPane()), model.Msg.TermSubmit("ls")]
 	assert submit(clean, "Ex").effects == [model.Msg.FocusExplorer("")]
 	assert submit(clean, "Vex lib").effects == [model.Msg.FocusExplorer("lib")]
+	assert submit(clean, "Claude").effects == [model.Msg.ShowAgent("claude")]
+	assert submit(clean, "Codex").effects == [model.Msg.ShowAgent("codex")]
+	assert submit(clean, "OpenCode").effects == [model.Msg.ShowAgent("opencode")]
+	assert submit(clean, "Agent Codex").effects == [model.Msg.ShowAgent("codex")]
 	assert feed(clean, "gd").effects == [model.Msg.GotoDefinition(0)]
 	assert feed(clean, "ZZ").effects == [model.Msg.CloseDoc(2)]
 	history := submit(submit(feed(clean, ":"), "set nu"), "noh")
