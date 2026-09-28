@@ -54,70 +54,90 @@ proc page(token: Str, wsPort: Int, request: hive.net.HttpRequest): hive.net.Http
 // e `r<colunas> <linhas>`; para ela vão `o<saída em base64>` e, quando o
 // programa termina, `x<código>`. Nada disso passa pelo estado da janela.
 
+// Uma leitura do terminal mandada à página; `false` quando acabou (o
+// programa saiu ou a página fechou).
+proc ptyForward(conn: hive.net.WsConnection, session: Int): Bool {
+	chunk := pty.read(session, 40)
+	if chunk != "" {
+		if hive.net.wsSend(conn, "o" + chunk) is Result.Error(_) {
+			return false
+		}
+	}
+	if !pty.alive(session) {
+		rest := pty.read(session, 0)
+		if rest != "" {
+			_last := hive.net.wsSend(conn, "o" + rest)
+		}
+		_ended := hive.net.wsSend(conn, "x{pty.code(session)}")
+		return false
+	}
+	return true
+}
+
 proc ptyOutput(conn: hive.net.WsConnection, session: Int): void {
-	for ;; {
-		chunk := pty.read(session, 40)
-		if chunk != "" {
-			if hive.net.wsSend(conn, "o" + chunk) is Result.Error(_) {
-				return
-			}
-		}
-		if !pty.alive(session) {
-			rest := pty.read(session, 0)
-			if rest != "" {
-				_last := hive.net.wsSend(conn, "o" + rest)
-			}
-			_ended := hive.net.wsSend(conn, "x{pty.code(session)}")
-			return
-		}
+	for ; ptyForward(conn, session); {
 	}
 }
 
 proc ptyClient(conn: hive.net.WsConnection, session: Int): void {
 	async ptyOutput(conn, session)
-	for ;; {
-		received := hive.net.wsReceive(conn)
-		if received is Result.Ok(message) {
-			if message is "i{typed}" {
-				_typed := pty.write(session, typed)
-			} else if message is "b{encoded}" {
-				if hive.crypto.base64Decode(encoded) is Result.Ok(raw) {
-					_raw := pty.write(session, raw)
-				}
-			} else if message is "r{cols} {rows}" {
-				if hive.conv.sti(cols) is Result.Ok(width) {
-					if hive.conv.sti(rows) is Result.Ok(height) {
-						_resized := pty.resize(session, width, height)
-					}
+	for ; ptyInput(conn, session); {
+	}
+}
+
+// Uma mensagem da página para o terminal (tecla, bytes ou novo tamanho);
+// `false` quando a página fechou.
+proc ptyInput(conn: hive.net.WsConnection, session: Int): Bool {
+	received := hive.net.wsReceive(conn)
+	if received is Result.Ok(message) {
+		if message is "i{typed}" {
+			_typed := pty.write(session, typed)
+		} else if message is "b{encoded}" {
+			if hive.crypto.base64Decode(encoded) is Result.Ok(raw) {
+				_raw := pty.write(session, raw)
+			}
+		} else if message is "r{cols} {rows}" {
+			if hive.conv.sti(cols) is Result.Ok(width) {
+				if hive.conv.sti(rows) is Result.Ok(height) {
+					_resized := pty.resize(session, width, height)
 				}
 			}
-		} else {
-			return
 		}
+		return true
 	}
+	return false
 }
 
 // Manda um frame novo sempre que algo mudou sem a página pedir — um build que
 // terminou, por exemplo. Para quando a conexão cai.
-proc pusher(db: hive.syslink.Address, conn: hive.net.WsConnection): void {
-	mut last := -1
-	for ;; {
-		asked := db(model.Cmd.Pulse())
-		if asked is Result.Ok(reply) {
-			if reply is model.Cmd.PulseIs(n) {
-				if n != last {
-					last = n
-					rendered := db(model.Cmd.Render())
-					if rendered is Result.Ok(answer) {
-						if answer is model.Cmd.Reply(frame) {
-							if hive.net.wsSend(conn, frame) is Result.Error(_) {
-								return
-							}
+// Uma volta do pusher: se o pulso mudou desde `last`, manda o frame. Devolve o
+// pulso visto, ou -2 quando a conexão caiu.
+proc pushOnce(db: hive.syslink.Address, conn: hive.net.WsConnection, last: Int): Int {
+	asked := db(model.Cmd.Pulse())
+	if asked is Result.Ok(reply) {
+		if reply is model.Cmd.PulseIs(n) {
+			if n != last {
+				rendered := db(model.Cmd.Render())
+				if rendered is Result.Ok(answer) {
+					if answer is model.Cmd.Reply(frame) {
+						if hive.net.wsSend(conn, frame) is Result.Error(_) {
+							return -2
 						}
 					}
 				}
 			}
-		} else {
+			return n
+		}
+		return last
+	}
+	return -2
+}
+
+proc pusher(db: hive.syslink.Address, conn: hive.net.WsConnection): void {
+	mut last := -1
+	for ;; {
+		last = pushOnce(db, conn, last)
+		if last == -2 {
 			return
 		}
 		hive.task.sleep(200)
@@ -137,6 +157,23 @@ proc closeIfIdle(db: hive.syslink.Address): void {
 	}
 }
 
+// Um evento da página, respondido com o frame; `false` quando a página fechou.
+proc answerOnce(db: hive.syslink.Address, conn: hive.net.WsConnection): Bool {
+	received := hive.net.wsReceive(conn)
+	if received is Result.Ok(text) {
+		answered := db(model.Cmd.Ui(text))
+		if answered is Result.Ok(reply) {
+			if reply is model.Cmd.Reply(frame) {
+				if hive.net.wsSend(conn, frame) is Result.Error(_) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
 proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): void {
 	url := hive.net.wsRequest(conn).url
 	if !hasToken(url, token) {
@@ -152,20 +189,7 @@ proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): 
 	}
 	async db(model.Cmd.Post(model.Msg.Connected()))
 	async pusher(db, conn)
-	for ;; {
-		received := hive.net.wsReceive(conn)
-		if received is Result.Ok(text) {
-			answered := db(model.Cmd.Ui(text))
-			if answered is Result.Ok(reply) {
-				if reply is model.Cmd.Reply(frame) {
-					if hive.net.wsSend(conn, frame) is Result.Error(_) {
-						break
-					}
-				}
-			}
-		} else {
-			break
-		}
+	for ; answerOnce(db, conn); {
 	}
 	async db(model.Cmd.Post(model.Msg.Disconnected()))
 	async closeIfIdle(db)
@@ -230,19 +254,23 @@ proc launch(url: Str, profile: Str, preferred: Str): Str {
 }
 
 // Uma porta livre: tenta algumas e fica com a primeira que ninguém atende.
+// A porta está livre se ninguém responde nela.
+proc isFree(port: Int): Bool {
+	opened := hive.net.socketConnect("127.0.0.1", port)
+	if opened is Result.Ok(conn) {
+		hive.net.socketClose(conn)
+		return false
+	}
+	return true
+}
+
+// Duas portas seguidas livres (a página e o WebSocket).
 proc freePort(): Int {
+	seed := hive.time.now() + hive.time.millisecond() * 7
 	for attempt := 0; attempt < 20; attempt++ {
-		candidate := 41000 + ((hive.time.now() + hive.time.millisecond() * 7 + attempt * 131) % 900) * 2
-		first := hive.net.socketConnect("127.0.0.1", candidate)
-		second := hive.net.socketConnect("127.0.0.1", candidate + 1)
-		if first is Result.Error(_) && second is Result.Error(_) {
+		candidate := 41000 + ((seed + attempt * 131) % 900) * 2
+		if isFree(candidate) && isFree(candidate + 1) {
 			return candidate
-		}
-		if first is Result.Ok(conn) {
-			hive.net.socketClose(conn)
-		}
-		if second is Result.Ok(conn) {
-			hive.net.socketClose(conn)
 		}
 	}
 	return 41777

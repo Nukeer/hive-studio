@@ -543,16 +543,35 @@ func changeWordEnd(chars: Str[], pos: Int, big: Bool, count: Int): Int {
 }
 
 // `}`: a próxima linha vazia (ou o fim do texto).
+// Anda linha a linha a partir de `s` enquanto elas forem vazias (`empty`) ou
+// não, para a frente ou para trás.
+func skipLines(chars: Str[], from: Int, empty: Bool, forward: Bool): Int {
+	size := len(chars)
+	mut s := from
+	for ;; {
+		if forward && s >= size {
+			return s
+		}
+		if !forward && s <= 0 {
+			return s
+		}
+		if isEmptyAt(chars, s) != empty {
+			return s
+		}
+		if forward {
+			s = lineEnd(chars, s) + 1
+		} else {
+			s = lineStart(chars, s - 1)
+		}
+	}
+	return s
+}
+
 func paragraphForward(chars: Str[], pos: Int, count: Int): Int {
 	size := len(chars)
 	mut s := lineStart(chars, pos)
 	for n := 0; n < count; n++ {
-		for ; s < size && isEmptyAt(chars, s); {
-			s = lineEnd(chars, s) + 1
-		}
-		for ; s < size && !isEmptyAt(chars, s); {
-			s = lineEnd(chars, s) + 1
-		}
+		s = skipLines(chars, skipLines(chars, s, true, true), false, true)
 	}
 	if s >= size {
 		return size
@@ -564,12 +583,7 @@ func paragraphForward(chars: Str[], pos: Int, count: Int): Int {
 func paragraphBack(chars: Str[], pos: Int, count: Int): Int {
 	mut s := lineStart(chars, pos)
 	for n := 0; n < count; n++ {
-		for ; s > 0 && isEmptyAt(chars, s); {
-			s = lineStart(chars, s - 1)
-		}
-		for ; s > 0 && !isEmptyAt(chars, s); {
-			s = lineStart(chars, s - 1)
-		}
+		s = skipLines(chars, skipLines(chars, s, true, false), false, false)
 	}
 	return s
 }
@@ -1377,6 +1391,22 @@ func unindent(line: Str, tab: Int): Str {
 	return rest
 }
 
+// Uma linha indentada (ou desindentada) `levels` níveis. Linha vazia não ganha
+// indentação.
+func shiftedLine(line: Str, unit: Str, right: Bool, levels: Int, tab: Int): Str {
+	if right {
+		if line == "" {
+			return line
+		}
+		return repeatText(unit, levels) + line
+	}
+	mut rest := line
+	for n := 0; n < levels; n++ {
+		rest = unindent(rest, tab)
+	}
+	return rest
+}
+
 // `>` e `<`: indenta ou desindenta as linhas do trecho, `levels` vezes.
 proc shiftLines(ed: mut Editor, chars: Str[], span: Span, right: Bool, levels: Int): void {
 	first := lineOf(chars, span.from)
@@ -1385,15 +1415,7 @@ proc shiftLines(ed: mut Editor, chars: Str[], span: Span, right: Bool, levels: I
 	mut Str[dyn] lines = split(ed.text, "\n")
 	for l := first; l <= last; l++ {
 		if lines bounds l {
-			mut line := lines[l]
-			for n := 0; n < levels; n++ {
-				if right && line != "" {
-					line = unit + line
-				} else if !right {
-					line = unindent(line, ed.tab)
-				}
-			}
-			lines[l] = line
+			lines[l] = shiftedLine(lines[l], unit, right, levels, ed.tab)
 		}
 	}
 	text := join(lines, "\n")
@@ -2767,11 +2789,9 @@ func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Ad
 	mut ok := false
 	c := at(cmd, i)
 	if highlight.isDigit(c) {
-		mut value := 0
-		for ; highlight.isDigit(at(cmd, i)); i++ {
-			value = value * 10 + digitOf(at(cmd, i))
-		}
-		line = value - 1
+		number := numberAt(cmd, i)
+		line = number.value - 1
+		i = number.next
 		ok = true
 	} else if c == "." {
 		i++
@@ -2789,16 +2809,15 @@ func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Ad
 		i = i + 2
 		ok = true
 	}
-	for ; at(cmd, i) == "+" || at(cmd, i) == "-"; {
+	for ;; {
 		sign := at(cmd, i)
-		i++
-		mut value := 0
-		mut digits := false
-		for ; highlight.isDigit(at(cmd, i)); i++ {
-			value = value * 10 + digitOf(at(cmd, i))
-			digits = true
+		if sign != "+" && sign != "-" {
+			break
 		}
-		if !digits {
+		number := numberAt(cmd, i + 1)
+		i = number.next
+		mut value := number.value
+		if number.next == number.from {
 			value = 1
 		}
 		if sign == "+" {
@@ -2809,6 +2828,27 @@ func address(cmd: Str[], start: Int, current: Int, final: Int, v: model.Vim): Ad
 		ok = true
 	}
 	return Address(line, i, ok)
+}
+
+// Um número escrito a partir de `from`: o valor e onde ele acaba (`next` igual
+// a `from` quando não há dígito ali).
+type Number {
+	value: Int
+	from:  Int
+	next:  Int
+}
+
+func numberAt(cmd: Str[], from: Int): Number {
+	mut value := 0
+	mut i := from
+	for ; i < len(cmd); i++ {
+		d := digitOf(at(cmd, i))
+		if d < 0 {
+			break
+		}
+		value = value * 10 + d
+	}
+	return Number(value, from, i)
 }
 
 // Lê `[intervalo]comando[!] [argumentos]` e executa.
@@ -3138,15 +3178,7 @@ proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): vo
 			}
 			found := occurrencesOf(line, pattern, sensitive, limit)
 			if len(found) > 0 {
-				mut Str[dyn] out = []
-				mut previous := 0
-				for each p in found {
-					append(out, slice(line, previous, p))
-					append(out, join(pieces, slice(line, p, p + size)))
-					previous = p + size
-				}
-				append(out, complete.skip(line, previous))
-				lines[l] = join(out, "")
+				lines[l] = replacedIn(line, found, size, pieces)
 				replaced = replaced + len(found)
 				touched++
 				lastTouched = l
@@ -3164,6 +3196,20 @@ proc substitute(ed: mut Editor, chars: Str[], args: Str, from: Int, to: Int): vo
 	ed.text = join(lines, "\n")
 	ed.caret = firstNonBlank(split(ed.text, ""), offsetOfLine(lines, lastTouched))
 	sayTwo(ed, "%1 substituição(ões) em %2 linha(s)", "{replaced}", "{touched}")
+}
+
+// A linha com cada ocorrência (em `found`, de `size` caracteres) trocada pela
+// troca do `:s`, com `&` (entre os `pieces`) valendo o trecho achado.
+func replacedIn(line: Str, found: Int[], size: Int, pieces: Str[]): Str {
+	mut Str[dyn] out = []
+	mut previous := 0
+	for each p in found {
+		append(out, slice(line, previous, p))
+		append(out, join(pieces, slice(line, p, p + size)))
+		previous = p + size
+	}
+	append(out, complete.skip(line, previous))
+	return join(out, "")
 }
 
 // `:m` (mover) e `:t` (copiar) as linhas `from`–`to` para depois de `after`

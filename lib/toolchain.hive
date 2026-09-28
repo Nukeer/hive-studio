@@ -108,6 +108,43 @@ proc put(copy: Str, text: Str): void {
 	_written := hive.file.write(copy, text)
 }
 
+// Um arquivo do programa na cópia: o texto do editor (se tem alterações por
+// salvar), ou o do disco, que só é relido e regravado se mudou de tamanho ou
+// de data. `Error` quando ele não existe mais.
+proc syncOne(mirror: Str, root: Str, rel: Str, edited: hive.map.Map<Str, Str>, before: hive.map.Map<Str, Copied>): Result<Copied, Bool> {
+	copy := mirror + "/" + rel
+	if hive.map.get(edited, rel) is Result.Ok(text) {
+		put(copy, text)
+		return Result.Ok(Copied(rel, "overlay", localImports(text, rel)))
+	}
+	path := workspace.joinPath(root, rel)
+	if native.stamp(path) is Result.Ok(current) {
+		if hive.map.get(before, rel) is Result.Ok(old) {
+			if old.stamp == current {
+				return Result.Ok(Copied(rel, current, old.imports))
+			}
+		}
+		mut Str[dyn] imports = []
+		if hive.file.read(path) is Result.Ok(content) {
+			put(copy, content)
+			if rel is "{stem}.hive" {
+				imports = localImports(content, rel)
+			}
+		}
+		return Result.Ok(Copied(rel, current, imports))
+	}
+	return Result.Error(false)
+}
+
+// Apaga da cópia os arquivos da lista que não fazem mais parte do programa.
+proc dropStale(mirror: Str, files: Str[], kept: hive.map.Map<Str, Bool>): void {
+	for each rel in files {
+		if !hive.map.has(kept, rel) {
+			_gone := hive.file.delete(mirror + "/" + rel)
+		}
+	}
+}
+
 // Deixa em `mirror` só o programa que `target` importa, em cadeia, com o texto
 // não salvo dos documentos abertos. Um arquivo que não mudou desde a última
 // vez (mesmo tamanho e data) não é relido nem regravado; o que saiu do
@@ -147,51 +184,24 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 			continue
 		}
 		hive.map.set(seen, rel, true)
-		copy := mirror + "/" + rel
-		mut stamp := ""
-		mut Str[dyn] imports = []
-		if hive.map.get(edited, rel) is Result.Ok(text) {
-			stamp = "overlay"
-			put(copy, text)
-			imports = localImports(text, rel)
-		} else if native.stamp(workspace.joinPath(root, rel)) is Result.Ok(current) {
-			stamp = current
-			mut fresh := true
-			if hive.map.get(before, rel) is Result.Ok(old) {
-				if old.stamp == current {
-					imports = old.imports
-					fresh = false
-				}
+		if syncOne(mirror, root, rel, edited, before) is Result.Ok(copied) {
+			append(now, copied)
+			hive.map.set(kept, rel, true)
+			for each i in copied.imports {
+				append(pending, i)
 			}
-			if fresh {
-				if hive.file.read(workspace.joinPath(root, rel)) is Result.Ok(content) {
-					put(copy, content)
-					if rel is "{stem}.hive" {
-						imports = localImports(content, rel)
-					}
-				}
-			}
-		} else {
-			continue
-		}
-		append(now, Copied(rel, stamp, imports))
-		hive.map.set(kept, rel, true)
-		for each i in imports {
-			append(pending, i)
 		}
 	}
-	for each rel in hive.map.keys(before) {
-		if !hive.map.has(kept, rel) {
-			_gone := hive.file.delete(mirror + "/" + rel)
-		}
-	}
+	dropStale(mirror, hive.map.keys(before), kept)
 	// Sem registro (a primeira vez, ou uma cópia antiga): o que sobrar sai.
 	if first {
+		mut Str[dyn] copies = []
 		for each rel in search.allFiles(mirror, true, 20000) {
-			if (rel is "{stem}.hive" || rel is "{stem}.go") && !hive.map.has(kept, rel) {
-				_gone := hive.file.delete(mirror + "/" + rel)
+			if rel is "{stem}.hive" || rel is "{stem}.go" {
+				append(copies, rel)
 			}
 		}
+		dropStale(mirror, copies, kept)
 	}
 	_made := hive.file.makeDir(mirror)
 	_saved := hive.file.write(manifest, manifestText(now))

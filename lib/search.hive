@@ -99,6 +99,48 @@ type ProjectResult {
 	truncated: Bool
 }
 
+// As linhas de um arquivo onde `needle` aparece (em `folded`, o texto já em
+// minúsculas quando a busca não diferencia), no máximo `room`.
+func hitsIn(rel: Str, clean: Str, folded: Str, needle: Str, room: Int): ProjectResult {
+	mut model.Hit[dyn] hits = []
+	lines := split(clean, "\n")
+	search := split(folded, "\n")
+	for i := 0; i < len(lines); i++ {
+		if search bounds i && lines bounds i {
+			if indexOf(search[i], needle) is Result.Ok(column) {
+				if len(hits) >= room {
+					return ProjectResult(hits, 1, true)
+				}
+				append(hits, model.Hit(rel, i + 1, column, lines[i]))
+			}
+		}
+	}
+	return ProjectResult(hits, 1, false)
+}
+
+// Um arquivo (até 1 MB): o que não tem o termo é descartado antes de ser
+// partido em linhas, e as minúsculas são feitas uma vez para ele todo.
+proc searchFile(root: Str, rel: Str, needle: Str, caseSensitive: Bool, room: Int): ProjectResult {
+	model.Hit[dyn] none = []
+	path := workspace.joinPath(root, rel)
+	if hive.file.size(path) is Result.Ok(bytes) {
+		if bytes >= 1000000 {
+			return ProjectResult(none, 0, false)
+		}
+	}
+	if hive.file.read(path) is Result.Ok(content) {
+		clean := replaceAll(content, "\r", "")
+		mut haystack := clean
+		if !caseSensitive {
+			haystack = lower(clean)
+		}
+		if indexOf(haystack, needle) is Result.Ok(_) {
+			return hitsIn(rel, clean, haystack, needle, room)
+		}
+	}
+	return ProjectResult(none, 0, false)
+}
+
 proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool, limit: Int): ProjectResult {
 	mut model.Hit[dyn] hits = []
 	mut files := 0
@@ -114,41 +156,14 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 	}
 	for each rel in allFiles(root, showHidden, 20000) {
 		if isTextFile(rel) && !truncated {
-			path := workspace.joinPath(root, rel)
-			mut small := true
-			if hive.file.size(path) is Result.Ok(bytes) {
-				small = bytes < 1000000
+			found := searchFile(root, rel, needle, caseSensitive, limit - len(hits))
+			for each hit in found.hits {
+				append(hits, hit)
 			}
-			if small {
-				if hive.file.read(path) is Result.Ok(content) {
-					clean := replaceAll(content, "\r", "")
-					mut haystack := clean
-					if !caseSensitive {
-						haystack = lower(clean)
-					}
-					if indexOf(haystack, needle) is Result.Error(_) {
-						continue
-					}
-					mut matched := false
-					lines := split(clean, "\n")
-					folded := split(haystack, "\n")
-					for i := 0; i < len(lines) && !truncated; i++ {
-						if folded bounds i && lines bounds i {
-							if indexOf(folded[i], needle) is Result.Ok(column) {
-								if len(hits) < limit {
-									append(hits, model.Hit(rel, i + 1, column, lines[i]))
-									matched = true
-								} else {
-									truncated = true
-								}
-							}
-						}
-					}
-					if matched {
-						files++
-					}
-				}
+			if len(found.hits) > 0 {
+				files++
 			}
+			truncated = found.truncated
 		}
 	}
 	return ProjectResult(hits, files, truncated)

@@ -105,6 +105,14 @@ func locate(message: Str): Located {
 	return Located("", "", message)
 }
 
+// Um trecho curto e sem reticências (que a mensagem usa para abreviar).
+func usable(piece: Str): Bool {
+	if piece == "" || len(piece) > 40 {
+		return false
+	}
+	return indexOf(piece, "...") is Result.Error(_) && indexOf(piece, "…") is Result.Error(_)
+}
+
 // Os trechos entre crases da mensagem, que costumam ser código da linha
 // errada (`3` em "cannot prove `3` is in range").
 func fragments(message: Str): Str[dyn] {
@@ -117,7 +125,7 @@ func fragments(message: Str): Str[dyn] {
 			if piece is "{module}_{digits is (\d+)}_{name}" {
 				piece = name
 			}
-			if piece != "" && len(piece) <= 40 && indexOf(piece, "...") is Result.Error(_) && indexOf(piece, "…") is Result.Error(_) {
+			if usable(piece) {
 				append(found, piece)
 			}
 		}
@@ -133,6 +141,17 @@ func weight(piece: Str): Int {
 		}
 	}
 	return 1
+}
+
+// Quantos trechos da mensagem a linha tem (os que não são só um nome valem 2).
+func scoreOf(line: Str, pieces: Str[]): Int {
+	mut score := 0
+	for each piece in pieces {
+		if indexOf(line, piece) is Result.Ok(_) {
+			score = score + weight(piece)
+		}
+	}
+	return score
 }
 
 // A linha do corpo da declaração (começando em `line`) com mais trechos da
@@ -151,12 +170,7 @@ func refineLine(text: Str, line: Int, message: Str): Int {
 			if current == "}" {
 				break
 			}
-			mut score := 0
-			for each piece in pieces {
-				if indexOf(current, piece) is Result.Ok(_) {
-					score = score + weight(piece)
-				}
-			}
+			score := scoreOf(current, pieces)
 			if score > bestScore {
 				best = row + 1
 				bestScore = score
@@ -224,30 +238,12 @@ func importsOf(text: Str, folder: Str): ModuleRef[dyn] {
 
 // A linha `line` (a partir de 1) de um texto, sem partir o texto inteiro.
 func lineText(text: Str, line: Int): Str {
-	if line < 1 {
-		return ""
+	lines := split(text, "\n")
+	index := line - 1
+	if lines bounds index {
+		return lines[index]
 	}
-	mut rest := text
-	for n := 1; n < line; n++ {
-		if indexOf(rest, "\n") is Result.Ok(at) {
-			next := at + 1
-			if rest bounds next {
-				rest = rest[next:]
-			} else {
-				return ""
-			}
-		} else {
-			return ""
-		}
-	}
-	if indexOf(rest, "\n") is Result.Ok(end) {
-		last := end - 1
-		if rest bounds last {
-			return rest[:last]
-		}
-		return ""
-	}
-	return rest
+	return ""
 }
 
 // O módulo de `vim.keyStep` é `vim`; o de `update` é o próprio arquivo ("").

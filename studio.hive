@@ -108,21 +108,39 @@ func capLog(text: Str): Str {
 
 // Relê do disco os documentos abertos de um arquivo que o git mudou.
 proc reloadDocsOf(state: mut model.State, rel: Str): void {
-	mut model.Doc[dyn] docs = state.docs
-	for i := 0; i < len(docs); i++ {
-		doc := docs[i]
-		if render.relPath(state, doc.path) == rel {
-			if hive.file.read(doc.path) is Result.Ok(raw) {
-				text := replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n")
-				mut fresh := doc
-				retext(fresh, text)
-				fresh.saved = text
-				docs[i] = fresh
+	for i := 0; i < len(state.docs); i++ {
+		mut path := ""
+		if state.docs bounds i {
+			path = state.docs[i].path
+		}
+		if path != "" && render.relPath(state, path) == rel {
+			reloadDoc(state, i)
+		}
+	}
+	state.textSerial = state.textSerial + 1
+}
+
+// O documento `i` relido do disco, como está lá agora.
+proc reloadDoc(state: mut model.State, i: Int): void {
+	if state.docs bounds i {
+		if diskText(state.docs[i].path) is Result.Ok(text) {
+			retext(state.docs[i], text)
+			if state.docs bounds i {
+				state.docs[i].saved = text
 			}
 		}
 	}
-	state.docs = docs
-	state.textSerial = state.textSerial + 1
+}
+
+// O texto de um arquivo, com as quebras de linha de qualquer sistema como "\n".
+proc diskText(path: Str): Result<Str, Str> {
+	read := hive.file.read(path)
+	if read is Result.Ok(raw) {
+		return Result.Ok(replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n"))
+	} else if read is Result.Error(why) {
+		return Result.Error(why.reason)
+	}
+	return Result.Error("")
 }
 
 // Um agente (ou outro programa) mudou um arquivo aberto: o que não tem nada por
@@ -132,62 +150,11 @@ proc reloadDocsOf(state: mut model.State, rel: Str): void {
 // Só o documento à vista muda o editor, e sem tirar o foco de ninguém
 // (`quietSerial`).
 proc refreshFromDisk(state: mut model.State): void {
-	mut model.Doc[dyn] docs = state.docs
-	mut changed := false
 	mut activeChanged := false
-	for i := 0; i < len(docs); i++ {
-		doc := docs[i]
-		read := hive.file.read(doc.path)
-		if read is Result.Ok(raw) {
-			text := replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n")
-			mut current := doc
-			if doc.gone {
-				current.gone = false
-				if docs bounds i {
-					docs[i] = current
-				}
-				changed = true
-			}
-			if text != doc.saved {
-				if model.dirty(doc) {
-					state.status = doc.name + " " + render.tx(state, "mudou no disco — salvar agora sobrescreve essa mudança")
-				} else {
-					mut fresh := current
-					mut model.Snapshot[dyn] undo = doc.undo
-					append(undo, model.Snapshot(doc.text, state.caret))
-					if len(undo) > vim.undoLimit() {
-						if undo bounds 0 {
-							drop(undo, 0, 0)
-						}
-					}
-					model.Snapshot[dyn] none = []
-					retext(fresh, text)
-					fresh.saved = text
-					fresh.undo = undo
-					fresh.redo = none
-					if docs bounds i {
-						docs[i] = fresh
-					}
-					changed = true
-					if i == state.active {
-						activeChanged = true
-					}
-				}
-			}
-		} else if read is Result.Error(why) {
-			if why.reason == "NotFound" && !doc.gone {
-				mut lost := doc
-				lost.gone = true
-				if docs bounds i {
-					docs[i] = lost
-				}
-				changed = true
-				state.status = doc.name + " " + render.tx(state, "foi apagado do disco")
-			}
+	for i := 0; i < len(state.docs); i++ {
+		if refreshDoc(state, i) && i == state.active {
+			activeChanged = true
 		}
-	}
-	if changed {
-		state.docs = docs
 	}
 	if activeChanged {
 		state.textSerial = state.textSerial + 1
@@ -195,16 +162,89 @@ proc refreshFromDisk(state: mut model.State): void {
 	}
 }
 
+// O documento `i` comparado com o disco; `true` quando o texto dele foi relido.
+proc refreshDoc(state: mut model.State, i: Int): Bool {
+	mut path := ""
+	mut name := ""
+	mut current := ""
+	mut saved := ""
+	mut gone := false
+	if state.docs bounds i {
+		path = state.docs[i].path
+		name = state.docs[i].name
+		current = state.docs[i].text
+		saved = state.docs[i].saved
+		gone = state.docs[i].gone
+	}
+	if path == "" {
+		return false
+	}
+	read := diskText(path)
+	if read is Result.Error(reason) {
+		if reason == "NotFound" && !gone {
+			if state.docs bounds i {
+				state.docs[i].gone = true
+			}
+			state.status = name + " " + render.tx(state, "foi apagado do disco")
+		}
+		return false
+	}
+	mut text := ""
+	if read is Result.Ok(fresh) {
+		text = fresh
+	}
+	if gone {
+		if state.docs bounds i {
+			state.docs[i].gone = false
+		}
+	}
+	if text == saved {
+		return false
+	}
+	if current != saved {
+		state.status = name + " " + render.tx(state, "mudou no disco — salvar agora sobrescreve essa mudança")
+		return false
+	}
+	if state.docs bounds i {
+		mut model.Snapshot[dyn] undo = state.docs[i].undo
+		append(undo, model.Snapshot(current, state.caret))
+		if len(undo) > vim.undoLimit() {
+			if undo bounds 0 {
+				drop(undo, 0, 0)
+			}
+		}
+		model.Snapshot[dyn] none = []
+		retext(state.docs[i], text)
+		if state.docs bounds i {
+			state.docs[i].saved = text
+		}
+		if state.docs bounds i {
+			state.docs[i].undo = undo
+		}
+		if state.docs bounds i {
+			state.docs[i].redo = none
+		}
+		return true
+	}
+	return false
+}
+
 // Um arquivo ou pasta criado, apagado ou renomeado por fora aparece (ou some)
 // na árvore; pastas expandidas que sumiram saem da lista, e as cores do git
 // acompanham.
-proc refreshTree(state: mut model.State): void {
-	mut Str[dyn] expanded = []
-	for each folder in state.expanded {
+// As pastas da lista que ainda existem.
+proc existing(folders: Str[]): Str[dyn] {
+	mut Str[dyn] found = []
+	for each folder in folders {
 		if hive.file.exists(folder) {
-			append(expanded, folder)
+			append(found, folder)
 		}
 	}
+	return found
+}
+
+proc refreshTree(state: mut model.State): void {
+	expanded := existing(state.expanded)
 	fresh := workspace.buildTree(state.root, 0, expanded, state.settings.showHidden)
 	if fresh == state.tree && len(expanded) == len(state.expanded) {
 		return
@@ -230,6 +270,27 @@ func watchedFolders(state: model.State): Str[dyn] {
 		}
 	}
 	return folders
+}
+
+// Vigia a raiz, as pastas expandidas e as dos arquivos abertos. Montada aqui,
+// e não com `watchedFolders`: uma função que devolve uma lista feita do
+// estado obriga o compilador a copiar o estado de quem vai alterá-lo depois.
+proc watchFolders(state: mut model.State): void {
+	mut Str[dyn] folders = [state.root]
+	for each folder in state.expanded {
+		if indexOf(folders, folder) is Result.Error(_) {
+			append(folders, folder)
+		}
+	}
+	for i := 0; i < len(state.docs); i++ {
+		if state.docs bounds i {
+			parent := workspace.parentOf(state.docs[i].path)
+			if indexOf(folders, parent) is Result.Error(_) {
+				append(folders, parent)
+			}
+		}
+	}
+	_watching := watch.set(folders)
 }
 
 // Espera o disco mudar e avisa a janela na hora. Sem aviso (uma pasta de rede,
@@ -355,35 +416,35 @@ proc openDoc(state: mut model.State, path: Str): void {
 	}
 }
 
-proc saveDoc(doc: model.Doc): Result<model.Doc, Str> {
+// Grava o documento e o marca como salvo. Devolve o erro, ou "".
+proc saveDoc(doc: mut model.Doc): Str {
 	mut contents := doc.text
 	if doc.eol == "\r\n" {
 		contents = replaceAll(doc.text, "\n", "\r\n")
 	}
 	if hive.file.write(doc.path, contents) is Result.Error(why) {
-		return Result.Error("não foi possível salvar {doc.name}: {why.message}")
+		return "não foi possível salvar {doc.name}: {why.message}"
 	}
-	mut saved := doc
-	saved.saved = doc.text
-	saved.gone = false
-	return Result.Ok(saved)
+	doc.saved = doc.text
+	doc.gone = false
+	return ""
 }
 
 proc saveAll(state: mut model.State): void {
-	mut model.Doc[dyn] docs = state.docs
 	mut count := 0
-	for i := 0; i < len(docs); i++ {
-		if model.dirty(docs[i]) {
-			outcome := saveDoc(docs[i])
-			if outcome is Result.Ok(doc) {
-				docs[i] = doc
-				count++
-			} else if outcome is Result.Error(why) {
-				state.status = why
+	for i := 0; i < len(state.docs); i++ {
+		mut failure := "-"
+		if state.docs bounds i {
+			if state.docs[i].text != state.docs[i].saved {
+				failure = saveDoc(state.docs[i])
 			}
 		}
+		if failure == "" {
+			count++
+		} else if failure != "-" {
+			state.status = failure
+		}
 	}
-	state.docs = docs
 	if count > 0 {
 		state.status = "{count} " + render.tx(state, "arquivo(s) salvo(s)")
 	}
@@ -463,9 +524,33 @@ proc withText(state: mut model.State, text: Str): void {
 	}
 }
 
+// Leituras do documento à vista. Devolvem só texto ou um booleano, e não o
+// documento: uma função que devolve parte do estado obriga o compilador a
+// copiar o estado inteiro de quem ainda vai alterá-lo.
 func activeText(state: model.State): Str {
-	if render.activeDoc(state) is Result.Ok(doc) {
-		return doc.text
+	index := state.active
+	if state.docs bounds index {
+		return state.docs[index].text
+	}
+	return ""
+}
+
+func hasDoc(state: model.State): Bool {
+	return state.docs bounds state.active
+}
+
+func activeName(state: model.State): Str {
+	index := state.active
+	if state.docs bounds index {
+		return state.docs[index].name
+	}
+	return ""
+}
+
+func activeMode(state: model.State): Str {
+	index := state.active
+	if state.docs bounds index {
+		return state.docs[index].mode
 	}
 	return ""
 }
@@ -564,7 +649,9 @@ proc startLens(state: mut model.State, from: hive.syslink.Address): void {
 	}
 	state.lensRunning = true
 	state.lensAgain = false
-	async toolchain.lensCheck(from, state.settings.compiler, state.root, target, overlays)
+	compiler := state.settings.compiler
+	root := state.root
+	async toolchain.lensCheck(from, compiler, root, target, overlays)
 }
 
 // ── visualização (Markdown, JSON) ────────────────────────────────────────
@@ -624,7 +711,8 @@ proc refreshView(state: mut model.State, from: hive.syslink.Address): void {
 		pending := doc.path + "#{doc.version}"
 		if state.viewPending != pending {
 			state.viewPending = pending
-			async viewWorker(from, doc.path, doc.version, doc.text, labelsOf(state))
+			labels := labelsOf(state)
+			async viewWorker(from, doc.path, doc.version, doc.text, labels)
 		}
 		return
 	}
@@ -661,11 +749,13 @@ proc scanTodos(state: mut model.State, from: hive.syslink.Address): void {
 		append(buffers, todo.Buffer(doc.path, doc.text))
 	}
 	state.todoScanning = true
-	async todo.scan(from, state.root, state.settings.showHidden, buffers)
+	root := state.root
+	hidden := state.settings.showHidden
+	async todo.scan(from, root, hidden, buffers)
 }
 
 // Os erros do compilador no arquivo e na linha onde estão de fato.
-proc located(state: model.State, found: model.Diagnostic[]): model.Diagnostic[dyn] {
+proc located(state: mut model.State, found: model.Diagnostic[]): model.Diagnostic[dyn] {
 	target := render.targetOf(state)
 	modules := importedModules(state, target)
 	mut model.Diagnostic[dyn] out = []
@@ -685,7 +775,7 @@ proc located(state: model.State, found: model.Diagnostic[]): model.Diagnostic[dy
 }
 
 // O texto de um arquivo como o editor o tem (aberto) ou como está no disco.
-proc textOf(state: model.State, path: Str): Str {
+proc textOf(state: mut model.State, path: Str): Str {
 	for each doc in state.docs {
 		if workspace.normalize(doc.path) == workspace.normalize(path) {
 			return doc.text
@@ -725,7 +815,7 @@ proc withAnalysis(state: mut model.State, output: Str): void {
 
 // Os módulos do programa, como "módulo=arquivo": os imports do arquivo de
 // entrada e, em cadeia, os deles (com o texto do editor, se estiver aberto).
-proc importedModules(state: model.State, target: Str): Str[dyn] {
+proc importedModules(state: mut model.State, target: Str): Str[dyn] {
 	mut Str[dyn] found = []
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	mut Str[dyn] pending = [target]
@@ -767,10 +857,13 @@ proc moduleFile(target: Str, modules: Str[], module: Str): Str {
 		}
 	}
 	folder := workspace.parentOf(target)
-	for each candidate in [folder + "/lib/" + module + ".hive", folder + "/" + module + ".hive"] {
-		if hive.file.exists(candidate) {
-			return candidate
-		}
+	inLib := folder + "/lib/" + module + ".hive"
+	if hive.file.exists(inLib) {
+		return inLib
+	}
+	beside := folder + "/" + module + ".hive"
+	if hive.file.exists(beside) {
+		return beside
 	}
 	return target
 }
@@ -796,6 +889,22 @@ func clampInt(value: Int, low: Int, high: Int): Int {
 }
 
 // ── buscas ───────────────────────────────────────────────────────────────
+
+func matchCount(state: model.State): Int {
+	return len(render.findMatches(state))
+}
+
+func paletteCount(state: model.State): Int {
+	return len(render.paletteMatches(state))
+}
+
+func paletteChoice(state: model.State, index: Int): Str {
+	found := render.paletteMatches(state)
+	if found bounds index {
+		return found[index]
+	}
+	return ""
+}
 
 // A primeira ocorrência da busca a partir do cursor (ou a primeira de todas).
 func firstMatchFrom(state: model.State, caret: Int): Int {
@@ -831,7 +940,7 @@ func vimActive(state: model.State): Bool {
 // O documento ativo como o motor do Vim o vê. Um `caret` negativo é "o que o
 // estado já tem": a página só manda o dela quando o mudou por conta própria.
 // `view` é "primeira linha visível, quantas linhas cabem".
-func vimEditor(state: model.State, caret: Int, view: Str): vim.Editor {
+proc vimEditor(state: mut model.State, caret: Int, view: Str): vim.Editor {
 	mut top := 0
 	mut rows := 30
 	if view is "{first} {count}" {
@@ -847,18 +956,19 @@ func vimEditor(state: model.State, caret: Int, view: Str): vim.Editor {
 	mut editor := vim.Editor(text: "", caret: cursor, vim: state.vim, undo: empty, redo: empty, dirty: false,
 		anyDirty: model.anyDirty(state.docs), numbers: state.settings.lineNumbers, active: state.active,
 		top: top, rows: rows, tab: state.settings.tabSize, scroll: -1, clip: "", effects: none)
-	if render.activeDoc(state) is Result.Ok(doc) {
-		editor.text = doc.text
-		editor.undo = doc.undo
-		editor.redo = doc.redo
-		editor.dirty = model.dirty(doc)
+	index := state.active
+	if state.docs bounds index {
+		editor.text = state.docs[index].text
+		editor.undo = state.docs[index].undo
+		editor.redo = state.docs[index].redo
+		editor.dirty = state.docs[index].text != state.docs[index].saved
 	}
 	return editor
 }
 
 // Leva o que o motor devolveu ao documento ativo e despacha os efeitos
 // (salvar, fechar, abrir…) como mensagens comuns.
-proc vimApply(state: mut model.State, out: vim.Editor, from: hive.syslink.Address): void {
+proc vimApply(state: mut model.State, out: mut vim.Editor, from: hive.syslink.Address): void {
 	// O que o Vim era antes desta tecla, para comparar no fim.
 	wasPrompt := state.vim.prompt
 	wasCommand := state.vim.command
@@ -989,7 +1099,7 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 		vimApply(state, editor, from)
 		// Esc sem nada pendente fecha o que estiver aberto (busca, sugestões…).
 		if vim.isEscape(key) && idle {
-			if escapeMsg(state) is Result.Ok(closing) {
+			if escapeFor(escapeKind(state)) is Result.Ok(closing) {
 				step(state, closing, from)
 			}
 		}
@@ -1037,7 +1147,7 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 		if state.sideOpen && state.side == model.SideView.ExplorerSide() {
 			state.sideOpen = false
 			state.treeKeys = ""
-			if render.activeDoc(state) is Result.Ok(_) {
+			if hasDoc(state) {
 				withFocus(state, "editor")
 			}
 			return true
@@ -1046,9 +1156,10 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 	} else if message is model.Msg.TreeKey(key) {
 		treeKey(state, key)
 	} else if message is model.Msg.VimReload {
-		if render.activeDoc(state) is Result.Ok(doc) {
-			reloadDocsOf(state, render.relPath(state, doc.path))
-			state.status = render.tx(state, "aberto") + " {doc.name}"
+		if hasDoc(state) {
+			name := activeName(state)
+			reloadDocsOf(state, render.relPath(state, render.activePath(state)))
+			state.status = render.tx(state, "aberto") + " {name}"
 		}
 	} else {
 		return false
@@ -1060,7 +1171,10 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 
 // Espera o agente terminar e avisa a janela.
 proc watchAgent(db: hive.syslink.Address, session: Int): void {
-	for ; pty.alive(session); {
+	for ;; {
+		if !pty.alive(session) {
+			break
+		}
 		hive.task.sleep(300)
 	}
 	async db(model.Cmd.Post(model.Msg.AgentExited(session, pty.code(session))))
@@ -1221,7 +1335,7 @@ proc treeKey(state: mut model.State, key: Str): void {
 	pending := state.treeKeys
 	state.treeKeys = ""
 	if key == "<Esc>" {
-		if render.activeDoc(state) is Result.Ok(_) {
+		if hasDoc(state) {
 			withFocus(state, "editor")
 		}
 		return
@@ -1422,21 +1536,26 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 			saveAll(state)
 		}
 		state.git.busy = "commit"
-		async git.commitAsync(from, state.git.top, state.git.message, git.count(state.git, true) == 0)
+		top := state.git.top
+		text := state.git.message
+		nothingStaged := git.count(state.git, true) == 0
+		async git.commitAsync(from, top, text, nothingStaged)
 	} else if message is model.Msg.GitPush {
 		if state.git.busy != "" || !state.git.repo {
 			return true
 		}
 		state.git.busy = "push"
 		Str[dyn] arguments = ["push", "-u", "origin", "HEAD"]
-		async git.runAsync(from, state.git.top, "push", arguments)
+		top := state.git.top
+		async git.runAsync(from, top, "push", arguments)
 	} else if message is model.Msg.GitPull {
 		if state.git.busy != "" || !state.git.repo {
 			return true
 		}
 		state.git.busy = "pull"
 		Str[dyn] arguments = ["pull", "--ff-only"]
-		async git.runAsync(from, state.git.top, "pull", arguments)
+		top := state.git.top
+		async git.runAsync(from, top, "pull", arguments)
 	} else if message is model.Msg.GitInit {
 		afterGit(state, process.run("git", ["init"], state.root))
 	} else if message is model.Msg.GitDone(command, output, ok) {
@@ -1489,7 +1608,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 		state.find.index = firstMatchFrom(state, state.caret)
 		state.find.serial = state.find.serial + 1
 	} else if message is model.Msg.FindNext || message is model.Msg.FindPrev {
-		count := len(render.findMatches(state))
+		count := matchCount(state)
 		if count > 0 {
 			mut delta := 1
 			if message is model.Msg.FindPrev {
@@ -1530,19 +1649,19 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 		state.palette.text = text
 		state.palette.index = 0
 	} else if message is model.Msg.PaletteMove(delta) {
-		count := len(render.paletteMatches(state))
+		count := paletteCount(state)
 		if count > 0 {
 			state.palette.index = ((state.palette.index + delta) % count + count) % count
 		}
 	} else if message is model.Msg.PaletteAccept(chosen) {
-		found := render.paletteMatches(state)
 		mut index := chosen
 		if index < 0 {
 			index = state.palette.index
 		}
+		picked := paletteChoice(state, index)
 		state.palette = model.emptyPalette()
-		if found bounds index {
-			openDoc(state, workspace.joinPath(state.root, found[index]))
+		if picked != "" {
+			openDoc(state, workspace.joinPath(state.root, picked))
 		} else {
 			withFocus(state, "editor")
 		}
@@ -1554,13 +1673,15 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 		if state.git.repo {
 			start = state.git.top
 		}
-		async dialogs.pickAsync(from, "folder", start, render.tx(state, "Abrir pasta"))
+		title := render.tx(state, "Abrir pasta")
+		async dialogs.pickAsync(from, "folder", start, title)
 	} else if message is model.Msg.PickFile {
 		mut start := state.root
 		if state.git.repo {
 			start = state.git.top
 		}
-		async dialogs.pickAsync(from, "file", start, render.tx(state, "Abrir arquivo…"))
+		title := render.tx(state, "Abrir arquivo…")
+		async dialogs.pickAsync(from, "file", start, title)
 	} else if message is model.Msg.Picked(mode, path) {
 		if mode == "file" {
 			openDoc(state, path)
@@ -1612,10 +1733,11 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 		}
 		async quitSoon()
 	} else if message is model.Msg.GotoDefinition(caret) {
-		if render.activeDoc(state) is Result.Ok(doc) {
-			located := navigate.locate(doc.path, doc.text, caret)
+		if hasDoc(state) {
+			path := render.activePath(state)
+			located := navigate.locate(path, activeText(state), caret)
 			if located is Result.Ok(target) {
-				if workspace.tidy(target.file) != workspace.tidy(doc.path) {
+				if workspace.tidy(target.file) != workspace.tidy(path) {
 					openDoc(state, workspace.tidy(target.file))
 				}
 				state.caret = navigate.offsetOf(activeText(state), target.line, target.column)
@@ -1681,8 +1803,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 	} else if message is model.Msg.Focus(index) {
 		state.active = index
 		state.editorView = model.EditorView.DocView()
-		if render.activeDoc(state) is Result.Ok(doc) {
-			state.selected = doc.path
+		if hasDoc(state) {
+			state.selected = render.activePath(state)
 		}
 	} else if message is model.Msg.CloseDoc(index) {
 		closeDoc(state, index)
@@ -1726,25 +1848,23 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		clearSuggestions(state)
 	} else if message is model.Msg.Save {
 		index := state.active
-		mut model.Doc[dyn] docs = state.docs
-		if docs bounds index {
-			outcome := saveDoc(docs[index])
-			if outcome is Result.Ok(doc) {
-				docs[index] = doc
-				state.status = render.tx(state, "salvo") + " {doc.name}"
-			} else if outcome is Result.Error(why) {
-				state.status = why
+		if state.docs bounds index {
+			name := state.docs[index].name
+			failure := saveDoc(state.docs[index])
+			if failure == "" {
+				state.status = render.tx(state, "salvo") + " {name}"
+			} else {
+				state.status = failure
 			}
 		}
-		state.docs = docs
 		gitRefresh(state)
 	} else if message is model.Msg.SaveAll {
 		saveAll(state)
 		gitRefresh(state)
 	} else if message is model.Msg.PinEntry {
-		if render.activeDoc(state) is Result.Ok(doc) {
-			state.entrypoint = doc.path
-			state.status = render.tx(state, "entrada") + ": {doc.name}"
+		if hasDoc(state) {
+			state.entrypoint = render.activePath(state)
+			state.status = render.tx(state, "entrada") + ": " + activeName(state)
 		}
 	} else if message is model.Msg.SetMode(mode) {
 		index := state.active
@@ -1752,10 +1872,10 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 			state.docs[index].mode = mode
 		}
 	} else if message is model.Msg.TogglePreview {
-		if render.activeDoc(state) is Result.Ok(doc) {
-			if model.hasPreview(doc.path) {
+		if hasDoc(state) {
+			if model.hasPreview(render.activePath(state)) {
 				mut mode := "preview"
-				if doc.mode != "edit" {
+				if activeMode(state) != "edit" {
 					mode = "edit"
 				}
 				update(state, model.Msg.SetMode(mode), from)
@@ -1774,7 +1894,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		state.pane = model.Pane.OutputPane()
 		state.panelOpen = true
 		state.status = "{command} {workspace.baseName(target)}…"
-		async toolchain.invoke(from, state.settings.compiler, command, target)
+		compiler := state.settings.compiler
+		async toolchain.invoke(from, compiler, command, target)
 	} else if message is model.Msg.Finished(command, output, ok) {
 		found := located(state, analysis.parseDiagnostics(output))
 		state.running = ""
@@ -1792,8 +1913,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		if n == state.lensDue {
 			refreshView(state, from)
 			if state.todoScanned {
-				if render.activeDoc(state) is Result.Ok(doc) {
-					state.todos = todo.withTodosOf(state.todos, doc.path, doc.text)
+				if hasDoc(state) {
+					state.todos = todo.withTodosOf(state.todos, render.activePath(state), activeText(state))
 				}
 			}
 			if state.settings.errorLens && render.targetOf(state) != "" {
@@ -1814,7 +1935,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		}
 	} else if message is model.Msg.OpenReport {
 		if state.analysisReport != "" && hive.file.exists(state.analysisReport) {
-			async dialogs.openUrl(state.analysisReport)
+			report := state.analysisReport
+			async dialogs.openUrl(report)
 		}
 	} else if message is model.Msg.ShowPane(pane) {
 		state.pane = pane
@@ -1928,7 +2050,7 @@ proc step(state: mut model.State, message: model.Msg, from: hive.syslink.Address
 	// Outra pasta, uma pasta aberta ou fechada na árvore, um arquivo aberto ou
 	// fechado: as pastas vigiadas acompanham.
 	if state.root != wasRoot || state.expanded != wasExpanded || len(state.docs) != wasDocs {
-		_watching := watch.set(watchedFolders(state))
+		watchFolders(state)
 	}
 	// Outra pasta (ou o ⟳ do explorador) procura os TODO de novo; salvar só
 	// atualiza os dos documentos abertos, que o editor já tem.
@@ -1969,7 +2091,7 @@ func promptFor(arg: Str): model.Prompt {
 	return model.Prompt.NewFilePrompt()
 }
 
-func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, Bool> {
+proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Msg, Bool> {
 	if action == "newFile" {
 		return Result.Ok(model.Msg.StartPrompt(model.Prompt.NewFilePrompt()))
 	} else if action == "newFolder" {
@@ -2066,30 +2188,58 @@ func actionMsg(state: model.State, action: Str, caret: Int): Result<model.Msg, B
 	return Result.Error(false)
 }
 
-func escapeMsg(state: model.State): Result<model.Msg, Bool> {
+// O que o Esc fecha, do mais de cima para o mais de baixo ("" = nada).
+func escapeKind(state: model.State): Str {
 	if state.vim.prompt != "" {
-		return Result.Ok(model.Msg.VimCancel())
+		return "vimCancel"
 	} else if state.recording != "" {
-		return Result.Ok(model.Msg.CancelRecording())
+		return "recording"
 	} else if state.about {
-		return Result.Ok(model.Msg.CloseAbout())
+		return "about"
 	} else if state.palette.open {
-		return Result.Ok(model.Msg.PaletteClose())
+		return "palette"
 	} else if state.git.confirm != "" {
-		return Result.Ok(model.Msg.GitCancelConfirm())
+		return "confirm"
 	} else if state.peekFile != "" {
-		return Result.Ok(model.Msg.ClosePeek())
+		return "peek"
 	} else if len(state.suggestions) > 0 {
-		return Result.Ok(model.Msg.CloseSuggest())
+		return "suggest"
 	} else if !(state.prompt == model.Prompt.NoPrompt()) {
-		return Result.Ok(model.Msg.PromptCancel())
+		return "prompt"
 	} else if state.find.open {
+		return "find"
+	}
+	return ""
+}
+
+func escapeFor(kind: Str): Result<model.Msg, Bool> {
+	if kind == "vimCancel" {
+		return Result.Ok(model.Msg.VimCancel())
+	} else if kind == "recording" {
+		return Result.Ok(model.Msg.CancelRecording())
+	} else if kind == "about" {
+		return Result.Ok(model.Msg.CloseAbout())
+	} else if kind == "palette" {
+		return Result.Ok(model.Msg.PaletteClose())
+	} else if kind == "confirm" {
+		return Result.Ok(model.Msg.GitCancelConfirm())
+	} else if kind == "peek" {
+		return Result.Ok(model.Msg.ClosePeek())
+	} else if kind == "suggest" {
+		return Result.Ok(model.Msg.CloseSuggest())
+	} else if kind == "prompt" {
+		return Result.Ok(model.Msg.PromptCancel())
+	} else if kind == "find" {
 		return Result.Ok(model.Msg.FindClose())
 	}
 	return Result.Error(false)
 }
 
-func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
+func escapeMsg(state: model.State): Result<model.Msg, Bool> {
+	return escapeFor(escapeKind(state))
+}
+
+proc clickMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> {
 	a := event.act
 	arg := event.arg
 	if a == "toggle" {
@@ -2240,7 +2390,7 @@ func clickMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
 	} else if a == "closeSuggest" {
 		return Result.Ok(model.Msg.CloseSuggest())
 	} else if a == "escape" {
-		return escapeMsg(state)
+		return escapeFor(escapeKind(state))
 	} else if a == "agent" {
 		return Result.Ok(model.Msg.ShowAgent(arg))
 	} else if a == "agentRestart" {
@@ -2295,7 +2445,7 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 	return Result.Error(false)
 }
 
-func toMsg(state: model.State, event: model.Event): Result<model.Msg, Bool> {
+proc toMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> {
 	if event.kind == "edit" && event.at >= 0 {
 		// Só a diferença: vale se foi feita sobre o texto que o programa tem.
 		if event.seen != state.textSerial {
@@ -2342,8 +2492,8 @@ proc serve(state: mut model.State, command: model.Cmd, from: hive.syslink.Addres
 		if decoded is Result.Ok(hovered) {
 			if hovered.kind == "hover" {
 				mut ok := false
-				if render.activeDoc(state) is Result.Ok(doc) {
-					ok = navigate.locate(doc.path, doc.text, hovered.caret) is Result.Ok(_)
+				if hasDoc(state) {
+					ok = navigate.locate(render.activePath(state), activeText(state), hovered.caret) is Result.Ok(_)
 				}
 				return model.Cmd.Reply(encode(model.HoverReply(true, hovered.caret, ok), hive.json.codec()))
 			}
@@ -2364,13 +2514,14 @@ proc serve(state: mut model.State, command: model.Cmd, from: hive.syslink.Addres
 			state.pulse = state.pulse + 1
 			return command
 		}
-		wasGit := state.git
-		wasTree := state.tree
+		wasGit := encode(state.git, hive.json.codec())
+		wasTree := encode(state.tree, hive.json.codec())
 		wasSerial := state.textSerial
 		wasStatus := state.status
 		wasDocs := docsMark(state)
 		step(state, message, from)
-		if state.git != wasGit || state.textSerial != wasSerial || state.status != wasStatus || state.tree != wasTree || docsMark(state) != wasDocs {
+		if encode(state.git, hive.json.codec()) != wasGit || state.textSerial != wasSerial || state.status != wasStatus ||
+			encode(state.tree, hive.json.codec()) != wasTree || docsMark(state) != wasDocs {
 			state.pulse = state.pulse + 1
 		}
 		return command
@@ -2462,7 +2613,7 @@ proc main(): void {
 	prefs := settings.load()
 	mut start := model.initial(folder, prefs)
 	openRoot(start, folder)
-	_watching := watch.set(watchedFolders(start))
+	watchFolders(start)
 	db := hive.syslink.spawnAddressed(serve, start)
 
 	token := hive.crypto.randomHex(16)
@@ -2811,7 +2962,7 @@ test "a interface muda de idioma na hora" {
 
 test "as opções da tela inicial são clicáveis" {
 	folder := scratch()
-	state := fresh(folder)
+	mut state := fresh(folder)
 	page := render.welcome(state)
 	for each action in ["newFile", "openFolder", "terminal", "settings", "docs"] {
 		assert indexOf(page, "data-arg=\"" + action + "\"") is Result.Ok(_)
@@ -3157,18 +3308,6 @@ test "sem o modo Vim, as setas andam no explorador mas j e k não" {
 }
 
 // O que o agente escreveu no terminal até aparecer `wanted` (ou o tempo acabar).
-proc agentOutput(session: Int, wanted: Str): Str {
-	mut seen := ""
-	for waited := 0; waited < 3000; waited = waited + 50 {
-		if hive.crypto.base64Decode(pty.read(session, 50)) is Result.Ok(raw) {
-			seen = seen + raw
-		}
-		if indexOf(seen, wanted) is Result.Ok(_) {
-			return seen
-		}
-	}
-	return seen
-}
 
 test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles e reinicia" {
 	folder := explorerFolder("agent-test")
@@ -3188,7 +3327,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	assert indexOf(regionOf(opened, "panelview"), "OpenCode") is Result.Ok(_)
 	assert len(opened.agentKeys) == 3
 	_typed := pty.write(session, "pwd; stty size\r")
-	seen := agentOutput(session, "24 80")
+	seen := agents.output(session, "24 80", 3000)
 	assert indexOf(seen, "agent-test") is Result.Ok(_)
 
 	// Um agente que não está instalado diz o que fazer, e o outro continua vivo.

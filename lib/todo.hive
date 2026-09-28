@@ -45,21 +45,35 @@ func firstChar(text: Str): Str {
 }
 
 // O texto depois da marca, sem o `:` e sem o fim de um comentário de bloco.
-func tidyText(after: Str): Str {
-	mut rest := after
-	for ; firstChar(rest) == ":" || firstChar(rest) == " " || firstChar(rest) == "\t"; {
-		rest = complete.skip(rest, 1)
+func charAt(chars: Str[], i: Int): Str {
+	if chars bounds i {
+		return chars[i]
 	}
-	for each ending in ["*/", "-->"] {
-		cut := len(rest) - len(ending)
-		if cut >= 0 && complete.skip(rest, cut) == ending {
-			rest = complete.take(rest, cut)
+	return ""
+}
+
+func tidyText(after: Str): Str {
+	chars := split(after, "")
+	mut from := 0
+	for ; from < len(chars); from++ {
+		c := charAt(chars, from)
+		if c != ":" && c != " " && c != "\t" {
+			break
 		}
 	}
-	for ; lastChar(rest) == " " || lastChar(rest) == "\t"; {
-		rest = complete.take(rest, len(rest) - 1)
+	mut to := len(chars)
+	if to - from >= 2 && charAt(chars, to - 2) == "*" && charAt(chars, to - 1) == "/" {
+		to = to - 2
+	} else if to - from >= 3 && charAt(chars, to - 3) == "-" && charAt(chars, to - 2) == "-" && charAt(chars, to - 1) == ">" {
+		to = to - 3
 	}
-	return rest
+	for ; to > from; to-- {
+		c := charAt(chars, to - 1)
+		if c != " " && c != "\t" {
+			break
+		}
+	}
+	return highlight.piece(chars, from, to)
 }
 
 // Os TODO de um texto, um por linha, na ordem em que aparecem.
@@ -77,21 +91,34 @@ func todosIn(file: Str, text: Str): model.Todo[dyn] {
 	lines := split(replaceAll(text, "\r", ""), "\n")
 	for i := 0; i < len(lines); i++ {
 		if lines bounds i {
-			line := lines[i]
-			for each tag in tags() {
-				if indexOf(line, tag) is Result.Ok(at) {
-					before := complete.take(line, at)
-					after := complete.skip(line, at + len(tag))
-					// Uma palavra inteira: TODOS e XXXL não contam.
-					if !highlight.isIdent(lastChar(before)) && !highlight.isIdent(firstChar(after)) && inComment(before) {
-						append(found, model.Todo(file, i + 1, at, tag, tidyText(after)))
-						break
-					}
-				}
+			marked := todoOf(lines[i])
+			if marked.tag != "" {
+				append(found, model.Todo(file, i + 1, marked.column, marked.tag, marked.text))
 			}
 		}
 	}
 	return found
+}
+
+// A marca de uma linha, se ela tem uma num comentário (`tag` vazio: nenhuma).
+type Mark {
+	tag:    Str
+	column: Int
+	text:   Str
+}
+
+func todoOf(line: Str): Mark {
+	for each tag in tags() {
+		if indexOf(line, tag) is Result.Ok(at) {
+			before := complete.take(line, at)
+			after := complete.skip(line, at + len(tag))
+			// Uma palavra inteira: TODOS e XXXL não contam.
+			if !highlight.isIdent(lastChar(before)) && !highlight.isIdent(firstChar(after)) && inComment(before) {
+				return Mark(tag, at, tidyText(after))
+			}
+		}
+	}
+	return Mark("", 0, "")
 }
 
 // Troca os TODO de `file` pelos do texto novo, no mesmo lugar da lista.
@@ -119,6 +146,23 @@ func withTodosOf(todos: model.Todo[], file: Str, text: Str): model.Todo[dyn] {
 	return out
 }
 
+// O texto de um arquivo: o do editor, se ele estiver aberto, ou o do disco
+// (até 1 MB).
+proc textFor(path: Str, open: hive.map.Map<Str, Str>): Str {
+	if hive.map.get(open, workspace.normalize(path)) is Result.Ok(buffer) {
+		return buffer
+	}
+	if hive.file.size(path) is Result.Ok(bytes) {
+		if bytes >= 1000000 {
+			return ""
+		}
+	}
+	if hive.file.read(path) is Result.Ok(content) {
+		return content
+	}
+	return ""
+}
+
 // Procura em todos os arquivos de texto da pasta (até 1 MB cada), numa thread
 // própria, e manda o que achou de volta para a janela.
 proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool, buffers: Buffer[]): void {
@@ -130,24 +174,7 @@ proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool, buffers: Bu
 	for each rel in search.allFiles(root, showHidden, 20000) {
 		if search.isTextFile(rel) {
 			path := workspace.joinPath(root, rel)
-			mut text := ""
-			mut known := false
-			if hive.map.get(open, workspace.normalize(path)) is Result.Ok(buffer) {
-				text = buffer
-				known = true
-			}
-			if !known {
-				mut small := true
-				if hive.file.size(path) is Result.Ok(bytes) {
-					small = bytes < 1000000
-				}
-				if small {
-					if hive.file.read(path) is Result.Ok(content) {
-						text = content
-					}
-				}
-			}
-			for each t in todosIn(path, text) {
+			for each t in todosIn(path, textFor(path, open)) {
 				append(found, t)
 			}
 		}

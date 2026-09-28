@@ -171,26 +171,38 @@ func wordsIn(text: Str, prefix: Str, limit: Int): Str[dyn] {
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	for each line in split(text, "\n") {
 		if indexOf(line, prefix) is Result.Ok(_) {
-			mut Str[dyn] current = []
-			for each c in split(line + " ", "") {
-				if highlight.isIdent(c) {
-					append(current, c)
-				} else if len(current) > 0 {
-					word := join(current, "")
-					if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
-						hive.map.set(seen, word, true)
-						append(found, word)
-						if len(found) >= limit {
-							return found
-						}
+			for each word in namesIn(line) {
+				if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
+					hive.map.set(seen, word, true)
+					append(found, word)
+					if len(found) >= limit {
+						return found
 					}
-					Str[dyn] reset = []
-					current = reset
 				}
 			}
 		}
 	}
 	return found
+}
+
+// Os nomes de uma linha, na ordem.
+func namesIn(line: Str): Str[dyn] {
+	chars := split(line, "")
+	mut Str[dyn] names = []
+	mut start := -1
+	for i := 0; i <= len(chars); i++ {
+		mut ident := false
+		if chars bounds i {
+			ident = highlight.isIdent(chars[i])
+		}
+		if ident && start < 0 {
+			start = i
+		} else if !ident && start >= 0 {
+			append(names, highlight.piece(chars, start, i))
+			start = -1
+		}
+	}
+	return names
 }
 
 // O que a linguagem oferece no ponto do cursor, antes dos nomes do arquivo.
