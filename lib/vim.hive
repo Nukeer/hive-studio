@@ -3121,8 +3121,10 @@ func sortLines(ed: Editor, from: Int, to: Int, reverse: Bool): Editor {
 	mut ordered := sort(block)
 	if reverse {
 		mut Str[dyn] flipped = []
-		for each line in ordered {
-			prepend(flipped, line)
+		for k := len(ordered) - 1; k >= 0; k-- {
+			if ordered bounds k {
+				append(flipped, ordered[k])
+			}
 		}
 		ordered = flipped
 	}
