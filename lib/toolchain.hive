@@ -64,20 +64,28 @@ type Copied {
 func manifestText(entries: Copied[]): Str {
 	mut Str[dyn] lines = []
 	for each e in entries {
-		append(lines, e.rel + "\t" + e.stamp + "\t" + join(e.imports, "|"))
+		append(lines, manifestLine(e))
 	}
 	return join(lines, "\n")
+}
+
+func manifestLine(e: Copied): Str {
+	return e.rel + "\t" + e.stamp + "\t" + join(e.imports, "|")
+}
+
+func depsOf(deps: Str): Str[dyn] {
+	mut Str[dyn] imports = []
+	if deps != "" {
+		imports = split(deps, "|")
+	}
+	return imports
 }
 
 func parseManifest(text: Str): hive.map.Map<Str, Copied> {
 	mut hive.map.Map<Str, Copied> found = hive.map.new()
 	for each line in split(text, "\n") {
 		if line is "{rel}\t{stamp}\t{deps}" {
-			mut Str[dyn] imports = []
-			if deps != "" {
-				imports = split(deps, "|")
-			}
-			hive.map.set(found, rel, Copied(rel, stamp, imports))
+			hive.map.set(found, rel, Copied(rel, stamp, depsOf(deps)))
 		}
 	}
 	return found
@@ -108,21 +116,31 @@ proc put(copy: Str, text: Str): void {
 	_written := hive.file.write(copy, text)
 }
 
+// O que `syncOne` fez com um arquivo: o carimbo dele e o que ele importa —
+// ou `reused`, quando não mudou desde a última cópia e os imports são os que
+// o registro já tem.
+type Synced {
+	stamp:   Str
+	imports: Str[dyn]
+	reused:  Bool
+}
+
 // Um arquivo do programa na cópia: o texto do editor (se tem alterações por
 // salvar), ou o do disco, que só é relido e regravado se mudou de tamanho ou
-// de data. `Error` quando ele não existe mais.
-proc syncOne(mirror: Str, root: Str, rel: Str, edited: hive.map.Map<Str, Str>, before: hive.map.Map<Str, Copied>): Result<Copied, Bool> {
+// de data (`previous` é o carimbo da última cópia). `Error` quando ele não
+// existe mais.
+
+proc syncOne(mirror: Str, root: Str, rel: Str, overlay: Result<Str, Bool>, previous: Str): Result<Synced, Bool> {
 	copy := mirror + "/" + rel
-	if hive.map.get(edited, rel) is Result.Ok(text) {
+	Str[dyn] none = []
+	if overlay is Result.Ok(text) {
 		put(copy, text)
-		return Result.Ok(Copied(rel, "overlay", localImports(text, rel)))
+		return Result.Ok(Synced("overlay", localImports(text, rel), false))
 	}
 	path := workspace.joinPath(root, rel)
 	if native.stamp(path) is Result.Ok(current) {
-		if hive.map.get(before, rel) is Result.Ok(old) {
-			if old.stamp == current {
-				return Result.Ok(Copied(rel, current, old.imports))
-			}
+		if previous == current {
+			return Result.Ok(Synced(current, none, true))
 		}
 		mut Str[dyn] imports = []
 		if hive.file.read(path) is Result.Ok(content) {
@@ -131,16 +149,37 @@ proc syncOne(mirror: Str, root: Str, rel: Str, edited: hive.map.Map<Str, Str>, b
 				imports = localImports(content, rel)
 			}
 		}
-		return Result.Ok(Copied(rel, current, imports))
+		return Result.Ok(Synced(current, imports, false))
 	}
 	return Result.Error(false)
+}
+
+proc remove(path: Str): void {
+	_gone := hive.file.delete(path)
+}
+
+// Os carimbos do registro anterior, por arquivo.
+func stampsOf(before: hive.map.Map<Str, Copied>): hive.map.Map<Str, Str> {
+	mut hive.map.Map<Str, Str> stamps = hive.map.new()
+	for each rel in hive.map.keys(before) {
+		if hive.map.get(before, rel) is Result.Ok(old) {
+			hive.map.set(stamps, rel, old.stamp)
+		}
+	}
+	return stamps
+}
+
+proc queue(pending: mut Str[dyn], files: Str[]): void {
+	for each f in files {
+		append(pending, f)
+	}
 }
 
 // Apaga da cópia os arquivos da lista que não fazem mais parte do programa.
 proc dropStale(mirror: Str, files: Str[], kept: hive.map.Map<Str, Bool>): void {
 	for each rel in files {
 		if !hive.map.has(kept, rel) {
-			_gone := hive.file.delete(mirror + "/" + rel)
+			remove(mirror + "/" + rel)
 		}
 	}
 }
@@ -172,24 +211,31 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 	mut Copied[dyn] now = []
 	mut hive.map.Map<Str, Bool> kept = hive.map.new()
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	stamps := stampsOf(before)
 	mut Str[dyn] pending = [targetRel]
-	for ; len(pending) > 0 && len(now) < 5000; {
-		last := len(pending) - 1
+	for next := 0; next < len(pending) && len(now) < 5000; next++ {
 		mut rel := ""
-		if pending bounds last {
-			rel = pending[last]
-			drop(pending, last, last)
+		if pending bounds next {
+			rel = pending[next]
 		}
 		if rel == "" || hive.map.has(seen, rel) {
 			continue
 		}
 		hive.map.set(seen, rel, true)
-		if syncOne(mirror, root, rel, edited, before) is Result.Ok(copied) {
-			append(now, copied)
-			hive.map.set(kept, rel, true)
-			for each i in copied.imports {
-				append(pending, i)
+		mut previous := ""
+		if hive.map.get(stamps, rel) is Result.Ok(stamp) {
+			previous = stamp
+		}
+		if syncOne(mirror, root, rel, hive.map.get(edited, rel), previous) is Result.Ok(synced) {
+			mut imports := synced.imports
+			if synced.reused {
+				if hive.map.get(before, rel) is Result.Ok(old) {
+					imports = old.imports
+				}
 			}
+			append(now, Copied(rel, synced.stamp, imports))
+			hive.map.set(kept, rel, true)
+			queue(pending, imports)
 		}
 	}
 	dropStale(mirror, hive.map.keys(before), kept)

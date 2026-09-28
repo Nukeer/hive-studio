@@ -75,13 +75,19 @@ proc ptyForward(conn: hive.net.WsConnection, session: Int): Bool {
 }
 
 proc ptyOutput(conn: hive.net.WsConnection, session: Int): void {
-	for ; ptyForward(conn, session); {
+	for ;; {
+		if !ptyForward(conn, session) {
+			break
+		}
 	}
 }
 
 proc ptyClient(conn: hive.net.WsConnection, session: Int): void {
 	async ptyOutput(conn, session)
-	for ; ptyInput(conn, session); {
+	for ;; {
+		if !ptyInput(conn, session) {
+			break
+		}
 	}
 }
 
@@ -140,8 +146,13 @@ proc pusher(db: hive.syslink.Address, conn: hive.net.WsConnection): void {
 		if last == -2 {
 			return
 		}
-		hive.task.sleep(200)
+		pause(200)
 	}
+}
+
+// Uma espera entre duas voltas de um laço que vigia alguma coisa.
+proc pause(ms: Int): void {
+	hive.task.sleep(ms)
 }
 
 // Fecha o programa se, pouco depois de uma janela sair, nenhuma outra voltou.
@@ -189,7 +200,10 @@ proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): 
 	}
 	async db(model.Cmd.Post(model.Msg.Connected()))
 	async pusher(db, conn)
-	for ; answerOnce(db, conn); {
+	for ;; {
+		if !answerOnce(db, conn) {
+			break
+		}
 	}
 	async db(model.Cmd.Post(model.Msg.Disconnected()))
 	async closeIfIdle(db)
@@ -241,10 +255,14 @@ proc openWith(browser: Str, arguments: Str[]): void {
 	_ran := hive.term.exec(browser, arguments, "")
 }
 
+proc installed(path: Str): Bool {
+	return hive.file.exists(path)
+}
+
 // Abre a janela num Chromium conhecido. `""` quando não há nenhum.
 proc launch(url: Str, profile: Str, preferred: Str): Str {
 	for each browser in candidates(preferred) {
-		if hive.file.exists(browser) {
+		if installed(browser) {
 			arguments := ["--app=" + url, "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "--window-size=1440,900"]
 			async openWith(browser, arguments)
 			return browser

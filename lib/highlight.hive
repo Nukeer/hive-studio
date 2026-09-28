@@ -531,7 +531,8 @@ func rehighlight(old: Highlighted, before: Str, after: Str, lang: Str): Rehighli
 }
 
 // O HTML de `lines` com o patch aplicado (para os testes conferirem).
-func applyPatch(lines: Str[], patch: Patch): Str[dyn] {
+// O texto das linhas depois do patch, uma por linha.
+func patched(lines: Str[], patch: Patch): Str {
 	mut Str[dyn] out = []
 	for i := 0; i < patch.from && i < len(lines); i++ {
 		if lines bounds i {
@@ -546,7 +547,7 @@ func applyPatch(lines: Str[], patch: Patch): Str[dyn] {
 			append(out, lines[i])
 		}
 	}
-	return out
+	return join(out, "\n")
 }
 
 test "realce por linha carrega o texto entre crases" {
@@ -573,19 +574,19 @@ test "rehighlight muda só as linhas editadas e devolve o patch" {
 	assert done.patch.from == 1
 	assert done.patch.remove == 1
 	assert len(done.patch.lines) == 2
-	assert applyPatch(htmlLines(before, "hive"), done.patch) == htmlLines(after, "hive")
+	assert patched(htmlLines(before, "hive"), done.patch) == join(htmlLines(after, "hive"), "\n")
 	assert done.result == highlightText(after, "hive")
 	opening := "a\nb := `x\nc\nd` + 1\n"
 	closed := highlightText(opening, "hive")
 	assert closed.open == [1, 1, 2, 1] && carryAt(closed, 2) == 1 && carryAt(closed, 3) == 0 && carryAt(closed, -1) == 0
 	closedAfter := replaceAll(opening, "`x", "x")
 	edited := rehighlight(closed, opening, closedAfter, "hive")
-	assert applyPatch(htmlLines(opening, "hive"), edited.patch) == htmlLines(closedAfter, "hive")
+	assert patched(htmlLines(opening, "hive"), edited.patch) == join(htmlLines(closedAfter, "hive"), "\n")
 	assert edited.result == highlightText(closedAfter, "hive")
 	quoted := "a\nb := \"x\nc\nd\" + 1\n"
 	quotedAfter := replaceAll(quoted, "\"x", "x")
 	unquoted := rehighlight(highlightText(quoted, "hive"), quoted, quotedAfter, "hive")
-	assert applyPatch(htmlLines(quoted, "hive"), unquoted.patch) == htmlLines(quotedAfter, "hive")
+	assert patched(htmlLines(quoted, "hive"), unquoted.patch) == join(htmlLines(quotedAfter, "hive"), "\n")
 	assert unquoted.result == highlightText(quotedAfter, "hive")
 	// Linhas abertas depois do trecho são deslocadas quando ele cresce.
 	shifted := "x := 1\nb := `y\nz`\n"
