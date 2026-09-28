@@ -431,12 +431,49 @@ func shell(): Str {
 				ta.focus();
 				if (command === "paste") \{
 					if (navigator.clipboard && navigator.clipboard.readText) \{
-						navigator.clipboard.readText().then(function (text) \{ insert(text); });
+						navigator.clipboard.readText().then(function (text) \{ if (!pasteLine(text)) \{ insert(text); } });
 					}
 					return;
 				}
 				if (command === "selectAll") \{ ta.select(); return; }
+				if (command === "cut" && cutLine()) \{ return; }
 				document.execCommand(command);
+			}
+		
+			// Ctrl+X sem seleção recorta a linha inteira (como no VS Code): ela vai para
+			// a área de transferência e, colada com o cursor sem seleção, volta inteira
+			// acima da linha do cursor. O corte e a colagem passam pelo desfazer do
+			// próprio editor, então Ctrl+Z traz a linha de volta.
+			var lineClip = null;
+			function cutLine() \{
+				if (ta.selectionStart !== ta.selectionEnd) \{ return false; }
+				var value = ta.value, at = ta.selectionStart;
+				var start = value.lastIndexOf("\n", at - 1) + 1, end = value.indexOf("\n", at);
+				var line;
+				if (end >= 0) \{
+					line = value.slice(start, end + 1); end = end + 1;
+				} else \{
+					line = value.slice(start) + "\n"; end = value.length;
+					// A última linha leva junto a quebra que vem antes dela.
+					if (start > 0) \{ start = start - 1; }
+				}
+				if (line === "\n" && value === "") \{ return true; }
+				lineClip = line;
+				if (navigator.clipboard && navigator.clipboard.writeText) \{ navigator.clipboard.writeText(line).catch(function () \{}); }
+				ta.setSelectionRange(start, end);
+				document.execCommand("delete");
+				// O cursor vai para o começo da linha que ficou no lugar.
+				var begin = ta.value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+				ta.setSelectionRange(begin, begin);
+				return true;
+			}
+			function pasteLine(text) \{
+				if (lineClip === null || text.replace(/\r/g, "") !== lineClip || ta.selectionStart !== ta.selectionEnd) \{ return false; }
+				var at = ta.selectionStart, start = ta.value.lastIndexOf("\n", at - 1) + 1;
+				ta.setSelectionRange(start, start);
+				document.execCommand("insertText", false, lineClip);
+				ta.setSelectionRange(at + lineClip.length, at + lineClip.length);
+				return true;
 			}
 		
 			function send(event) \{
@@ -885,6 +922,10 @@ func shell(): Str {
 				document.execCommand("insertText", false, text);
 			}
 		
+			ta.addEventListener("paste", function (e) \{
+				var text = e.clipboardData ? e.clipboardData.getData("text") : "";
+				if (pasteLine(text)) \{ e.preventDefault(); }
+			});
 			ta.addEventListener("scroll", function () \{ sync(); if (popupOpen) \{ place(); } });
 			ta.addEventListener("input", function () \{
 				if (composing) \{ return; }
@@ -1096,6 +1137,7 @@ func shell(): Str {
 					send(\{ kind: "act", act: "closeSuggest" });
 				}
 				if (keys.indexOf(combo) >= 0) \{ e.preventDefault(); send(\{ kind: "key", text: combo, caret: ta.selectionStart, arg: ta.value.slice(ta.selectionStart, ta.selectionEnd) }); return; }
+				if (e.target === ta && combo === "Ctrl+X" && cutLine()) \{ e.preventDefault(); return; }
 				if (e.target === ta && e.key === "Tab" && !e.ctrlKey && !e.shiftKey) \{ e.preventDefault(); insert("\t"); return; }
 				if (e.target === ta && e.key === "Enter" && !e.ctrlKey && !e.shiftKey && !e.altKey) \{
 					e.preventDefault();
