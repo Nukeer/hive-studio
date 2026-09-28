@@ -3,5 +3,5 @@
 // commitado é sempre o que um build sem release diz.
 
 func current(): Str {
-	return "v0.1.0-dev"
+	return "v0.1.1-dev"
 }
