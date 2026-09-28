@@ -233,63 +233,58 @@ proc refreshDoc(state: mut model.State, i: Int): Bool {
 // na árvore; pastas expandidas que sumiram saem da lista, e as cores do git
 // acompanham.
 // As pastas da lista que ainda existem.
-proc existing(folders: Str[]): Str[dyn] {
+// Tira das pastas expandidas as que não existem mais.
+proc pruneExpanded(state: mut model.State): void {
 	mut Str[dyn] found = []
-	for each folder in folders {
-		if hive.file.exists(folder) {
+	for each folder in state.expanded {
+		if present(folder) {
 			append(found, folder)
 		}
 	}
-	return found
+	state.expanded = found
+}
+
+proc present(path: Str): Bool {
+	return hive.file.exists(path)
 }
 
 proc refreshTree(state: mut model.State): void {
-	expanded := existing(state.expanded)
-	fresh := workspace.buildTree(state.root, 0, expanded, state.settings.showHidden)
-	if fresh == state.tree && len(expanded) == len(state.expanded) {
+	before := len(state.expanded)
+	pruneExpanded(state)
+	fresh := workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden)
+	if fresh == state.tree && len(state.expanded) == before {
 		return
 	}
 	state.tree = fresh
-	state.expanded = expanded
 	gitRefresh(state)
 }
 
-// As pastas que valem vigiar: a raiz, as expandidas na árvore e as dos
-// arquivos abertos.
-func watchedFolders(state: model.State): Str[dyn] {
-	mut Str[dyn] folders = [state.root]
+// As pastas que valem vigiar, em `folders`: a raiz, as expandidas na árvore e
+// as dos arquivos abertos, cada uma uma vez.
+proc watchedFolders(state: mut model.State, folders: mut Str[dyn]): void {
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	addFolder(folders, seen, state.root)
 	for each folder in state.expanded {
-		if indexOf(folders, folder) is Result.Error(_) {
-			append(folders, folder)
-		}
-	}
-	for each doc in state.docs {
-		parent := workspace.parentOf(doc.path)
-		if indexOf(folders, parent) is Result.Error(_) {
-			append(folders, parent)
-		}
-	}
-	return folders
-}
-
-// Vigia a raiz, as pastas expandidas e as dos arquivos abertos. Montada aqui,
-// e não com `watchedFolders`: uma função que devolve uma lista feita do
-// estado obriga o compilador a copiar o estado de quem vai alterá-lo depois.
-proc watchFolders(state: mut model.State): void {
-	mut Str[dyn] folders = [state.root]
-	for each folder in state.expanded {
-		if indexOf(folders, folder) is Result.Error(_) {
-			append(folders, folder)
-		}
+		addFolder(folders, seen, folder)
 	}
 	for i := 0; i < len(state.docs); i++ {
 		if state.docs bounds i {
-			parent := workspace.parentOf(state.docs[i].path)
-			if indexOf(folders, parent) is Result.Error(_) {
-				append(folders, parent)
-			}
+			addFolder(folders, seen, workspace.parentOf(state.docs[i].path))
 		}
 	}
+}
+
+proc addFolder(folders: mut Str[dyn], seen: mut hive.map.Map<Str, Bool>, folder: Str): void {
+	if !hive.map.has(seen, folder) {
+		hive.map.set(seen, folder, true)
+		append(folders, folder)
+	}
+}
+
+// Vigia a raiz, as pastas expandidas e as dos arquivos abertos.
+proc watchFolders(state: mut model.State): void {
+	mut Str[dyn] folders = []
+	watchedFolders(state, folders)
 	_watching := watch.set(folders)
 }
 
@@ -757,7 +752,8 @@ proc scanTodos(state: mut model.State, from: hive.syslink.Address): void {
 // Os erros do compilador no arquivo e na linha onde estão de fato.
 proc located(state: mut model.State, found: model.Diagnostic[]): model.Diagnostic[dyn] {
 	target := render.targetOf(state)
-	modules := importedModules(state, target)
+	mut Str[dyn] modules = []
+	importedModules(state, target, modules)
 	mut model.Diagnostic[dyn] out = []
 	for each d in found {
 		where := analysis.locate(d.message)
@@ -792,7 +788,8 @@ proc textOf(state: mut model.State, path: Str): Str {
 proc withAnalysis(state: mut model.State, output: Str): void {
 	target := render.targetOf(state)
 	report := analysis.parseAnalyze(output)
-	modules := importedModules(state, target)
+	mut Str[dyn] modules = []
+	importedModules(state, target, modules)
 	mut model.Hotspot[dyn] spots = []
 	for each spot in report.spots {
 		mut found := spot
@@ -815,32 +812,31 @@ proc withAnalysis(state: mut model.State, output: Str): void {
 
 // Os módulos do programa, como "módulo=arquivo": os imports do arquivo de
 // entrada e, em cadeia, os deles (com o texto do editor, se estiver aberto).
-proc importedModules(state: mut model.State, target: Str): Str[dyn] {
-	mut Str[dyn] found = []
+proc importedModules(state: mut model.State, target: Str, found: mut Str[dyn]): void {
 	mut hive.map.Map<Str, Bool> seen = hive.map.new()
 	mut Str[dyn] pending = [target]
-	mut visited := 0
-	for ; len(pending) > 0 && visited < 500; {
-		last := len(pending) - 1
+	for next := 0; next < len(pending) && next < 500; next++ {
 		mut file := ""
-		if pending bounds last {
-			file = pending[last]
-			drop(pending, last, last)
+		if pending bounds next {
+			file = pending[next]
 		}
-		if file == "" || hive.map.has(seen, file) {
-			continue
-		}
-		hive.map.set(seen, file, true)
-		visited++
-		for each i in analysis.importsOf(textOf(state, file), workspace.parentOf(file)) {
-			if i.path is "{stem}.go" {
-				continue
-			}
-			append(found, i.name + "=" + i.path)
-			append(pending, i.path)
+		if file != "" && !hive.map.has(seen, file) {
+			hive.map.set(seen, file, true)
+			addModules(state, file, found, pending)
 		}
 	}
-	return found
+}
+
+// Os imports de `file` que não são Go: em `found` como "módulo=arquivo", e
+// em `pending` para ler os deles depois.
+proc addModules(state: mut model.State, file: Str, found: mut Str[dyn], pending: mut Str[dyn]): void {
+	for each i in analysis.importsOf(textOf(state, file), workspace.parentOf(file)) {
+		if i.path is "{stem}.go" {
+			continue
+		}
+		append(found, i.name + "=" + i.path)
+		append(pending, i.path)
+	}
 }
 
 // O arquivo de um módulo: o que o arquivo de entrada importa com esse nome, ou
@@ -891,24 +887,24 @@ func clampInt(value: Int, low: Int, high: Int): Int {
 // ── buscas ───────────────────────────────────────────────────────────────
 
 func matchCount(state: model.State): Int {
-	return len(render.findMatches(state))
+	return len(render.findMatches(render.searched(state), state.find))
 }
 
 func paletteCount(state: model.State): Int {
-	return len(render.paletteMatches(state))
+	return len(render.paletteMatches(state.palette))
 }
 
 func paletteChoice(state: model.State, index: Int): Str {
-	found := render.paletteMatches(state)
+	found := render.paletteMatches(state.palette)
 	if found bounds index {
-		return found[index]
+		return vim.at(state.palette.files, found[index])
 	}
 	return ""
 }
 
 // A primeira ocorrência da busca a partir do cursor (ou a primeira de todas).
 func firstMatchFrom(state: model.State, caret: Int): Int {
-	matches := render.findMatches(state)
+	matches := render.findMatches(render.searched(state), state.find)
 	for i := 0; i < len(matches); i++ {
 		if matches[i] >= caret {
 			return i
@@ -2979,12 +2975,13 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	mut state := fresh(folder)
 	openDoc(state, folder + "/main.hive")
 	state.find = model.FindBox(true, "ECHO", false, 0, 0)
-	assert len(render.findMatches(state)) == 1
+	assert len(render.findMatches(render.searched(state), state.find)) == 1
 	assert indexOf(render.findBox(state), "1 de 1") is Result.Ok(_)
 	state.find.caseSensitive = true
-	assert len(render.findMatches(state)) == 0
+	assert len(render.findMatches(render.searched(state), state.find)) == 0
 	state.palette = model.Palette(true, "main", 0, search.allFiles(folder, false, 100))
-	assert render.paletteMatches(state) == ["main.hive"]
+	assert render.paletteMatches(state.palette) == [0]
+	assert paletteChoice(state, 0) == "main.hive"
 	assert indexOf(render.palette(state), "main.hive") is Result.Ok(_)
 	if actionMsg(state, "quickOpen", 0) is Result.Ok(message) {
 		assert message == model.Msg.PaletteOpen()
@@ -3441,7 +3438,9 @@ test "arquivos criados e apagados por fora aparecem e somem da árvore; um abert
 	refreshTree(state)
 	toggle(state, folder + "/tmp")
 	assert workspace.isExpanded(state.expanded, folder + "/tmp")
-	assert indexOf(watchedFolders(state), folder + "/tmp") is Result.Ok(_)
+	mut Str[dyn] watched = []
+	watchedFolders(state, watched)
+	assert indexOf(watched, folder + "/tmp") is Result.Ok(_)
 	_rmdir := hive.file.delete(folder + "/tmp")
 	refreshTree(state)
 	assert !workspace.isExpanded(state.expanded, folder + "/tmp")
@@ -3491,7 +3490,9 @@ test "o texto relido do disco vem quieto; abrir um arquivo, não" {
 	openDoc(state, folder + "/LEIAME.md")
 	state.textSerial = state.textSerial + 1
 	assert !render.frame(state).textQuiet
-	assert watchedFolders(state) == [folder]
+	mut Str[dyn] watchedNow = []
+	watchedFolders(state, watchedNow)
+	assert watchedNow == [folder]
 	if hive.file.write(folder + "/main.hive", "\n") is Result.Error(why) {
 		panic why
 	}

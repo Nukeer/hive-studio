@@ -343,21 +343,27 @@ func gearIcon(): Str {
 // ── buscar no arquivo (Ctrl+F) ───────────────────────────────────────────
 
 // As ocorrências do texto da caixa de busca no documento aberto.
-func findMatches(state: model.State): Int[dyn] {
-	if state.find.open {
-		if activeDoc(state) is Result.Ok(doc) {
-			return search.occurrences(doc.text, state.find.text, state.find.caseSensitive, 5000)
-		}
+func findMatches(text: Str, find: model.FindBox): Int[dyn] {
+	if find.open {
+		return search.occurrences(text, find.text, find.caseSensitive, 5000)
 	}
 	Int[dyn] none = []
 	return none
+}
+
+// O texto onde a caixa de busca procura: o do documento aberto.
+func searched(state: model.State): Str {
+	if activeDoc(state) is Result.Ok(doc) {
+		return doc.text
+	}
+	return ""
 }
 
 func findBox(state: model.State): Str {
 	if !state.find.open || !showsDoc(state) {
 		return ""
 	}
-	matches := findMatches(state)
+	matches := findMatches(searched(state), state.find)
 	mut count := tx(state, "Nenhum resultado")
 	if len(matches) > 0 {
 		count = "{state.find.index + 1} " + tx(state, "de") + " {len(matches)}"
@@ -436,18 +442,19 @@ func searchPanel(state: model.State): Str {
 
 // ── abrir arquivo pelo nome (Ctrl+P) ─────────────────────────────────────
 
-func paletteMatches(state: model.State): Str[dyn] {
-	return search.quickOpen(state.palette.files, state.palette.text, 60)
+// Os arquivos que o Ctrl+P mostra, como posições em `palette.files`.
+func paletteMatches(palette: model.Palette): Int[dyn] {
+	return search.quickOpen(palette.files, palette.text, 60)
 }
 
 func palette(state: model.State): Str {
 	if !state.palette.open {
 		return ""
 	}
-	found := paletteMatches(state)
+	found := paletteMatches(state.palette)
 	mut Str[dyn] items = []
 	for i := 0; i < len(found); i++ {
-		rel := found[i]
+		rel := vim.at(state.palette.files, found[i])
 		name := workspace.baseName(rel)
 		icon := theme.iconFor(name)
 		mut folder := ""
@@ -1607,7 +1614,7 @@ func frame(state: model.State): model.Frame {
 	mut markLength := len(state.find.text)
 	mut markCurrent := state.find.index
 	if inEditor && state.find.open {
-		marks = findMatches(state)
+		marks = findMatches(searched(state), state.find)
 	} else if vimMode != "" {
 		// A busca do Vim: as ocorrências enquanto se digita depois de `/`, e a
 		// última busca até `:noh`.
