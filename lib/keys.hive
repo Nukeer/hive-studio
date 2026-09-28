@@ -45,6 +45,7 @@ func actions(): Action[dyn] {
 		Action("run", "Run", "F5"),
 		Action("test", "Test", "Ctrl+Shift+T"),
 		Action("build", "Build", "Ctrl+Shift+B"),
+		Action("analyze", "Analyze", "Ctrl+Shift+Y"),
 		Action("quit", "Sair", "Ctrl+Q")
 	]
 }

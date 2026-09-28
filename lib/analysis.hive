@@ -35,6 +35,63 @@ func parseDiagnostics(output: Str): model.Diagnostic[dyn] {
 	return found
 }
 
+func words(line: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	for each part in split(replaceAll(line, "\t", " "), " ") {
+		if part != "" {
+			append(found, part)
+		}
+	}
+	return found
+}
+
+// O que `hivec analyze` imprime: o resumo (as linhas antes da primeira função)
+// e as funções piores, cada uma com o primeiro achado dela. O arquivo de cada
+// uma fica para quem chama, que sabe onde os módulos estão.
+type AnalyzeReport {
+	head:  Str[dyn]
+	spots: model.Hotspot[dyn]
+}
+
+func parseAnalyze(output: Str): AnalyzeReport {
+	mut Str[dyn] head = []
+	mut model.Hotspot[dyn] spots = []
+	for each raw in split(replaceAll(output, "\r", ""), "\n") {
+		parts := words(raw)
+		indent := len(raw) - len(trimLeft(raw))
+		mut callable := false
+		if parts is [scoreText, name, kindText, where, lineText] {
+			if where == "line" && kindText is "{kind}," {
+				if hive.conv.sti(scoreText) is Result.Ok(score) {
+					if hive.conv.sti(lineText) is Result.Ok(line) {
+						append(spots, model.Hotspot(score, name, kind, "", line, ""))
+						callable = true
+					}
+				}
+			}
+		}
+		last := len(spots) - 1
+		if callable || len(parts) == 0 {
+			continue
+		} else if spots bounds last {
+			if indent >= 10 && spots[last].detail == "" {
+				spots[last].detail = replaceAll(join(parts, " "), "`", "")
+			}
+		} else {
+			append(head, join(parts, " "))
+		}
+	}
+	return AnalyzeReport(head, spots)
+}
+
+// O módulo de `vim.keyStep` é `vim`; o de `update` é o próprio arquivo ("").
+func moduleOf(name: Str): Str {
+	if name is "{module}.{rest}" {
+		return module
+	}
+	return ""
+}
+
 func symbolOf(line: Str, number: Int): Result<model.Symbol, Bool> {
 	if line is "func {name is (\w+)}{rest}" {
 		return Result.Ok(model.Symbol("func", name, number))
@@ -62,6 +119,19 @@ func outline(text: Str): model.Symbol[dyn] {
 		}
 	}
 	return found
+}
+
+test "a saída do analyze vira resumo e funções" {
+	output := "  studio.hive scores 80/100 over 552 callables\n  422 findings — 272 copies\n\n  0   vim.playMacro                       func, line 2446\n        ×64    e\n             an argument to `vim.keyStep` is deep-copied\n        ·      ed\n             a binding is deep-copied\n\n  35  serve                               proc, line 12\n        ·      next\n             a copy\n"
+	report := parseAnalyze(output)
+	assert report.head == ["studio.hive scores 80/100 over 552 callables", "422 findings — 272 copies"]
+	assert len(report.spots) == 2
+	if report.spots bounds 1 {
+		assert report.spots[0].name == "vim.playMacro" && report.spots[0].score == 0 && report.spots[0].line == 2446
+		assert report.spots[0].kind == "func" && report.spots[0].detail == "an argument to vim.keyStep is deep-copied"
+		assert report.spots[1].name == "serve" && report.spots[1].detail == "a copy"
+	}
+	assert moduleOf("vim.playMacro") == "vim" && moduleOf("serve") == ""
 }
 
 func countLines(text: Str): Int {

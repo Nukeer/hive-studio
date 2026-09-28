@@ -222,6 +222,7 @@ func menuBar(state: model.State): Str {
 			menuItem(state, "Run", "run", ready),
 			menuItem(state, "Test", "test", ready),
 			menuItem(state, "Build", "build", ready),
+			menuItem(state, "Analyze", "analyze", ready),
 			separator(),
 			menuItem(state, "Fixar arquivo atual como entrada", "pin", isHiveDoc)
 		]) +
@@ -264,7 +265,8 @@ func titleBar(state: model.State): Str {
 		toolButton(state, "Check", "check", "", ready) +
 		toolButton(state, "▶ Run", "run", "run", ready) +
 		toolButton(state, "Test", "test", "", ready) +
-		toolButton(state, "Build", "build", "", ready) + "</div>"
+		toolButton(state, "Build", "build", "", ready) +
+		toolButton(state, "Analyze", "analyze", "", ready) + "</div>"
 }
 
 // ── barra de atividades ──────────────────────────────────────────────────
@@ -805,20 +807,22 @@ func breadcrumb(state: model.State): Str {
 
 // ── editor ───────────────────────────────────────────────────────────────
 
-func gutter(text: Str): Str {
-	lines := analysis.countLines(text)
-	mut Str[dyn] numbers = []
-	for n := 1; n <= lines; n++ {
-		append(numbers, "{n}")
-	}
-	return join(numbers, "\n") + "\n\n\n"
-}
-
-func highlighted(state: model.State): Str {
+// O realce que a página ainda não tem: nada, as linhas que mudaram desde o
+// último frame, ou tudo (documento novo na tela, ou a página pediu de novo).
+func hlUpdate(state: model.State): model.HlUpdate {
+	Str[dyn] none = []
 	if activeDoc(state) is Result.Ok(doc) {
-		return doc.html + "\n\n\n"
+		if state.clientHvPath == doc.path {
+			if state.clientHv == doc.version {
+				return model.HlUpdate("keep", 0, 0, none, none, doc.version)
+			}
+			if state.clientHv == doc.version - 1 {
+				return model.HlUpdate("patch", doc.patch.from, doc.patch.remove, doc.patch.lines, doc.patch.source, doc.version)
+			}
+		}
+		return model.HlUpdate("full", 0, 0, doc.hl.lines, split(doc.text, "\n"), doc.version)
 	}
-	return ""
+	return model.HlUpdate("none", 0, 0, none, none, -1)
 }
 
 func preview(state: model.State): Str {
@@ -1185,6 +1189,7 @@ func agentNotice(state: model.State): Str {
 
 func panel(state: model.State): Str {
 	problems := state.pane is model.Pane.ProblemsPane
+	analyzing := state.pane is model.Pane.AnalysisPane
 	terminal := state.pane is model.Pane.TerminalPane
 	agent := state.pane is model.Pane.AgentPane
 	mut body := esc(state.output)
@@ -1218,16 +1223,60 @@ func panel(state: model.State): Str {
 		if len(state.diagnostics) == 0 {
 			body = "<div class=\"empty\">" + tx(state, "Nenhum problema foi detectado.") + "</div>"
 		}
+	} else if analyzing {
+		body = analysisBody(state)
+		if state.analysisReport != "" {
+			actions = headerAction("⧉", tx(state, "Abrir o relatório completo"), "openReport", "")
+		}
 	}
 	return "<div class=\"head\">" +
 		paneTab(tx(state, "PROBLEMAS") + "  {len(state.diagnostics)}", "problems", problems) +
-		paneTab(tx(state, "SAÍDA"), "output", !problems && !terminal && !agent) +
+		analysisTab(state, analyzing) +
+		paneTab(tx(state, "SAÍDA"), "output", !problems && !analyzing && !terminal && !agent) +
 		paneTab(tx(state, "TERMINAL"), "terminal", terminal) +
 		paneTab(tx(state, "AGENTE"), "agent", agent) +
 		"<span class=\"grow\"></span>" + actions +
 		headerAction(maxGlyph, maxTip + keyHint(state, "maximizePanel"), "panelMax", "") +
 		headerAction("✕", tx(state, "Fechar painel") + keyHint(state, "togglePanel"), "togglePanel", "") +
 		"</div><div class=\"" + bodyClass + "\">" + body + "</div>"
+}
+
+// A aba ANÁLISE só aparece depois do primeiro `hivec analyze`.
+func analysisTab(state: model.State, on: Bool): Str {
+	if len(state.analysisHead) == 0 && !on {
+		return ""
+	}
+	return paneTab(tx(state, "ANÁLISE"), "analysis", on)
+}
+
+// A nota em cores: vermelho até 40, amarelo até 70, verde acima.
+func scoreClass(score: Int): Str {
+	if score <= 40 {
+		return "sc bad"
+	} else if score <= 70 {
+		return "sc mid"
+	}
+	return "sc good"
+}
+
+func analysisBody(state: model.State): Str {
+	if len(state.analysisHead) == 0 {
+		return "<div class=\"empty\">" + tx(state, "Rode Executar → Analyze para ver o custo de cada função.") + "</div>"
+	}
+	mut Str[dyn] rows = []
+	for each line in state.analysisHead {
+		append(rows, "<div class=\"ahead\">" + esc(line) + "</div>")
+	}
+	if state.analysisReport != "" {
+		append(rows, "<div class=\"ahead\"><span class=\"link\"" + act("openReport", "") + ">" + tx(state, "Abrir o relatório completo") + "</span></div>")
+	}
+	for each spot in state.hotspots {
+		append(rows, "<div class=\"prob spot\"" + act("openAt", spot.file) + attr("data-text", "{spot.line}:0") + attr("title", spot.detail) + ">" +
+			"<span class=\"" + scoreClass(spot.score) + "\">{spot.score}</span><span class=\"nm\">" + esc(spot.name) + "</span>" +
+			"<span class=\"det\">" + esc(spot.detail) + "</span>" +
+			"<span class=\"where\">" + esc(workspace.baseName(spot.file)) + " [" + "{spot.line}" + "]</span></div>")
+	}
+	return join(rows, "")
 }
 
 // ── barra de status ──────────────────────────────────────────────────────
@@ -1239,21 +1288,31 @@ func statusItem(label: Str, action: Str, arg: Str, tip: Str): Str {
 	return "<span class=\"si click\"" + act(action, arg) + attr("title", tip) + ">" + label + "</span>"
 }
 
+// Só o texto antes do cursor, partido em linhas: a última é a coluna.
 func caretPosition(text: Str, caret: Int): Str {
-	chars := split(text, "")
-	mut line := 1
-	mut column := 1
-	for i := 0; i < caret; i++ {
-		if chars bounds i {
-			if chars[i] == "\n" {
-				line++
-				column = 1
-			} else {
-				column++
-			}
-		}
+	mut before := text
+	last := caret - 1
+	if caret <= 0 {
+		before = ""
+	} else if text bounds last {
+		before = text[:last]
 	}
-	return "Ln {line}, Col {column}"
+	lines := split(before, "\n")
+	mut column := 1
+	end := len(lines) - 1
+	if lines bounds end {
+		column = len(lines[end]) + 1
+	}
+	return "Ln {len(lines)}, Col {column}"
+}
+
+test "a posição do cursor em linha e coluna" {
+	assert caretPosition("ab\ncd", 0) == "Ln 1, Col 1"
+	assert caretPosition("ab\ncd", 2) == "Ln 1, Col 3"
+	assert caretPosition("ab\ncd", 3) == "Ln 2, Col 1"
+	assert caretPosition("ab\ncd", 5) == "Ln 2, Col 3"
+	assert caretPosition("ab\ncd", 99) == "Ln 2, Col 3"
+	assert caretPosition("ação", 4) == "Ln 1, Col 5"
 }
 
 func statusBar(state: model.State): Str {
@@ -1413,13 +1472,13 @@ func frame(state: model.State): model.Frame {
 	prefs := state.settings
 	layout := layoutOf(state)
 	mut text := ""
-	mut editing := ""
-	mut hl := ""
+	mut lineCount := 0
 	if activeDoc(state) is Result.Ok(doc) {
 		text = doc.text
-		editing = gutter(doc.text)
-		hl = highlighted(state)
+		lineCount = len(doc.hl.lines)
 	}
+	// O texto só vai quando a página não o tem; enquanto se digita, ela é que o tem.
+	hasText := state.clientSerial != state.textSerial
 	mut settingsHtml := ""
 	if layout == "settings" {
 		settingsHtml = settingsPage(state)
@@ -1446,8 +1505,6 @@ func frame(state: model.State): model.Frame {
 		region("side", sidePanel(state)),
 		region("tabs", tabStrip(state)),
 		region("crumbs", breadcrumb(state)),
-		region("gutter", editing),
-		region("hl", hl),
 		region("preview", preview(state)),
 		region("settings", settingsHtml),
 		region("commit", commitHtml),
@@ -1491,7 +1548,11 @@ func frame(state: model.State): model.Frame {
 	return model.Frame(
 		regions: all,
 		css: theme.css(theme.byName(prefs.theme), prefs.fontSize, prefs.tabSize),
-		text: text,
+		text: sentText(hasText, text),
+		hasText: hasText,
+		seq: state.frameSeq,
+		hl: hlUpdate(state),
+		lineCount: lineCount,
 		serial: state.textSerial,
 		caret: state.caret,
 		keys: keys.combos(prefs.keymap),
@@ -1523,6 +1584,13 @@ func frame(state: model.State): model.Frame {
 		agentKeys: agentKeys(prefs.keymap),
 		textQuiet: state.textSerial == state.quietSerial
 	)
+}
+
+func sentText(has: Bool, text: Str): Str {
+	if has {
+		return text
+	}
+	return ""
 }
 
 // Os terminais de agente que a página mantém conectados (inclusive os que

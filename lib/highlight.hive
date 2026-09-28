@@ -176,6 +176,253 @@ func highlight(text: Str): Str {
 	return join(out, "")
 }
 
+// ── realce por linha, para refazer só o que mudou ────────────────────────
+
+// Uma linha realçada, e o texto que ela deixa aberto para a próxima (`carry`):
+// 0 nenhum, 1 entre crases, 2 entre aspas — os únicos tokens que atravessam linhas.
+type HlLine {
+	html:  Str
+	carry: Int
+}
+
+// O realce de um texto, uma entrada por linha.
+type Highlighted {
+	lines: Str[dyn]
+	carry: Int[dyn]
+}
+
+// O que mudou no realce: a partir da linha `from`, sai `remove` e entra `lines`.
+type Patch {
+	from:   Int
+	remove: Int
+	lines:  Str[dyn]
+	source: Str[dyn]
+}
+
+type Rehighlight {
+	result: Highlighted
+	patch:  Patch
+}
+
+func noPatch(): Patch {
+	Str[dyn] none = []
+	return Patch(0, 0, none, none)
+}
+
+// Onde fecha o texto que veio aberto da linha anterior (-1: não fecha aqui).
+func closingAt(chars: Str[], carry: Int): Int {
+	for i := 0; i < len(chars); i++ {
+		if chars bounds i {
+			c := chars[i]
+			if carry == 1 && c == "`" {
+				return i
+			} else if carry == 2 && c == "\\" {
+				i++
+			} else if carry == 2 && c == "\"" {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func highlightLine(line: Str, carry: Int): HlLine {
+	mut rest := line
+	mut Str[dyn] out = []
+	if carry != 0 {
+		chars := split(line, "")
+		at := closingAt(chars, carry)
+		if at < 0 {
+			return HlLine(span("ts", line), carry)
+		}
+		append(out, span("ts", piece(chars, 0, at + 1)))
+		rest = piece(chars, at + 1, len(chars))
+	}
+	append(out, highlight(rest))
+	return HlLine(join(out, ""), leftOpen(rest))
+}
+
+// O texto que a linha deixa aberto, lida como `highlight` lê: uma crase num
+// comentário ou entre aspas não abre nada, nem aspas entre crases.
+func leftOpen(line: Str): Int {
+	chars := split(line, "")
+	total := len(chars)
+	mut open := 0
+	for i := 0; i < total; i++ {
+		if chars bounds i {
+			c := chars[i]
+			if open == 1 {
+				if c == "`" {
+					open = 0
+				}
+			} else if open == 2 {
+				if c == "\\" {
+					i++
+				} else if c == "\"" {
+					open = 0
+				}
+			} else if c == "`" {
+				open = 1
+			} else if c == "\"" {
+				open = 2
+			} else if c == "/" {
+				ahead := i + 1
+				if chars bounds ahead {
+					if chars[ahead] == "/" {
+						return 0
+					}
+				}
+			}
+		}
+	}
+	return open
+}
+
+func highlightText(text: Str, colored: Bool): Highlighted {
+	mut Str[dyn] lines = []
+	mut Int[dyn] carry = []
+	mut open := 0
+	for each line in split(text, "\n") {
+		if colored {
+			done := highlightLine(line, open)
+			append(lines, done.html)
+			append(carry, done.carry)
+			open = done.carry
+		} else {
+			append(lines, escape(line))
+			append(carry, 0)
+		}
+	}
+	return Highlighted(lines, carry)
+}
+
+// Refaz o realce só das linhas que mudaram entre `before` e `after`, e segue
+// adiante enquanto um texto entre crases aberto ou fechado mudar o que vem depois.
+func rehighlight(old: Highlighted, before: Str, after: Str, colored: Bool): Rehighlight {
+	oldLines := split(before, "\n")
+	newLines := split(after, "\n")
+	oldCount := len(oldLines)
+	newCount := len(newLines)
+	mut prefix := 0
+	for ; prefix < oldCount && prefix < newCount; prefix++ {
+		if oldLines bounds prefix && newLines bounds prefix {
+			if oldLines[prefix] != newLines[prefix] {
+				break
+			}
+		}
+	}
+	mut suffix := 0
+	for ; suffix < oldCount - prefix && suffix < newCount - prefix; suffix++ {
+		o := oldCount - 1 - suffix
+		n := newCount - 1 - suffix
+		if oldLines bounds o && newLines bounds n {
+			if oldLines[o] != newLines[n] {
+				break
+			}
+		}
+	}
+	mut open := 0
+	back := prefix - 1
+	if old.carry bounds back {
+		open = old.carry[back]
+	}
+	mut Str[dyn] changed = []
+	mut Str[dyn] changedSource = []
+	mut Int[dyn] changedCarry = []
+	mut newEnd := newCount - suffix
+	mut oldEnd := oldCount - suffix
+	for i := prefix; i < newEnd; i++ {
+		if newLines bounds i {
+			append(changedSource, newLines[i])
+			if colored {
+				done := highlightLine(newLines[i], open)
+				append(changed, done.html)
+				append(changedCarry, done.carry)
+				open = done.carry
+			} else {
+				append(changed, escape(newLines[i]))
+				append(changedCarry, 0)
+			}
+		}
+	}
+	// Se o estado no fim do trecho mudou, as linhas seguintes também mudam.
+	for ; colored && newEnd < newCount && oldEnd < oldCount; {
+		mut was := 0
+		prev := oldEnd - 1
+		if old.carry bounds prev {
+			was = old.carry[prev]
+		}
+		if was == open {
+			break
+		}
+		if newLines bounds newEnd {
+			append(changedSource, newLines[newEnd])
+			done := highlightLine(newLines[newEnd], open)
+			append(changed, done.html)
+			append(changedCarry, done.carry)
+			open = done.carry
+		}
+		newEnd++
+		oldEnd++
+	}
+	mut Str[dyn] lines = []
+	mut Int[dyn] carry = []
+	for i := 0; i < prefix; i++ {
+		if old.lines bounds i && old.carry bounds i {
+			append(lines, old.lines[i])
+			append(carry, old.carry[i])
+		}
+	}
+	for i := 0; i < len(changed); i++ {
+		if changedCarry bounds i {
+			append(lines, changed[i])
+			append(carry, changedCarry[i])
+		}
+	}
+	for i := oldEnd; i < oldCount; i++ {
+		if old.lines bounds i && old.carry bounds i {
+			append(lines, old.lines[i])
+			append(carry, old.carry[i])
+		}
+	}
+	return Rehighlight(Highlighted(lines, carry), Patch(prefix, oldEnd - prefix, changed, changedSource))
+}
+
+test "realce por linha carrega o texto entre crases" {
+	first := highlightLine("x := `abre", 0)
+	assert first.carry == 1
+	second := highlightLine("meio", 1)
+	assert second.carry == 1 && second.html == "<span class=\"ts\">meio</span>"
+	third := highlightLine("fecha` + 1", 1)
+	assert third.carry == 0
+	assert indexOf(third.html, "<span class=\"tn\">1</span>") is Result.Ok(_)
+	assert highlightLine("// uma crase ` num comentário", 0).carry == 0
+	assert highlightLine("if c == \"`\" \{", 0).carry == 0
+	assert highlightLine("x := \"a\\\"`\"", 0).carry == 0
+	assert highlightLine("x := \"a\" + `abre // não é comentário", 0).carry == 1
+	assert highlightLine("render(\"- **um", 0).carry == 2
+	assert highlightLine("  dois \\\" ` três\") + 1", 2).carry == 0
+}
+
+test "rehighlight muda só as linhas editadas e devolve o patch" {
+	before := "proc a(): void \{\n\techo 1\n}\n"
+	after := "proc a(): void \{\n\techo 2\n\techo 3\n}\n"
+	old := highlightText(before, true)
+	done := rehighlight(old, before, after, true)
+	assert done.patch.from == 1
+	assert done.patch.remove == 1
+	assert len(done.patch.lines) == 2
+	assert done.result.lines == highlightText(after, true).lines
+	opening := "a\nb := `x\nc\nd` + 1\n"
+	closed := highlightText(opening, true)
+	edited := rehighlight(closed, opening, replaceAll(opening, "`x", "x"), true)
+	assert edited.result.lines == highlightText(replaceAll(opening, "`x", "x"), true).lines
+	quoted := "a\nb := \"x\nc\nd\" + 1\n"
+	quotedBefore := highlightText(quoted, true)
+	unquoted := rehighlight(quotedBefore, quoted, replaceAll(quoted, "\"x", "x"), true)
+	assert unquoted.result.lines == highlightText(replaceAll(quoted, "\"x", "x"), true).lines
+}
+
 test "palavras-chave, tipos, textos e comentários ganham classes" {
 	html := highlight("proc main(): void \{ // oi\n\tx := \"a<b\" + 1\n}")
 	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)

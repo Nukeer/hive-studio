@@ -20,6 +20,8 @@ func lower(text: Str): Str {
 }
 
 // As posições (em caracteres) onde `wanted` aparece em `text`, no máximo `limit`.
+// Partir o texto pelo que se busca passa por ele uma vez só; recortar o resto
+// a cada ocorrência passaria de novo por tudo que falta, a cada uma.
 func occurrences(text: Str, wanted: Str, caseSensitive: Bool, limit: Int): Int[dyn] {
 	mut Int[dyn] found = []
 	if wanted == "" {
@@ -31,16 +33,15 @@ func occurrences(text: Str, wanted: Str, caseSensitive: Bool, limit: Int): Int[d
 		haystack = lower(text)
 		needle = lower(wanted)
 	}
+	pieces := split(haystack, needle)
+	size := len(needle)
 	mut offset := 0
-	for ; len(found) < limit; {
-		if indexOf(haystack, needle) is Result.Ok(at) {
-			append(found, offset + at)
-			cut := at + len(needle)
-			offset = offset + cut
-			haystack = complete.skip(haystack, cut)
-		} else {
-			break
+	for i := 0; i + 1 < len(pieces) && len(found) < limit; i++ {
+		if pieces bounds i {
+			offset = offset + len(pieces[i])
 		}
+		append(found, offset)
+		offset = offset + size
 	}
 	return found
 }
@@ -105,6 +106,12 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 	if wanted == "" {
 		return ProjectResult(hits, 0, false)
 	}
+	// Minúsculas uma vez por arquivo (e não por linha), e o arquivo que não tem
+	// o que se busca é descartado antes de ser partido em linhas.
+	mut needle := wanted
+	if !caseSensitive {
+		needle = lower(wanted)
+	}
 	for each rel in allFiles(root, showHidden, 20000) {
 		if isTextFile(rel) && !truncated {
 			path := workspace.joinPath(root, rel)
@@ -114,16 +121,26 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 			}
 			if small {
 				if hive.file.read(path) is Result.Ok(content) {
+					clean := replaceAll(content, "\r", "")
+					mut haystack := clean
+					if !caseSensitive {
+						haystack = lower(clean)
+					}
+					if indexOf(haystack, needle) is Result.Error(_) {
+						continue
+					}
 					mut matched := false
-					lines := split(replaceAll(content, "\r", ""), "\n")
-					for i := 0; i < len(lines); i++ {
-						at := occurrences(lines[i], wanted, caseSensitive, 1)
-						if at is [column] {
-							if len(hits) < limit {
-								append(hits, model.Hit(rel, i + 1, column, lines[i]))
-								matched = true
-							} else {
-								truncated = true
+					lines := split(clean, "\n")
+					folded := split(haystack, "\n")
+					for i := 0; i < len(lines) && !truncated; i++ {
+						if folded bounds i && lines bounds i {
+							if indexOf(folded[i], needle) is Result.Ok(column) {
+								if len(hits) < limit {
+									append(hits, model.Hit(rel, i + 1, column, lines[i]))
+									matched = true
+								} else {
+									truncated = true
+								}
 							}
 						}
 					}

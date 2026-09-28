@@ -16,7 +16,7 @@ hivec test studio.hive             # testes, com cobertura
   o seletor nativo do Windows, salvar, configurações, fechar, sair), **Editar**
   (desfazer, refazer, recortar, copiar, colar, selecionar tudo, sugestões, ir
   para a definição), **Ver** (barras e painéis, tema), **Executar** (Check, Run,
-  Test, Build, fixar entrada), **Terminal** e **Ajuda** (documentação, atalhos,
+  Test, Build, Analyze, fixar entrada), **Terminal** e **Ajuda** (documentação, atalhos,
   sobre). Cada item mostra o atalho configurado.
 - **Buscas**: `Ctrl+F` abre a busca no arquivo (contagem, ↑/↓, `Shift+Enter`,
   diferenciar maiúsculas, todas as ocorrências destacadas); `Ctrl+Shift+F`
@@ -137,7 +137,7 @@ hivec test studio.hive             # testes, com cobertura
 | Maximizar painel | `Ctrl+Shift+M` | Abrir arquivo / pasta | `Ctrl+O` / `Ctrl+Alt+O` |
 | Sair | `Ctrl+Q` | Buscar no arquivo | `Ctrl+F` |
 | Buscar no projeto | `Ctrl+Shift+F` | Ir para arquivo | `Ctrl+P` |
-| Agente (Claude Code, Codex, OpenCode) | `Ctrl+Shift+A` | | |
+| Agente (Claude Code, Codex, OpenCode) | `Ctrl+Shift+A` | Analyze | `Ctrl+Shift+Y` |
 
 `Ctrl+`` ` é a tecla à esquerda do `1`, em qualquer layout (no ABNT2 é a do `'`).
 
@@ -218,11 +218,12 @@ carimba a versão em `lib/version.hive`, compila para Linux, macOS e Windows
 `SHA256SUMS`. As notas do release são a seção da versão no `CHANGELOG.md`. O
 `hivec` usado no CI está fixado por tag e digest em `.github/hivec.txt`.
 
-Para publicar a 0.1.0, com o repositório no GitHub:
+Para publicar uma versão (a 0.1.1, por exemplo), com a seção dela no
+`CHANGELOG.md` e o merge feito na `main`:
 
 ```
-git tag v0.1.0
-git push origin main v0.1.0
+git tag v0.1.1
+git push origin main v0.1.1
 ```
 
 ## Git

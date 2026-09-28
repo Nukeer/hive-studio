@@ -116,88 +116,115 @@ func contains(values: Str[], value: Str): Bool {
 	return indexOf(values, value) is Result.Ok(_)
 }
 
-// Os nomes que aparecem no arquivo, para completar variáveis locais também.
-func wordsIn(text: Str): Str[dyn] {
+// Os nomes do arquivo que começam com `prefix` (sem ser ele), para completar
+// variáveis locais também — no máximo `limit`, na ordem em que aparecem. Só
+// as linhas onde `prefix` aparece são lidas caractere a caractere.
+func wordsIn(text: Str, prefix: Str, limit: Int): Str[dyn] {
 	mut Str[dyn] found = []
-	mut Str[dyn] current = []
-	for each c in split(text, "") {
-		if highlight.isIdent(c) {
-			append(current, c)
-		} else if len(current) > 0 {
-			word := join(current, "")
-			if len(word) >= 3 && !contains(found, word) {
-				append(found, word)
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	for each line in split(text, "\n") {
+		if indexOf(line, prefix) is Result.Ok(_) {
+			mut Str[dyn] current = []
+			for each c in split(line + " ", "") {
+				if highlight.isIdent(c) {
+					append(current, c)
+				} else if len(current) > 0 {
+					word := join(current, "")
+					if len(word) >= 3 && word != prefix && startsWith(word, prefix) && !hive.map.has(seen, word) {
+						hive.map.set(seen, word, true)
+						append(found, word)
+						if len(found) >= limit {
+							return found
+						}
+					}
+					Str[dyn] reset = []
+					current = reset
+				}
 			}
-			Str[dyn] reset = []
-			current = reset
 		}
 	}
 	return found
 }
 
-func add(found: model.Suggestion[], candidate: model.Suggestion, prefix: Str): model.Suggestion[dyn] {
-	mut model.Suggestion[dyn] next = found
-	if candidate.word == prefix || !startsWith(candidate.word, prefix) {
-		return next
-	}
-	for each s in found {
-		if s.word == candidate.word {
-			return next
-		}
-	}
-	append(next, candidate)
-	return next
-}
-
-func suggest(text: Str, caret: Int, limit: Int): model.Suggestion[dyn] {
-	ctx := context(text, caret)
-	mut model.Suggestion[dyn] found = []
+// O que a linguagem oferece no ponto do cursor, antes dos nomes do arquivo.
+func fixedCandidates(ctx: Context): model.Suggestion[dyn] {
+	mut model.Suggestion[dyn] all = []
 	if ctx.qualifier == "hive" {
 		for each m in modules() {
-			found = add(found, model.Suggestion(m, "module", "hive.{m}"), ctx.prefix)
+			append(all, model.Suggestion(m, "module", "hive.{m}"))
 		}
 		for each b in builtins() {
-			found = add(found, model.Suggestion(b, "func", "builtin"), ctx.prefix)
+			append(all, model.Suggestion(b, "func", "builtin"))
 		}
 	} else if ctx.qualifier is "hive.{module}" {
 		for each m in members(module) {
-			found = add(found, model.Suggestion(m, memberKind(m), "hive.{module}"), ctx.prefix)
+			append(all, model.Suggestion(m, memberKind(m), "hive.{module}"))
 		}
 	} else if ctx.qualifier != "" {
 		for each m in members(ctx.qualifier) {
-			found = add(found, model.Suggestion(m, memberKind(m), ctx.qualifier), ctx.prefix)
+			append(all, model.Suggestion(m, memberKind(m), ctx.qualifier))
 		}
 	} else {
 		for each k in highlight.keywords() {
-			found = add(found, model.Suggestion(k, "keyword", "palavra-chave"), ctx.prefix)
+			append(all, model.Suggestion(k, "keyword", "palavra-chave"))
 		}
 		for each t in highlight.builtinTypes() {
-			found = add(found, model.Suggestion(t, "type", "tipo"), ctx.prefix)
+			append(all, model.Suggestion(t, "type", "tipo"))
 		}
-		found = add(found, model.Suggestion("true", "keyword", "Bool"), ctx.prefix)
-		found = add(found, model.Suggestion("false", "keyword", "Bool"), ctx.prefix)
-		found = add(found, model.Suggestion("hive", "module", "biblioteca padrão"), ctx.prefix)
+		append(all, model.Suggestion("true", "keyword", "Bool"))
+		append(all, model.Suggestion("false", "keyword", "Bool"))
+		append(all, model.Suggestion("hive", "module", "biblioteca padrão"))
 		for each b in builtins() {
-			found = add(found, model.Suggestion(b, "func", "builtin"), ctx.prefix)
-		}
-		for each symbol in analysis.outline(text) {
-			if symbol.kind != "import" {
-				found = add(found, model.Suggestion(symbol.name, symbol.kind, "linha {symbol.line}"), ctx.prefix)
-			}
-		}
-		if ctx.prefix != "" {
-			for each w in wordsIn(text) {
-				found = add(found, model.Suggestion(w, "word", "no arquivo"), ctx.prefix)
-			}
+			append(all, model.Suggestion(b, "func", "builtin"))
 		}
 	}
-	mut model.Suggestion[dyn] limited = []
-	for each s in found {
-		if len(limited) < limit {
-			append(limited, s)
+	return all
+}
+
+func fits(word: Str, prefix: Str): Bool {
+	return word != prefix && startsWith(word, prefix)
+}
+
+// Para assim que tem `limit` sugestões: o arquivo só é lido se a linguagem não
+// bastou, e os nomes dele só até completar a lista.
+func suggest(text: Str, caret: Int, limit: Int): model.Suggestion[dyn] {
+	ctx := context(text, caret)
+	mut model.Suggestion[dyn] found = []
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	for each s in fixedCandidates(ctx) {
+		if len(found) >= limit {
+			return found
+		}
+		if fits(s.word, ctx.prefix) && !hive.map.has(seen, s.word) {
+			hive.map.set(seen, s.word, true)
+			append(found, s)
 		}
 	}
-	return limited
+	if ctx.qualifier != "" {
+		return found
+	}
+	for each symbol in analysis.outline(text) {
+		if len(found) >= limit {
+			return found
+		}
+		if symbol.kind != "import" && fits(symbol.name, ctx.prefix) && !hive.map.has(seen, symbol.name) {
+			hive.map.set(seen, symbol.name, true)
+			append(found, model.Suggestion(symbol.name, symbol.kind, "linha {symbol.line}"))
+		}
+	}
+	if ctx.prefix == "" {
+		return found
+	}
+	for each w in wordsIn(text, ctx.prefix, limit + len(found)) {
+		if len(found) >= limit {
+			return found
+		}
+		if !hive.map.has(seen, w) {
+			hive.map.set(seen, w, true)
+			append(found, model.Suggestion(w, "word", "no arquivo"))
+		}
+	}
+	return found
 }
 
 func take(text: Str, count: Int): Str {
