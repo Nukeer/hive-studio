@@ -84,8 +84,11 @@ hivec test studio.hive             # testes, com cobertura
   clique, ou `:Ex` no modo Vim), `↑`/`↓` andam, `→`/`←` abrem e fecham pastas,
   `Enter` abre, `Home`/`End`, `Delete` exclui (com confirmação); no modo Vim
   também `j k l h o gg G`, contagens, `:` para a linha de comando e `Esc` de
-  volta ao editor. Fechar uma aba com alterações por salvar pergunta se salva
-  antes.
+  volta ao editor. O botão direito abre o menu do arquivo ou da pasta:
+  novo arquivo e nova pasta ali, renomear (`F2`), excluir, copiar o caminho,
+  mostrar na pasta do sistema, abrir no terminal, fixar como entrada e, com
+  alterações no git, preparar ou descartar. Fechar uma aba com alterações por
+  salvar pergunta se salva antes.
 - **Cores do git** no explorador e nas abas: arquivo novo em verde (`U`/`A`),
   editado em amarelo/laranja (`M`), removido em vermelho (`D`); commitado fica na
   cor normal. Pastas levam a cor do que têm dentro.
@@ -235,12 +238,12 @@ carimba a versão em `lib/version.hive`, compila para Linux, macOS e Windows
 `SHA256SUMS`. As notas do release são a seção da versão no `CHANGELOG.md`. O
 `hivec` usado no CI está fixado por tag e digest em `.github/hivec.txt`.
 
-Para publicar uma versão (a 0.1.2, por exemplo), com a seção dela no
+Para publicar uma versão (a 0.1.3, por exemplo), com a seção dela no
 `CHANGELOG.md` e o merge feito na `main`:
 
 ```
-git tag v0.1.2
-git push origin main v0.1.2
+git tag v0.1.3
+git push origin main v0.1.3
 ```
 
 ## Git

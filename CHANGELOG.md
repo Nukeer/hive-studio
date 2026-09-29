@@ -1,6 +1,6 @@
 # Changelog
 
-## Não lançado
+## v0.1.3
 
 ### Editor
 
