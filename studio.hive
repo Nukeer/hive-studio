@@ -498,6 +498,142 @@ func within(path: Str, target: Str): Bool {
 	return clean == gone || complete.startsWith(clean, gone + "/")
 }
 
+// Um item do menu do botão direito do explorador.
+proc contextAction(state: mut model.State, action: Str, path: Str, from: hive.syslink.Address): void {
+	folder := render.isFolder(state, path)
+	mut here := path
+	if !folder {
+		here = workspace.parentOf(path)
+	}
+	state.selected = path
+	if action == "open" {
+		openDoc(state, path)
+		withFocus(state, "editor")
+	} else if action == "newFile" || action == "newFolder" {
+		// O novo item vai para dentro da pasta, ou ao lado do arquivo.
+		state.selected = here
+		if here != state.root && !workspace.isExpanded(state.expanded, here) {
+			toggle(state, here)
+		}
+		update(state, model.Msg.StartPrompt(promptFor(action)), from)
+	} else if action == "rename" {
+		update(state, model.Msg.StartPrompt(model.Prompt.RenamePrompt(path)), from)
+	} else if action == "delete" {
+		update(state, model.Msg.AskRemove(path), from)
+	} else if action == "copyPath" || action == "copyRelative" {
+		mut text := native.absPath(path)
+		if action == "copyRelative" {
+			text = render.relPath(state, path)
+		}
+		state.vim.clip = text
+		state.vim.clipSerial = state.vim.clipSerial + 1
+		state.status = render.tx(state, "caminho copiado") + ": " + text
+	} else if action == "reveal" {
+		revealInSystem(path)
+	} else if action == "terminal" {
+		update(state, model.Msg.ShowPane(model.Pane.TerminalPane()), from)
+		mut command := "cd \"" + native.absPath(here) + "\""
+		if server.isWindows() {
+			command = "cd /d \"" + replaceAll(native.absPath(here), "/", "\\") + "\""
+		}
+		update(state, model.Msg.TermSubmit(command), from)
+	} else if action == "entry" {
+		state.entrypoint = path
+		state.status = render.tx(state, "entrada") + ": " + workspace.baseName(path)
+	} else if action == "stage" {
+		gitPath := render.gitPathOf(state, path)
+		if gitPath != "" {
+			update(state, model.Msg.GitStage(gitPath), from)
+		}
+	} else if action == "discard" {
+		gitPath := render.gitPathOf(state, path)
+		if gitPath != "" {
+			update(state, model.Msg.GitAskDiscard(gitPath), from)
+		}
+	}
+}
+
+// Mostra o arquivo (ou a pasta) no gerenciador de arquivos do sistema.
+proc revealInSystem(path: Str): void {
+	abs := native.absPath(path)
+	if server.isWindows() {
+		async server.openWith("explorer.exe", ["/select," + replaceAll(abs, "/", "\\")])
+	} else if hive.file.exists("/usr/bin/open") {
+		async server.openWith("open", ["-R", abs])
+	} else {
+		async server.openWith("xdg-open", [workspace.parentOf(abs)])
+	}
+}
+
+// Troca o nome de um arquivo ou de uma pasta, e leva junto os documentos
+// abertos dela, as pastas expandidas, a seleção e a entrada fixada.
+proc renamePath(state: mut model.State, path: Str, name: Str): void {
+	if name == "" || name == workspace.baseName(path) {
+		return
+	}
+	if highlight.has(name, "/") || highlight.has(name, "\\") {
+		state.status = render.tx(state, "o nome não pode ter barras")
+		return
+	}
+	target := workspace.joinPath(workspace.parentOf(path), name)
+	if hive.file.exists(target) {
+		state.status = "{name} " + render.tx(state, "já existe")
+		return
+	}
+	if hive.file.move(path, target) is Result.Error(why) {
+		state.status = render.tx(state, "não foi possível renomear") + " " + workspace.baseName(path) + ": " + why.message
+		return
+	}
+	for i := 0; i < len(state.docs); i++ {
+		mut open := ""
+		if state.docs bounds i {
+			open = state.docs[i].path
+		}
+		if open != "" && within(open, path) {
+			moved := movedPath(open, path, target)
+			mut text := ""
+			if state.docs bounds i {
+				text = state.docs[i].text
+			}
+			if state.docs bounds i {
+				state.docs[i].path = moved
+			}
+			if state.docs bounds i {
+				state.docs[i].name = workspace.baseName(moved)
+			}
+			if state.docs bounds i {
+				state.docs[i].hl = highlight.highlightText(text, model.language(moved))
+			}
+		}
+	}
+	mut Str[dyn] expanded = []
+	for each folder in state.expanded {
+		append(expanded, movedPath(folder, path, target))
+	}
+	state.expanded = expanded
+	if state.entrypoint != "" && within(state.entrypoint, path) {
+		state.entrypoint = movedPath(state.entrypoint, path, target)
+	}
+	state.selected = target
+	state.textSerial = state.textSerial + 1
+	reload(state)
+	gitRefresh(state)
+	state.status = workspace.baseName(path) + " " + render.tx(state, "renomeado para") + " " + name
+}
+
+// `path` com o começo `from` trocado por `to` (ele mesmo, se não está dentro).
+func movedPath(path: Str, from: Str, to: Str): Str {
+	clean := workspace.normalize(path)
+	old := workspace.normalize(from)
+	if clean == old {
+		return to
+	}
+	if complete.startsWith(clean, old + "/") {
+		return to + complete.skip(clean, len(old))
+	}
+	return path
+}
+
 // Apaga um arquivo, ou uma pasta com tudo o que tem dentro, e fecha o que
 // estava aberto dela. A raiz do projeto não se apaga.
 proc removePath(state: mut model.State, path: Str): void {
@@ -1476,6 +1612,12 @@ proc treeKey(state: mut model.State, key: Str): void {
 				}
 			}
 		}
+	} else if key == "<F2>" {
+		if current >= 0 && workspace.normalize(row.entry.path) != workspace.normalize(state.root) {
+			state.prompt = model.Prompt.RenamePrompt(row.entry.path)
+			state.promptText = row.entry.name
+			withFocus(state, "prompt")
+		}
 	} else if key == "<Del>" {
 		if current >= 0 && workspace.normalize(row.entry.path) != workspace.normalize(state.root) {
 			state.removing = row.entry.path
@@ -1827,6 +1969,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 		state.side = model.SideView.ExplorerSide()
 		if prompt is model.Prompt.OpenFolderPrompt {
 			state.promptText = state.root
+		} else if prompt is model.Prompt.RenamePrompt(path) {
+			state.promptText = workspace.baseName(path)
 		}
 		withFocus(state, "prompt")
 	} else if message is model.Msg.PromptTyped(text) {
@@ -1845,6 +1989,8 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 			create(state, typed, true)
 		} else if asked is model.Prompt.OpenFolderPrompt {
 			openRoot(state, typed)
+		} else if asked is model.Prompt.RenamePrompt(path) {
+			renamePath(state, path, typed)
 		}
 	} else if message is model.Msg.PromptCancel {
 		state.prompt = model.Prompt.NoPrompt()
@@ -1894,6 +2040,14 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 	} else if message is model.Msg.CancelDialog {
 		state.closing = ""
 		state.removing = ""
+	} else if message is model.Msg.OpenContext(path, x, y) {
+		state.context = model.ContextMenu(path, x, y)
+		state.selected = path
+	} else if message is model.Msg.CloseContext {
+		state.context = model.ContextMenu("", 0, 0)
+	} else if message is model.Msg.ContextPick(action, path) {
+		state.context = model.ContextMenu("", 0, 0)
+		contextAction(state, action, path, from)
 	} else if message is model.Msg.CycleTab(step) {
 		count := len(state.docs)
 		if count > 0 {
@@ -2287,7 +2441,9 @@ proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Ms
 
 // O que o Esc fecha, do mais de cima para o mais de baixo ("" = nada).
 func escapeKind(state: model.State): Str {
-	if state.vim.prompt != "" {
+	if state.context.path != "" {
+		return "context"
+	} else if state.vim.prompt != "" {
 		return "vimCancel"
 	} else if state.recording != "" {
 		return "recording"
@@ -2322,6 +2478,8 @@ func escapeFor(kind: Str): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.PaletteClose())
 	} else if kind == "dialog" {
 		return Result.Ok(model.Msg.CancelDialog())
+	} else if kind == "context" {
+		return Result.Ok(model.Msg.CloseContext())
 	} else if kind == "confirm" {
 		return Result.Ok(model.Msg.GitCancelConfirm())
 	} else if kind == "peek" {
@@ -2439,6 +2597,15 @@ proc clickMsg(state: mut model.State, event: model.Event): Result<model.Msg, Boo
 		return Result.Ok(model.Msg.CloseDiscard(arg))
 	} else if a == "cancelDialog" {
 		return Result.Ok(model.Msg.CancelDialog())
+	} else if a == "context" {
+		if event.text is "{x},{y}" {
+			return Result.Ok(model.Msg.OpenContext(arg, numberOr(x, 0), numberOr(y, 0)))
+		}
+		return Result.Ok(model.Msg.OpenContext(arg, 0, 0))
+	} else if a == "closeContext" {
+		return Result.Ok(model.Msg.CloseContext())
+	} else if a == "ctx" {
+		return Result.Ok(model.Msg.ContextPick(arg, event.text))
 	} else if a == "gitCommit" {
 		return Result.Ok(model.Msg.GitCommit())
 	} else if a == "gitPush" {
@@ -3577,6 +3744,64 @@ test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto
 	treeKey(state, "<Down>")
 	treeKey(state, "<Del>")
 	assert state.removing == folder + "/main.hive"
+}
+
+test "o botão direito no explorador abre o menu do arquivo, e renomear leva junto o que está aberto" {
+	folder := explorerFolder("context-test")
+	if hive.file.write(folder + "/lib/util.hive", "func um(): Int \{\n\treturn 1\n}\n") is Result.Error(why) {
+		panic why
+	}
+	db := hive.syslink.spawnAddressed(serve, fresh(folder))
+	mut state := fresh(folder)
+	update(state, model.Msg.OpenContext(folder + "/main.hive", 40, 60), db)
+	assert state.selected == folder + "/main.hive"
+	menu := render.contextMenu(state)
+	assert indexOf(menu, "left:40px;top:60px") is Result.Ok(_)
+	for each label in ["Abrir", "Renomear…", "Excluir", "Copiar caminho relativo", "Mostrar na pasta do sistema", "Abrir no terminal", "Fixar como entrada"] {
+		assert indexOf(menu, label) is Result.Ok(_)
+	}
+	assert escapeKind(state) == "context"
+	update(state, model.Msg.CloseContext(), db)
+	assert render.contextMenu(state) == ""
+	// Uma pasta não tem "Abrir" nem "Fixar como entrada".
+	update(state, model.Msg.OpenContext(folder + "/lib", 0, 0), db)
+	folderMenu := render.contextMenu(state)
+	assert indexOf(folderMenu, ">Abrir<") is Result.Error(_) && indexOf(folderMenu, "Fixar como entrada") is Result.Error(_)
+	update(state, model.Msg.ContextPick("copyRelative", folder + "/lib/util.hive"), db)
+	assert state.vim.clip == "lib/util.hive" && state.context.path == ""
+	// Novo arquivo pelo menu de uma pasta cria dentro dela.
+	update(state, model.Msg.ContextPick("newFile", folder + "/lib"), db)
+	assert state.prompt == model.Prompt.NewFilePrompt()
+	update(state, model.Msg.PromptSubmit("novo.hive"), db)
+	assert hive.file.exists(folder + "/lib/novo.hive")
+	// Renomear um arquivo aberto troca o caminho e o nome da aba.
+	openDoc(state, folder + "/lib/util.hive")
+	withText(state, "// não salvo\n")
+	update(state, model.Msg.ContextPick("rename", folder + "/lib/util.hive"), db)
+	assert state.prompt == model.Prompt.RenamePrompt(folder + "/lib/util.hive") && state.promptText == "util.hive"
+	update(state, model.Msg.PromptSubmit("apoio.hive"), db)
+	assert hive.file.exists(folder + "/lib/apoio.hive") && !hive.file.exists(folder + "/lib/util.hive")
+	assert render.activePath(state) == folder + "/lib/apoio.hive" && activeName(state) == "apoio.hive"
+	assert activeText(state) == "// não salvo\n"
+	// Renomear a pasta leva junto o arquivo aberto dentro dela.
+	update(state, model.Msg.ContextPick("rename", folder + "/lib"), db)
+	update(state, model.Msg.PromptSubmit("fonte"), db)
+	assert hive.file.exists(folder + "/fonte/apoio.hive")
+	assert render.activePath(state) == folder + "/fonte/apoio.hive"
+	assert workspace.isExpanded(state.expanded, folder + "/fonte")
+	// Um nome que já existe, ou com barra, não renomeia.
+	update(state, model.Msg.ContextPick("rename", folder + "/LEIAME.md"), db)
+	update(state, model.Msg.PromptSubmit("main.hive"), db)
+	assert hive.file.exists(folder + "/LEIAME.md") && indexOf(state.status, "já existe") is Result.Ok(_)
+	update(state, model.Msg.ContextPick("rename", folder + "/LEIAME.md"), db)
+	update(state, model.Msg.PromptSubmit("a/b.md"), db)
+	assert hive.file.exists(folder + "/LEIAME.md")
+	// F2 no explorador renomeia o selecionado.
+	state.selected = folder + "/main.hive"
+	treeKey(state, "<F2>")
+	assert state.prompt == model.Prompt.RenamePrompt(folder + "/main.hive")
+	assert movedPath("./a/b/c.hive", "./a/b", "./a/x") == "./a/x/c.hive"
+	assert movedPath("./a/bc.hive", "./a/b", "./a/x") == "./a/bc.hive"
 }
 
 test "um arquivo aberto que muda no disco é relido; um com alteração por salvar, não" {

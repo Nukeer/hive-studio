@@ -251,6 +251,8 @@ body.dragging,body.dragging *{cursor:ns-resize!important;user-select:none}
 #status .si{padding:0 7px;height:24px;display:flex;align-items:center;white-space:nowrap}
 #status .si.click:hover{background:rgba(255,255,255,.14);cursor:pointer}
 #status .grow{flex:1}
+#context:empty{display:none}
+.ctxmenu{position:fixed;min-width:240px;background:var(--side);border:1px solid var(--border);border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.38);padding:4px;z-index:120}
 #overlay:empty{display:none}
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50}
 .dialog{background:var(--editor);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.4);min-width:420px;max-width:86vw;max-height:80vh;overflow:auto}
@@ -391,6 +393,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 	</div>
 	<div id="status"></div>
 	<div id="overlay"></div>
+	<div id="context"></div>
 	<div id="palette"></div>
 </div>
 <script>
@@ -677,8 +680,17 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		app.className = "l-" + frame.layout + (frame.side ? "" : " noside") + (frame.panel ? "" : " nopanel") +
 			(frame.numbers ? "" : " nonumbers") + (frame.panelMax ? " panelmax" : "") + (frame.agentShown ? " agentpane" : "");
 		if (!dragging) { panel.style.height = frame.panelHeight + "px"; }
-		var paletteBefore = cache.palette, popupBefore = cache.popup;
+		var paletteBefore = cache.palette, popupBefore = cache.popup, contextBefore = cache.context;
 		for (var i = 0; i < frame.regions.length; i++) { region(frame.regions[i].id, frame.regions[i].html); }
+		// O menu do botão direito não passa da borda da janela.
+		if (cache.context !== contextBefore) {
+			var menu = document.querySelector("#context .ctxmenu");
+			if (menu) {
+				var box = menu.getBoundingClientRect();
+				if (box.right > window.innerWidth) { menu.style.left = Math.max(4, window.innerWidth - box.width - 4) + "px"; }
+				if (box.bottom > window.innerHeight) { menu.style.top = Math.max(4, window.innerHeight - box.height - 4) + "px"; }
+			}
+		}
 		// A lista do Ctrl+P e a das sugestões são redesenhadas a cada seta, e a
 		// rolagem volta ao topo: o item escolhido volta para a vista.
 		if (cache.palette !== paletteBefore) { keepPicked(document.querySelector("#palette .pl"), document.querySelector("#palette .pi.on")); }
@@ -905,7 +917,7 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 
 	var vimNames = { Escape: "<Esc>", Enter: "<CR>", Backspace: "<BS>", Delete: "<Del>", Tab: "<Tab>", ArrowLeft: "<Left>",
 		ArrowRight: "<Right>", ArrowUp: "<Up>", ArrowDown: "<Down>", Home: "<Home>", End: "<End>", PageUp: "<PageUp>",
-		PageDown: "<PageDown>", " ": "<Space>" };
+		PageDown: "<PageDown>", F2: "<F2>", " ": "<Space>" };
 	// As combinações com Ctrl que o Vim usa no modo normal — quando nenhum atalho da IDE as usa.
 	var vimCtrl = ["r", "d", "u", "e", "y", "f", "b", "a", "x", "["];
 
@@ -1282,7 +1294,21 @@ body.gone::after{content:"conexão encerrada — feche a janela";position:fixed;
 		if (t.tagName === "SELECT" && t.dataset.input) { send({ kind: "field", act: t.dataset.input, text: t.value }); }
 	});
 
-	document.addEventListener("contextmenu", function (e) { if (e.target !== ta) { e.preventDefault(); } });
+	// O botão direito sobre um arquivo ou uma pasta do explorador abre o menu dele.
+	document.addEventListener("contextmenu", function (e) {
+		var row = e.target.closest && e.target.closest("[data-ctx]");
+		if (row) {
+			e.preventDefault();
+			send({ kind: "act", act: "context", arg: row.dataset.ctx, text: e.clientX + "," + e.clientY });
+			return;
+		}
+		if (e.target !== ta) { e.preventDefault(); }
+	});
+	// Clicar fora do menu do botão direito o fecha.
+	document.addEventListener("mousedown", function (e) {
+		var menu = document.querySelector("#context .ctxmenu");
+		if (menu && !menu.contains(e.target)) { send({ kind: "act", act: "closeContext" }); }
+	}, true);
 
 	ws = new WebSocket("ws://127.0.0.1:__WSPORT__/?token=" + encodeURIComponent(token));
 	ws.onmessage = function (e) {

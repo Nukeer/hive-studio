@@ -484,6 +484,8 @@ func promptPlaceholder(state: model.State, prompt: model.Prompt): Str {
 		return tx(state, "nome da pasta")
 	} else if prompt is model.Prompt.OpenFolderPrompt {
 		return tx(state, "caminho da pasta")
+	} else if prompt is model.Prompt.RenamePrompt(_) {
+		return tx(state, "novo nome")
 	} else if prompt is model.Prompt.NoPrompt {
 		return ""
 	}
@@ -558,7 +560,7 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 		if kind != "" {
 			dot = "<span class=\"gb " + git.cssOf(kind) + "\">•</span>"
 		}
-		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + indent + ">" +
+		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + attr("data-ctx", entry.path) + indent + ">" +
 			"<span class=\"chev\">" + chevron + "</span><span class=\"nm " + git.cssOf(kind) + "\">" + esc(entry.name) + "</span>" + dot + "</div>"
 	}
 	icon := theme.iconFor(entry.name)
@@ -566,7 +568,7 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 	if dirtyPath(state, entry.path) {
 		marker = "<span class=\"dirty\">●</span>"
 	}
-	return "<div class=\"" + cls + "\"" + act("open", entry.path) + indent + ">" +
+	return "<div class=\"" + cls + "\"" + act("open", entry.path) + attr("data-ctx", entry.path) + indent + ">" +
 		"<span class=\"chev\"></span><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
 		"<span class=\"nm " + git.cssOf(gitKindOf(state, entry.path)) + "\">" + esc(entry.name) + "</span>" + marker + gitBadge(state, entry.path) + "</div>"
 }
@@ -578,6 +580,58 @@ func removable(state: model.State): Str {
 		return state.selected
 	}
 	return activePath(state)
+}
+
+// O caminho do arquivo no git (o que `git.stage` recebe), ou "" quando ele não
+// tem alterações.
+func gitPathOf(state: model.State, path: Str): Str {
+	rel := relPath(state, path)
+	for each file in state.git.files {
+		if file.rel == rel {
+			return file.path
+		}
+	}
+	return ""
+}
+
+func ctxItem(state: model.State, label: Str, action: Str, path: Str, hint: Str): Str {
+	return "<div class=\"mi\"" + act("ctx", action) + attr("data-text", path) + "><span>" + esc(tx(state, label)) +
+		"</span><span class=\"mk\">" + esc(hint) + "</span></div>"
+}
+
+// O menu do botão direito sobre um arquivo ou uma pasta do explorador.
+func contextMenu(state: model.State): Str {
+	path := state.context.path
+	if path == "" {
+		return ""
+	}
+	folder := isFolder(state, path)
+	mut Str[dyn] items = []
+	if !folder {
+		append(items, ctxItem(state, "Abrir", "open", path, "Enter"))
+		append(items, separator())
+	}
+	append(items, ctxItem(state, "Novo arquivo…", "newFile", path, ""))
+	append(items, ctxItem(state, "Nova pasta…", "newFolder", path, ""))
+	append(items, separator())
+	append(items, ctxItem(state, "Renomear…", "rename", path, "F2"))
+	append(items, ctxItem(state, "Excluir", "delete", path, "Delete"))
+	append(items, separator())
+	append(items, ctxItem(state, "Copiar caminho", "copyPath", path, ""))
+	append(items, ctxItem(state, "Copiar caminho relativo", "copyRelative", path, ""))
+	append(items, separator())
+	append(items, ctxItem(state, "Mostrar na pasta do sistema", "reveal", path, ""))
+	append(items, ctxItem(state, "Abrir no terminal", "terminal", path, ""))
+	if !folder && path is "{stem}.hive" {
+		append(items, separator())
+		append(items, ctxItem(state, "Fixar como entrada", "entry", path, ""))
+	}
+	if !folder && gitPathOf(state, path) != "" {
+		append(items, separator())
+		append(items, ctxItem(state, "Preparar (stage)", "stage", path, ""))
+		append(items, ctxItem(state, "Descartar alterações…", "discard", path, ""))
+	}
+	return "<div class=\"ctxmenu\"" + attr("style", "left:{state.context.x}px;top:{state.context.y}px") + ">" + join(items, "") + "</div>"
 }
 
 // Se o caminho é uma pasta da árvore.
@@ -1659,6 +1713,7 @@ func frame(state: model.State): model.Frame {
 		region("panelview", panel(state)),
 		region("status", statusBar(state)),
 		region("overlay", overlay(state)),
+		region("context", contextMenu(state)),
 		region("vimbar", vimBar(state))
 	]
 	mut model.Region[dyn] all = regions

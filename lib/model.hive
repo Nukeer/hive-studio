@@ -308,6 +308,15 @@ type Prompt {
 	NewFilePrompt
 	NewFolderPrompt
 	OpenFolderPrompt
+	RenamePrompt { path: Str }
+}
+
+// O menu do botão direito no explorador: o arquivo ou a pasta dele e onde ele
+// abre na janela. `path` vazio: fechado.
+type ContextMenu {
+	path: Str
+	x:    Int
+	y:    Int
 }
 
 type Msg {
@@ -329,6 +338,9 @@ type Msg {
 	AskRemove        { path: Str }
 	Remove           { path: Str }
 	CancelDialog
+	OpenContext      { path: Str, x: Int, y: Int }
+	CloseContext
+	ContextPick      { action: Str, path: Str }
 	CycleTab         { step: Int }
 	EditAt           { text: Str, caret: Int }
 	CaretAt          { caret: Int }
@@ -485,6 +497,7 @@ type State {
 	closing:       Str
 	// O arquivo ou a pasta que o diálogo pergunta se exclui. "" = nenhum.
 	removing:      Str
+	context:       ContextMenu
 	find:          FindBox
 	search:        SearchPanel
 	palette:       Palette
@@ -659,6 +672,7 @@ func initial(root: Str, prefs: settings.Settings): State {
 		about: false,
 		closing: "",
 		removing: "",
+		context: ContextMenu("", 0, 0),
 		find: FindBox(false, "", false, 0, 0),
 		search: emptySearch(),
 		palette: emptyPalette(),

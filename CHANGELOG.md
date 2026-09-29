@@ -13,6 +13,12 @@
   selecionado (ou o arquivo aberto), depois de uma confirmação. Uma pasta vai
   com tudo o que tem dentro; o que estava aberto dela fecha. A raiz do projeto
   não se exclui.
+* **Botão direito no explorador**: um menu com Abrir, Novo arquivo…, Nova
+  pasta… (dentro da pasta, ou ao lado do arquivo), Renomear… (`F2`), Excluir
+  (`Delete`), Copiar caminho, Copiar caminho relativo, Mostrar na pasta do
+  sistema, Abrir no terminal, Fixar como entrada (arquivos `.hive`) e, para um
+  arquivo com alterações no git, Preparar e Descartar alterações. Renomear
+  leva junto as abas abertas, as pastas expandidas e a entrada fixada.
 
 ## v0.1.2
 
