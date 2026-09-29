@@ -322,6 +322,13 @@ type Msg {
 	PromptCancel
 	Focus            { index: Int }
 	CloseDoc         { index: Int }
+	// Fecha sem perguntar, mesmo com alterações por salvar (`:q!`).
+	CloseDocNow      { index: Int }
+	CloseSave        { path: Str }
+	CloseDiscard     { path: Str }
+	AskRemove        { path: Str }
+	Remove           { path: Str }
+	CancelDialog
 	CycleTab         { step: Int }
 	EditAt           { text: Str, caret: Int }
 	CaretAt          { caret: Int }
@@ -473,6 +480,11 @@ type State {
 	commit:        CommitTab
 	words:         hive.map.Map<Str, Str>
 	about:         Bool
+	// O documento com alterações por salvar que se tentou fechar: o diálogo
+	// pergunta se salva antes. "" = nenhum.
+	closing:       Str
+	// O arquivo ou a pasta que o diálogo pergunta se exclui. "" = nenhum.
+	removing:      Str
 	find:          FindBox
 	search:        SearchPanel
 	palette:       Palette
@@ -645,6 +657,8 @@ func initial(root: Str, prefs: settings.Settings): State {
 		commit: CommitTab("", "", ""),
 		words: i18n.words(prefs.language),
 		about: false,
+		closing: "",
+		removing: "",
 		find: FindBox(false, "", false, 0, 0),
 		search: emptySearch(),
 		palette: emptyPalette(),

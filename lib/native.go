@@ -165,6 +165,14 @@ func IsDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+// RemoveAll apaga um arquivo, ou uma pasta com tudo o que ela tem dentro.
+func RemoveAll(path string) (bool, error) {
+	if err := os.RemoveAll(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra
 // por outra: o texto continua com o mesmo número de caracteres.
 func Lower(text string) string {

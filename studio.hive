@@ -479,6 +479,54 @@ proc create(state: mut model.State, name: Str, folder: Bool): void {
 	}
 }
 
+// A posição do documento aberto com esse caminho, ou -1.
+func docIndex(state: model.State, path: Str): Int {
+	for i := 0; i < len(state.docs); i++ {
+		if state.docs bounds i {
+			if state.docs[i].path == path {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// Se `path` é `target` ou está dentro dele.
+func within(path: Str, target: Str): Bool {
+	clean := workspace.normalize(path)
+	gone := workspace.normalize(target)
+	return clean == gone || complete.startsWith(clean, gone + "/")
+}
+
+// Apaga um arquivo, ou uma pasta com tudo o que tem dentro, e fecha o que
+// estava aberto dela. A raiz do projeto não se apaga.
+proc removePath(state: mut model.State, path: Str): void {
+	state.removing = ""
+	if path == "" || workspace.normalize(path) == workspace.normalize(state.root) {
+		return
+	}
+	name := workspace.baseName(path)
+	if native.removeAll(path) is Result.Error(why) {
+		state.status = render.tx(state, "não foi possível excluir") + " " + name + ": " + why
+		return
+	}
+	for i := len(state.docs) - 1; i >= 0; i-- {
+		mut open := ""
+		if state.docs bounds i {
+			open = state.docs[i].path
+		}
+		if open != "" && within(open, path) {
+			closeDoc(state, i)
+		}
+	}
+	if state.selected != "" && within(state.selected, path) {
+		state.selected = ""
+	}
+	refreshTree(state)
+	gitRefresh(state)
+	state.status = render.tx(state, "excluído") + " " + name
+}
+
 proc closeDoc(state: mut model.State, index: Int): void {
 	mut model.Doc[dyn] docs = state.docs
 	if docs bounds index {
@@ -1428,6 +1476,10 @@ proc treeKey(state: mut model.State, key: Str): void {
 				}
 			}
 		}
+	} else if key == "<Del>" {
+		if current >= 0 && workspace.normalize(row.entry.path) != workspace.normalize(state.root) {
+			state.removing = row.entry.path
+		}
 	} else if vimKeys && key == ":" {
 		state.vim.prompt = ":"
 		state.vim.command = ""
@@ -1804,7 +1856,44 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 			state.selected = render.activePath(state)
 		}
 	} else if message is model.Msg.CloseDoc(index) {
+		// Com alterações por salvar, o diálogo pergunta antes.
+		mut unsaved := ""
+		if state.docs bounds index {
+			if model.dirty(state.docs[index]) {
+				unsaved = state.docs[index].path
+			}
+		}
+		if unsaved != "" {
+			state.closing = unsaved
+		} else {
+			closeDoc(state, index)
+		}
+	} else if message is model.Msg.CloseDocNow(index) {
 		closeDoc(state, index)
+	} else if message is model.Msg.CloseSave(path) {
+		state.closing = ""
+		index := docIndex(state, path)
+		if state.docs bounds index {
+			failure := saveDoc(state.docs[index])
+			if failure == "" {
+				closeDoc(state, index)
+				gitRefresh(state)
+			} else {
+				state.status = failure
+			}
+		}
+	} else if message is model.Msg.CloseDiscard(path) {
+		state.closing = ""
+		closeDoc(state, docIndex(state, path))
+	} else if message is model.Msg.AskRemove(path) {
+		if path != "" && workspace.normalize(path) != workspace.normalize(state.root) {
+			state.removing = path
+		}
+	} else if message is model.Msg.Remove(path) {
+		removePath(state, path)
+	} else if message is model.Msg.CancelDialog {
+		state.closing = ""
+		state.removing = ""
 	} else if message is model.Msg.CycleTab(step) {
 		count := len(state.docs)
 		if count > 0 {
@@ -2106,6 +2195,8 @@ proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Ms
 		return Result.Ok(model.Msg.Save())
 	} else if action == "saveAll" {
 		return Result.Ok(model.Msg.SaveAll())
+	} else if action == "deleteFile" {
+		return Result.Ok(model.Msg.AskRemove(render.removable(state)))
 	} else if action == "closeTab" {
 		if render.showingCommit(state) {
 			return Result.Ok(model.Msg.CloseCommit())
@@ -2204,6 +2295,8 @@ func escapeKind(state: model.State): Str {
 		return "about"
 	} else if state.palette.open {
 		return "palette"
+	} else if state.closing != "" || state.removing != "" {
+		return "dialog"
 	} else if state.git.confirm != "" {
 		return "confirm"
 	} else if state.peekFile != "" {
@@ -2227,6 +2320,8 @@ func escapeFor(kind: Str): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.CloseAbout())
 	} else if kind == "palette" {
 		return Result.Ok(model.Msg.PaletteClose())
+	} else if kind == "dialog" {
+		return Result.Ok(model.Msg.CancelDialog())
 	} else if kind == "confirm" {
 		return Result.Ok(model.Msg.GitCancelConfirm())
 	} else if kind == "peek" {
@@ -2334,6 +2429,16 @@ proc clickMsg(state: mut model.State, event: model.Event): Result<model.Msg, Boo
 		return Result.Ok(model.Msg.GitDiscard(arg))
 	} else if a == "gitCancel" {
 		return Result.Ok(model.Msg.GitCancelConfirm())
+	} else if a == "askRemove" {
+		return Result.Ok(model.Msg.AskRemove(arg))
+	} else if a == "remove" {
+		return Result.Ok(model.Msg.Remove(arg))
+	} else if a == "closeSave" {
+		return Result.Ok(model.Msg.CloseSave(arg))
+	} else if a == "closeDiscard" {
+		return Result.Ok(model.Msg.CloseDiscard(arg))
+	} else if a == "cancelDialog" {
+		return Result.Ok(model.Msg.CancelDialog())
 	} else if a == "gitCommit" {
 		return Result.Ok(model.Msg.GitCommit())
 	} else if a == "gitPush" {
@@ -3400,6 +3505,78 @@ test "a busca de TODO lê o disco, e um documento não salvo entra com o texto d
 	} else {
 		assert false
 	}
+}
+
+test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou cancelar" {
+	folder := explorerFolder("close-test")
+	db := hive.syslink.spawnAddressed(serve, fresh(folder))
+	mut state := fresh(folder)
+	openDoc(state, folder + "/main.hive")
+	update(state, model.Msg.CloseDoc(0), db)
+	assert len(state.docs) == 0 && state.closing == ""
+	openDoc(state, folder + "/main.hive")
+	withText(state, "// um\n")
+	update(state, model.Msg.CloseDoc(0), db)
+	assert len(state.docs) == 1
+	assert state.closing == folder + "/main.hive"
+	dialog := render.overlay(state)
+	assert indexOf(dialog, "Salvar e fechar") is Result.Ok(_) && indexOf(dialog, "Fechar sem salvar") is Result.Ok(_)
+	assert escapeKind(state) == "dialog"
+	update(state, model.Msg.CancelDialog(), db)
+	assert state.closing == "" && len(state.docs) == 1 && activeText(state) == "// um\n"
+	update(state, model.Msg.CloseDoc(0), db)
+	update(state, model.Msg.CloseDiscard(folder + "/main.hive"), db)
+	assert len(state.docs) == 0 && state.closing == ""
+	if hive.file.read(folder + "/main.hive") is Result.Ok(text) {
+		assert text == "\n"
+	}
+	openDoc(state, folder + "/main.hive")
+	withText(state, "// dois\n")
+	update(state, model.Msg.CloseDoc(0), db)
+	update(state, model.Msg.CloseSave(folder + "/main.hive"), db)
+	assert len(state.docs) == 0 && state.closing == ""
+	if hive.file.read(folder + "/main.hive") is Result.Ok(text) {
+		assert text == "// dois\n"
+	}
+	// `:q!` fecha sem perguntar.
+	openDoc(state, folder + "/main.hive")
+	withText(state, "// três\n")
+	update(state, model.Msg.CloseDocNow(0), db)
+	assert len(state.docs) == 0 && state.closing == ""
+}
+
+test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto" {
+	folder := explorerFolder("remove-test")
+	if hive.file.write(folder + "/lib/util.hive", "\n") is Result.Error(why) {
+		panic why
+	}
+	db := hive.syslink.spawnAddressed(serve, fresh(folder))
+	mut state := fresh(folder)
+	openDoc(state, folder + "/LEIAME.md")
+	update(state, model.Msg.AskRemove(folder + "/LEIAME.md"), db)
+	assert state.removing == folder + "/LEIAME.md"
+	assert indexOf(render.overlay(state), "O arquivo é apagado do disco") is Result.Ok(_)
+	update(state, model.Msg.CancelDialog(), db)
+	assert state.removing == "" && hive.file.exists(folder + "/LEIAME.md")
+	update(state, model.Msg.AskRemove(folder + "/LEIAME.md"), db)
+	update(state, model.Msg.Remove(folder + "/LEIAME.md"), db)
+	assert !hive.file.exists(folder + "/LEIAME.md")
+	assert len(state.docs) == 0 && state.removing == ""
+	assert len(state.tree) == 2
+	// Uma pasta vai com o que tem dentro; o arquivo aberto dela fecha.
+	openDoc(state, folder + "/lib/util.hive")
+	update(state, model.Msg.AskRemove(folder + "/lib"), db)
+	assert indexOf(render.overlay(state), "A pasta e tudo o que ela tem dentro") is Result.Ok(_)
+	update(state, model.Msg.Remove(folder + "/lib"), db)
+	assert !hive.file.exists(folder + "/lib")
+	assert len(state.docs) == 0
+	assert len(state.tree) == 1
+	// A raiz não se exclui, e Delete no explorador pergunta pelo selecionado.
+	update(state, model.Msg.AskRemove(folder), db)
+	assert state.removing == ""
+	treeKey(state, "<Down>")
+	treeKey(state, "<Del>")
+	assert state.removing == folder + "/main.hive"
 }
 
 test "um arquivo aberto que muda no disco é relido; um com alteração por salvar, não" {

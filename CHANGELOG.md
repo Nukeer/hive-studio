@@ -1,5 +1,19 @@
 # Changelog
 
+## Não lançado
+
+### Editor
+
+* **Fechar um arquivo alterado pergunta antes**: o diálogo oferece *Salvar e
+  fechar*, *Fechar sem salvar* ou *Cancelar* (`Esc`), na aba, no `Ctrl+W` e no
+  menu. No modo Vim, `:q` continua recusando com E37 e `:q!` fecha sem
+  perguntar.
+* **Excluir arquivo ou pasta**: `Delete` com o foco no explorador, o botão 🗑 no
+  cabeçalho dele ou **Arquivo → Excluir arquivo ou pasta** apagam o que está
+  selecionado (ou o arquivo aberto), depois de uma confirmação. Uma pasta vai
+  com tudo o que tem dentro; o que estava aberto dela fecha. A raiz do projeto
+  não se exclui.
+
 ## v0.1.2
 
 ### Precisa de

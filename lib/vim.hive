@@ -3091,7 +3091,11 @@ proc command(ed: mut Editor, chars: Str[], name: Str, bang: Bool, args: Str, fro
 			say(ed, "E37: Alterações não salvas (use ! para descartar)", "", true)
 			return
 		}
-		effect(ed, model.Msg.CloseDoc(ed.active))
+		if bang {
+			effect(ed, model.Msg.CloseDocNow(ed.active))
+		} else {
+			effect(ed, model.Msg.CloseDoc(ed.active))
+		}
 	} else if isAny(name, ["wq", "x", "xi", "xit", "exi", "exit"]) {
 		if name == "wq" || ed.dirty {
 			effect(ed, model.Msg.Save())
@@ -3978,7 +3982,7 @@ test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
 	probe31Before := dirty
 	mut probe31 := probe31Before
 	submit(probe31, "q!")
-	assert probe31.effects == [model.Msg.CloseDoc(2)]
+	assert probe31.effects == [model.Msg.CloseDocNow(2)]
 	probe32Before := dirty
 	mut probe32 := probe32Before
 	submit(probe32, "x")

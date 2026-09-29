@@ -82,8 +82,10 @@ hivec test studio.hive             # testes, com cobertura
 - **Explorador em árvore** estilo VS Code, abas, breadcrumb, estrutura do
   arquivo, barra de status (Ln/Col, linguagem, tema). Com o foco nele (um
   clique, ou `:Ex` no modo Vim), `↑`/`↓` andam, `→`/`←` abrem e fecham pastas,
-  `Enter` abre, `Home`/`End`; no modo Vim também `j k l h o gg G`, contagens,
-  `:` para a linha de comando e `Esc` de volta ao editor.
+  `Enter` abre, `Home`/`End`, `Delete` exclui (com confirmação); no modo Vim
+  também `j k l h o gg G`, contagens, `:` para a linha de comando e `Esc` de
+  volta ao editor. Fechar uma aba com alterações por salvar pergunta se salva
+  antes.
 - **Cores do git** no explorador e nas abas: arquivo novo em verde (`U`/`A`),
   editado em amarelo/laranja (`M`), removido em vermelho (`D`); commitado fica na
   cor normal. Pastas levam a cor do que têm dentro.
