@@ -179,6 +179,8 @@ func menuBar(state: model.State): Str {
 			separator(),
 			menuItem(state, "Configurações", "settings", true),
 			separator(),
+			menuItem(state, "Excluir arquivo ou pasta", "deleteFile", removable(state) != ""),
+			separator(),
 			menuItem(state, "Fechar aba", "closeTab", canClose),
 			menuItem(state, "Sair", "quit", true)
 		]) +
@@ -482,6 +484,8 @@ func promptPlaceholder(state: model.State, prompt: model.Prompt): Str {
 		return tx(state, "nome da pasta")
 	} else if prompt is model.Prompt.OpenFolderPrompt {
 		return tx(state, "caminho da pasta")
+	} else if prompt is model.Prompt.RenamePrompt(_) {
+		return tx(state, "novo nome")
 	} else if prompt is model.Prompt.NoPrompt {
 		return ""
 	}
@@ -556,7 +560,7 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 		if kind != "" {
 			dot = "<span class=\"gb " + git.cssOf(kind) + "\">•</span>"
 		}
-		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + indent + ">" +
+		return "<div class=\"" + cls + "\"" + act("toggle", entry.path) + attr("data-ctx", entry.path) + indent + ">" +
 			"<span class=\"chev\">" + chevron + "</span><span class=\"nm " + git.cssOf(kind) + "\">" + esc(entry.name) + "</span>" + dot + "</div>"
 	}
 	icon := theme.iconFor(entry.name)
@@ -564,9 +568,80 @@ func treeRow(state: model.State, row: model.TreeRow): Str {
 	if dirtyPath(state, entry.path) {
 		marker = "<span class=\"dirty\">●</span>"
 	}
-	return "<div class=\"" + cls + "\"" + act("open", entry.path) + indent + ">" +
+	return "<div class=\"" + cls + "\"" + act("open", entry.path) + attr("data-ctx", entry.path) + indent + ">" +
 		"<span class=\"chev\"></span><span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
 		"<span class=\"nm " + git.cssOf(gitKindOf(state, entry.path)) + "\">" + esc(entry.name) + "</span>" + marker + gitBadge(state, entry.path) + "</div>"
+}
+
+// O que "Excluir" apaga: o que está selecionado no explorador, ou o
+// arquivo aberto. "" quando não há nada.
+func removable(state: model.State): Str {
+	if state.selected != "" {
+		return state.selected
+	}
+	return activePath(state)
+}
+
+// O caminho do arquivo no git (o que `git.stage` recebe), ou "" quando ele não
+// tem alterações.
+func gitPathOf(state: model.State, path: Str): Str {
+	rel := relPath(state, path)
+	for each file in state.git.files {
+		if file.rel == rel {
+			return file.path
+		}
+	}
+	return ""
+}
+
+func ctxItem(state: model.State, label: Str, action: Str, path: Str, hint: Str): Str {
+	return "<div class=\"mi\"" + act("ctx", action) + attr("data-text", path) + "><span>" + esc(tx(state, label)) +
+		"</span><span class=\"mk\">" + esc(hint) + "</span></div>"
+}
+
+// O menu do botão direito sobre um arquivo ou uma pasta do explorador.
+func contextMenu(state: model.State): Str {
+	path := state.context.path
+	if path == "" {
+		return ""
+	}
+	folder := isFolder(state, path)
+	mut Str[dyn] items = []
+	if !folder {
+		append(items, ctxItem(state, "Abrir", "open", path, "Enter"))
+		append(items, separator())
+	}
+	append(items, ctxItem(state, "Novo arquivo…", "newFile", path, ""))
+	append(items, ctxItem(state, "Nova pasta…", "newFolder", path, ""))
+	append(items, separator())
+	append(items, ctxItem(state, "Renomear…", "rename", path, "F2"))
+	append(items, ctxItem(state, "Excluir", "delete", path, "Delete"))
+	append(items, separator())
+	append(items, ctxItem(state, "Copiar caminho", "copyPath", path, ""))
+	append(items, ctxItem(state, "Copiar caminho relativo", "copyRelative", path, ""))
+	append(items, separator())
+	append(items, ctxItem(state, "Mostrar na pasta do sistema", "reveal", path, ""))
+	append(items, ctxItem(state, "Abrir no terminal", "terminal", path, ""))
+	if !folder && path is "{stem}.hive" {
+		append(items, separator())
+		append(items, ctxItem(state, "Fixar como entrada", "entry", path, ""))
+	}
+	if !folder && gitPathOf(state, path) != "" {
+		append(items, separator())
+		append(items, ctxItem(state, "Preparar (stage)", "stage", path, ""))
+		append(items, ctxItem(state, "Descartar alterações…", "discard", path, ""))
+	}
+	return "<div class=\"ctxmenu\"" + attr("style", "left:{state.context.x}px;top:{state.context.y}px") + ">" + join(items, "") + "</div>"
+}
+
+// Se o caminho é uma pasta da árvore.
+func isFolder(state: model.State, path: Str): Bool {
+	for each row in state.tree {
+		if row.entry.path == path {
+			return row.entry.folder
+		}
+	}
+	return false
 }
 
 func explorer(state: model.State): Str {
@@ -580,6 +655,7 @@ func explorer(state: model.State): Str {
 	return "<div class=\"hdr\">" + tx(state, "EXPLORADOR") + "<span class=\"grow\"></span>" +
 		headerAction("＋", tx(state, "Novo arquivo") + keyHint(state, "newFile"), "prompt", "newFile") +
 		headerAction("⊞", tx(state, "Nova pasta") + keyHint(state, "newFolder"), "prompt", "newFolder") +
+		headerAction("🗑︎", tx(state, "Excluir") + " (Delete)", "askRemove", removable(state)) +
 		headerAction("⟳", tx(state, "Atualizar"), "refresh", "") +
 		headerAction("⊟", tx(state, "Recolher tudo"), "collapse", "") +
 		headerAction("↑", tx(state, "Pasta acima"), "up", "") +
@@ -1535,6 +1611,25 @@ func overlay(state: model.State): Str {
 			"<div class=\"empty\">" + tx(state, "Configurações em") + " " + esc(settings.path()) + "</div>" +
 			"<div class=\"about-actions\"><button class=\"btn\"" + act("closeAbout", "") + ">" + tx(state, "Fechar") + "</button></div></div></div>"
 	}
+	if state.closing != "" {
+		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">" + tx(state, "Salvar as alterações de") + " <b>" +
+			esc(workspace.baseName(state.closing)) + "</b>?</div><div class=\"empty\">" + tx(state, "Se você não salvar, as alterações se perdem.") + "</div>" +
+			"<div style=\"margin-top:16px;display:flex;gap:8px;justify-content:center\">" +
+			"<button class=\"btn\"" + act("cancelDialog", "") + ">" + tx(state, "Cancelar") + "</button>" +
+			"<button class=\"btn danger\"" + act("closeDiscard", state.closing) + ">" + tx(state, "Fechar sem salvar") + "</button>" +
+			"<button class=\"btn primary\"" + act("closeSave", state.closing) + ">" + tx(state, "Salvar e fechar") + "</button></div></div></div>"
+	}
+	if state.removing != "" {
+		mut warning := tx(state, "O arquivo é apagado do disco. Isto não pode ser desfeito.")
+		if isFolder(state, state.removing) {
+			warning = tx(state, "A pasta e tudo o que ela tem dentro são apagados do disco. Isto não pode ser desfeito.")
+		}
+		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">" + tx(state, "Excluir") + " <b>" +
+			esc(workspace.baseName(state.removing)) + "</b>?</div><div class=\"empty\">" + warning + "</div>" +
+			"<div style=\"margin-top:16px;display:flex;gap:8px;justify-content:center\">" +
+			"<button class=\"btn\"" + act("cancelDialog", "") + ">" + tx(state, "Cancelar") + "</button>" +
+			"<button class=\"btn danger\"" + act("remove", state.removing) + ">" + tx(state, "Excluir") + "</button></div></div></div>"
+	}
 	if state.git.confirm != "" {
 		return "<div class=\"dialog\"><div class=\"msg\"><div style=\"font-size:15px;margin-bottom:8px\">" + tx(state, "Descartar as alterações de") + " <b>" +
 			esc(state.git.confirm) + "</b>?</div><div class=\"empty\">" + tx(state, "Isto não pode ser desfeito. Um arquivo novo é apagado.") + "</div>" +
@@ -1618,6 +1713,7 @@ func frame(state: model.State): model.Frame {
 		region("panelview", panel(state)),
 		region("status", statusBar(state)),
 		region("overlay", overlay(state)),
+		region("context", contextMenu(state)),
 		region("vimbar", vimBar(state))
 	]
 	mut model.Region[dyn] all = regions

@@ -308,6 +308,15 @@ type Prompt {
 	NewFilePrompt
 	NewFolderPrompt
 	OpenFolderPrompt
+	RenamePrompt { path: Str }
+}
+
+// O menu do botão direito no explorador: o arquivo ou a pasta dele e onde ele
+// abre na janela. `path` vazio: fechado.
+type ContextMenu {
+	path: Str
+	x:    Int
+	y:    Int
 }
 
 type Msg {
@@ -322,6 +331,16 @@ type Msg {
 	PromptCancel
 	Focus            { index: Int }
 	CloseDoc         { index: Int }
+	// Fecha sem perguntar, mesmo com alterações por salvar (`:q!`).
+	CloseDocNow      { index: Int }
+	CloseSave        { path: Str }
+	CloseDiscard     { path: Str }
+	AskRemove        { path: Str }
+	Remove           { path: Str }
+	CancelDialog
+	OpenContext      { path: Str, x: Int, y: Int }
+	CloseContext
+	ContextPick      { action: Str, path: Str }
 	CycleTab         { step: Int }
 	EditAt           { text: Str, caret: Int }
 	CaretAt          { caret: Int }
@@ -473,6 +492,12 @@ type State {
 	commit:        CommitTab
 	words:         hive.map.Map<Str, Str>
 	about:         Bool
+	// O documento com alterações por salvar que se tentou fechar: o diálogo
+	// pergunta se salva antes. "" = nenhum.
+	closing:       Str
+	// O arquivo ou a pasta que o diálogo pergunta se exclui. "" = nenhum.
+	removing:      Str
+	context:       ContextMenu
 	find:          FindBox
 	search:        SearchPanel
 	palette:       Palette
@@ -645,6 +670,9 @@ func initial(root: Str, prefs: settings.Settings): State {
 		commit: CommitTab("", "", ""),
 		words: i18n.words(prefs.language),
 		about: false,
+		closing: "",
+		removing: "",
+		context: ContextMenu("", 0, 0),
 		find: FindBox(false, "", false, 0, 0),
 		search: emptySearch(),
 		palette: emptyPalette(),

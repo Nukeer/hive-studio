@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -163,6 +164,24 @@ func Stamp(path string) (string, error) {
 func IsDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// AbsPath é o caminho absoluto, com barras normais; o próprio caminho quando
+// não dá para resolvê-lo.
+func AbsPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return filepath.ToSlash(abs)
+}
+
+// RemoveAll apaga um arquivo, ou uma pasta com tudo o que ela tem dentro.
+func RemoveAll(path string) (bool, error) {
+	if err := os.RemoveAll(path); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra

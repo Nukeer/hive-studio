@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.3
+
+### Editor
+
+* **Fechar um arquivo alterado pergunta antes**: o diálogo oferece *Salvar e
+  fechar*, *Fechar sem salvar* ou *Cancelar* (`Esc`), na aba, no `Ctrl+W` e no
+  menu. No modo Vim, `:q` continua recusando com E37 e `:q!` fecha sem
+  perguntar.
+* **Excluir arquivo ou pasta**: `Delete` com o foco no explorador, o botão 🗑 no
+  cabeçalho dele ou **Arquivo → Excluir arquivo ou pasta** apagam o que está
+  selecionado (ou o arquivo aberto), depois de uma confirmação. Uma pasta vai
+  com tudo o que tem dentro; o que estava aberto dela fecha. A raiz do projeto
+  não se exclui.
+* **Botão direito no explorador**: um menu com Abrir, Novo arquivo…, Nova
+  pasta… (dentro da pasta, ou ao lado do arquivo), Renomear… (`F2`), Excluir
+  (`Delete`), Copiar caminho, Copiar caminho relativo, Mostrar na pasta do
+  sistema, Abrir no terminal, Fixar como entrada (arquivos `.hive`) e, para um
+  arquivo com alterações no git, Preparar e Descartar alterações. Renomear
+  leva junto as abas abertas, as pastas expandidas e a entrada fixada.
+
 ## v0.1.2
 
 ### Precisa de

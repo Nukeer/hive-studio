@@ -23,6 +23,7 @@ func actions(): Action[dyn] {
 		Action("save", "Salvar", "Ctrl+S"),
 		Action("saveAll", "Salvar tudo", "Ctrl+Shift+S"),
 		Action("closeTab", "Fechar aba", "Ctrl+W"),
+		Action("deleteFile", "Excluir arquivo ou pasta", ""),
 		Action("nextTab", "Próxima aba", "Ctrl+PageDown"),
 		Action("prevTab", "Aba anterior", "Ctrl+PageUp"),
 		Action("togglePanel", "Mostrar/ocultar painel (Problemas, Saída)", "Ctrl+`"),
