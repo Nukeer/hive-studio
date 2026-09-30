@@ -204,7 +204,8 @@ se existir, vence o compilador configurado.
 | arquivo | papel |
 | --- | --- |
 | `studio.hive` | entrada: `main`, o serviço, a dobra `update`, evento → `Msg` |
-| `studioui.hive` | protótipo da interface só com widgets do `hive.ui` (ver abaixo) |
+| `studioui.hive` | a mesma IDE numa janela só com widgets do `hive.ui` (ver abaixo) |
+| `lib/uiview.hive` | estado → widgets do `hive.ui`, para `studioui.hive` |
 | `test/<arquivo>.test.hive` | os testes de `<arquivo>.hive` (`studio.hive` ou `lib/<arquivo>.hive`) |
 | `test/support/<arquivo>.hive` | funções de apoio dos testes de `<arquivo>` |
 | `test/suite.hive` | importa todos os `.test.hive`: é a entrada do `hivec test` |
@@ -256,33 +257,61 @@ hivec test test/vim.test.hive        # só um arquivo
 - O teste roda na pasta do projeto gerado (`test/suite.hive-build/`), não em
   `test/`: quem precisa de arquivos os cria numa pasta própria.
 
-## Protótipo só com `hive.ui`
+## A janela só com `hive.ui` (`studioui.hive`)
 
-`studioui.hive` é um teste de como fica a IDE desenhada **só com os widgets do
-`hive.ui`**, sem `assets/shell.html`, JavaScript próprio, servidor ou xterm:
+A mesma IDE desenhada **só com os widgets do `hive.ui`**, sem
+`assets/shell.html`, sem o servidor dela, sem JavaScript próprio e sem xterm:
 
 ```
 hivec run studioui.hive [pasta]
+hivec build studioui.hive
 ```
 
-Tem explorador em árvore, abas (● quando alterada; fechar com alteração
-pergunta), editor (`textarea`), Salvar / Salvar tudo mantendo o fim de linha,
-escolha da entrada (`.hive` da raiz com `proc main`), **Check** numa tarefa à
-parte com o painel de problemas (o clique abre o arquivo) e barra de status.
+A lógica é a do `studio.hive`, importado inteiro: o mesmo estado
+(`model.State`), a mesma dobra (`studio.step`) e a mesma tradução de eventos
+(`studio.toMsg`). Quem desenha é `lib/uiview.hive`, e cada widget manda o
+mesmo evento que a página própria mandaria. A mensagem da janela é o
+`model.Cmd` do serviço, então git, hivec, terminal, vigia do disco e Error
+Lens respondem à janela como respondiam ao serviço.
 
-O que o `hive.ui` (v0.2.9) não deixa fazer, e por isso a IDE principal segue na
-página própria:
+O que tem, como na janela própria: barra de título com os menus e Check · Run ·
+Test · Build · Analyze, barra de atividades, explorador (cores do git, ● de não
+salvo, criar, renomear, excluir, recolher, subir, abrir pasta; o **⋯** da linha
+faz o papel do botão direito), busca no projeto, controle de código (preparar,
+tirar, descartar, commit, push, pull, histórico e a aba do commit com o diff),
+estrutura, TODO, abas, breadcrumb, Buscar no arquivo, Ir para arquivo (Ctrl+P),
+sugestões, preview do Markdown, JSON com o erro na linha, Configurações
+(idioma, tema, editor, agentes, compilador), painel com Problemas, Saída,
+Terminal, Análise e Agente, barra de status, diálogos e os 7 temas.
 
-- A janela continua sendo um Chromium em modo aplicativo — o que sai é a página
-  própria, não o navegador.
-- `textarea` simples: sem realce, números de linha, fonte monoespaçada nem
-  Error Lens.
-- Sem ler nem mover o cursor ou a seleção (ir para a linha não posiciona).
-- Sem atalhos de teclado fora de uma `scene`: nada de `Ctrl+S`, `F5`,
-  autocomplete ou modo Vim.
-- `onInput` manda o texto inteiro a cada tecla, o que pesa em arquivos grandes.
-- Só botão e link recebem clique: sem botão direito, arrastar ou hover.
-- Nenhum widget hospeda um terminal, então não há terminal nem painel de agentes.
+O editor é um `textarea`. Ao lado dele (**Dividir**, o padrão do código) fica a
+**vista realçada**, desenhada com widgets: as cores do tema, números de linha,
+a linha do cursor, as ocorrências da busca, o **Error Lens** na própria linha e
+nomes clicáveis que **vão para a definição**. **Realce** mostra só ela, e
+**Editor** só o texto.
+
+O que o `hive.ui` (v0.2.9) não deixa fazer:
+
+- **HTML ou JavaScript próprios**: não há widget para eles, nem folha de estilo.
+  Por isso o editor da página própria (realce enquanto se digita, cursor, Vim)
+  não entra; a janela continua sendo um Chromium em modo aplicativo, o do
+  próprio `hive.ui`.
+- **Teclado**: só uma `scene` ouve teclas, e não enquanto se digita num campo.
+  Nenhum atalho vale (`Ctrl+S`, `F5`…), e não há modo Vim; menus e botões
+  fazem tudo.
+- **Cursor**: o programa não lê nem move o cursor do `textarea`. A posição é
+  deduzida da diferença entre o texto antigo e o novo (para as sugestões), e
+  "ir para a linha" leva a vista realçada até ela.
+- Cada tecla manda o texto inteiro, o que pesa em arquivos muito grandes; a
+  vista realçada desenha 160 linhas por vez (▲ ▼ andam).
+- Sem fonte monoespaçada, botão direito, arrastar (a altura do painel é a das
+  Configurações; ⤢ maximiza) nem área de transferência (o ⋯ mostra os caminhos
+  num campo, para copiar).
+- Sem emulador de terminal: o TERMINAL é o shell linha a linha, e cada agente
+  (Claude Code, Codex, OpenCode) abre num **terminal do sistema**, na pasta do
+  projeto.
+- Os vigias (git, disco) começam no primeiro clique: a janela só tem endereço
+  quando recebe a primeira mensagem.
 
 ## Releases
 

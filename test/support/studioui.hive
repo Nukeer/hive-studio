@@ -1,5 +1,11 @@
-// Ajudantes dos testes de studioui.hive: um arquivo `.test.hive` importado
-// por test/suite.hive só pode ter imports e blocos `test`.
+// Apoio aos testes de test/studioui.test.hive: um arquivo `.test.hive`
+// importado por test/suite.hive só pode ter imports e blocos `test`.
+
+import ../../studioui as studioUi
+import ../../studio
+import ../../lib/model
+import ../../lib/settings
+import ../../lib/uiview
 
 // Uma pasta de projeto de mentira, escrita pelo próprio teste.
 proc fixture(): Str {
@@ -7,11 +13,53 @@ proc fixture(): Str {
 	if hive.file.makeDir(folder + "/lib") is Result.Error(why) {
 		panic why
 	}
-	if hive.file.write(folder + "/main.hive", "proc main(): void \{\r\n\techo 1\r\n}\r\n") is Result.Error(why) {
+	if hive.file.write(folder + "/main.hive", "import ./lib/util\r\n\r\nproc main(): void \{\r\n\techo util.dobro(2) // TODO mais\r\n}\r\n") is Result.Error(why) {
 		panic why
 	}
 	if hive.file.write(folder + "/lib/util.hive", "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n") is Result.Error(why) {
 		panic why
 	}
+	if hive.file.write(folder + "/LEIAME.md", "# Título\n\nTexto **forte**.\n\n- [x] feito\n- item\n\n```hive\nproc main(): void \{}\n```\n") is Result.Error(why) {
+		panic why
+	}
 	return folder
+}
+
+// A janela sobre a pasta, com as configurações padrão (e não as do usuário,
+// para os textos serem os de pt-BR), e sem os vigias.
+proc window(folder: Str): studioUi.Win {
+	mut core := model.initial(folder, settings.defaults())
+	studio.openRoot(core, folder)
+	return studioUi.Win(core, uiview.emptyChrome(), true)
+}
+
+// Um serviço que só recebe: o endereço que o trabalho em outra thread usa
+// para mandar de volta o que fez, ignorado nos testes.
+proc sink(count: mut Int, command: model.Cmd): model.Cmd {
+	count += 1
+	return command
+}
+
+// O HTML que o hive.ui manda à janela agora.
+func page(win: studioUi.Win): Str {
+	return hive.ui.html(studioUi.view(win))
+}
+
+func shows(win: studioUi.Win, text: Str): Bool {
+	return indexOf(page(win), text) is Result.Ok(_)
+}
+
+// O texto do documento aberto (o primeiro), ou "".
+func docText(win: studioUi.Win): Str {
+	if win.core.docs bounds 0 {
+		return win.core.docs[0].text
+	}
+	return ""
+}
+
+func docDirty(win: studioUi.Win): Bool {
+	if win.core.docs bounds 0 {
+		return model.dirty(win.core.docs[0])
+	}
+	return false
 }

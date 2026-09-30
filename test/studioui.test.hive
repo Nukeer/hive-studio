@@ -1,88 +1,136 @@
-// Testes de studioui.hive, o protótipo desenhado só com o hive.ui.
+// Testes de studioui.hive e lib/uiview.hive: o Hive Studio desenhado só com
+// os widgets do hive.ui.
 
 import ../studioui as studioUi
+import ../lib/model
+import ../lib/uiview
+import ../lib/highlight
 import ./support/studioui as support
 
-test "a saída do compilador vira problemas, com as continuações juntadas" {
-	output := "./main.hive:3: in `main`: `+` wants two of one type\n    and these are Int and Str\nC:/proj/lib/u.hive:12: unexpected `}`\nlinha solta sem posição\n"
-	problems := studioUi.parseProblems(output)
-	assert len(problems) == 2
-	if problems is [first, second] {
-		assert first.file == "./main.hive"
-		assert first.line == 3
-		assert first.message == "in `main`: `+` wants two of one type and these are Int and Str"
-		assert second.file == "C:/proj/lib/u.hive"
-		assert second.line == 12
+test "o cursor fica no fim do trecho que a edição mudou" {
+	assert studioUi.caretAfter("abc", "abXc") == 3
+	assert studioUi.caretAfter("abc", "ab") == 2
+	assert studioUi.caretAfter("", "x") == 1
+	assert studioUi.caretAfter("proc main", "proc mainx") == 10
+	assert studioUi.caretAfter("igual", "igual") == 5
+}
+
+test "o realce volta em pedaços com a classe de cada um, e o texto sai igual" {
+	source := "proc main(): void \{ echo \"a<b\" } // TODO x"
+	tokens := uiview.tokensOf(highlight.highlight(source))
+	mut Str[dyn] texts = []
+	mut keyword := false
+	mut todo := false
+	mut quoted := false
+	for each token in tokens {
+		append(texts, token.text)
+		if token.cls == "tk" && token.text == "proc" {
+			keyword = true
+		}
+		if token.cls == "td" && token.text == "TODO" {
+			todo = true
+		}
+		if token.cls == "ts" && token.text == "\"a<b\"" {
+			quoted = true
+		}
 	}
-	assert len(studioUi.parseProblems("No problems found in main.hive (1s)")) == 0
+	assert join(texts, "") == source
+	assert keyword && todo && quoted
+	assert uiview.words("util.dobro(2)") == ["util", ".", "dobro", "(", "2", ")"]
 }
 
-test "fechar uma aba escolhe a vizinha certa" {
-	assert studioUi.activeAfterClose(0, 0, 0) == -1
-	assert studioUi.activeAfterClose(2, 2, 2) == 1
-	assert studioUi.activeAfterClose(1, 1, 3) == 1
-	assert studioUi.activeAfterClose(3, 1, 3) == 2
-	assert studioUi.activeAfterClose(0, 2, 2) == 0
+test "a linha de uma posição sai do começo de cada linha" {
+	starts := uiview.lineStarts(["ab", "", "cde"])
+	assert starts == [0, 3, 4]
+	assert uiview.lineAt(starts, 0) == 1
+	assert uiview.lineAt(starts, 2) == 1
+	assert uiview.lineAt(starts, 3) == 2
+	assert uiview.lineAt(starts, 4) == 3
+	assert uiview.lineAt(starts, 99) == 3
 }
 
-test "o texto some das pontas e as linhas se contam" {
-	assert studioUi.strip("  \tx y\t ") == "x y"
-	assert studioUi.strip("") == ""
-	assert studioUi.lineCount("a\nb\nc") == 3
-	assert studioUi.lineOf("a\nb\nc", 2) == "b"
-	assert studioUi.lineOf("a", 5) == ""
-	assert studioUi.languageName("x.hive") == "Hive"
-	assert studioUi.languageName("x.go") == "Go"
-	assert studioUi.languageName("LEIAME.md") == "Markdown"
+test "o código abre dividido com o realce, e o Markdown no preview" {
+	code := model.newDoc("a.hive", "a.hive", "", "\n", "edit")
+	assert uiview.modeOf(code) == "split"
+	assert uiview.modeName(code, "edit") == "text"
+	mut plain := code
+	plain.mode = "text"
+	assert uiview.modeOf(plain) == "edit"
+	notes := model.newDoc("a.md", "a.md", "", "\n", "preview")
+	assert uiview.modeOf(notes) == "preview"
+	assert uiview.modeName(notes, "edit") == "edit"
 }
 
-test "o fim de linha do arquivo volta ao salvar" {
-	doc := studioUi.OpenDoc("a.hive", "a.hive", "x\ny", "x\ny", "\r\n")
-	assert studioUi.toDisk(doc) == "x\r\ny"
-	assert studioUi.eolOf("a\r\nb") == "\r\n"
-	assert studioUi.eolOf("a\nb") == "\n"
-	assert !studioUi.dirty(doc)
-}
-
-test "abrir, editar, fechar com alterações pergunta, e salvar grava no disco" {
+test "abrir, digitar, salvar e fechar pelos widgets" {
 	folder := support.fixture()
-	mut state := studioUi.initial(folder)
-	window := hive.syslink.spawnAddressed(studioUi.update, state)
-	assert state.entry == folder + "/main.hive"
-	assert len(state.rows) == 2
-
-	studioUi.update(state, studioUi.Msg.Toggle(folder + "/lib"), window)
-	assert len(state.rows) == 3
-
-	studioUi.update(state, studioUi.Msg.Open(folder + "/main.hive"), window)
-	studioUi.update(state, studioUi.Msg.Open(folder + "/lib/util.hive"), window)
-	studioUi.update(state, studioUi.Msg.Open(folder + "/main.hive"), window)
-	assert len(state.docs) == 2
-	assert state.active == 0
-
-	studioUi.update(state, studioUi.Msg.Edit("proc main(): void \{\n\techo 2\n}\n"), window)
-	assert studioUi.anyDirty(state.docs)
-	studioUi.update(state, studioUi.Msg.Close(0), window)
-	assert state.closing == 0 && len(state.docs) == 2
-	studioUi.update(state, studioUi.Msg.CloseCancel(), window)
-	assert state.closing == -1
-
-	studioUi.update(state, studioUi.Msg.Close(0), window)
-	studioUi.update(state, studioUi.Msg.CloseSaving(), window)
-	assert len(state.docs) == 1 && state.active == 0
-	if hive.file.read(folder + "/main.hive") is Result.Ok(text) {
-		assert text == "proc main(): void \{\r\n\techo 2\r\n}\r\n"
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	assert support.shows(win, "Hive Studio")
+	assert support.shows(win, "main.hive")
+	_opened := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
+	assert len(win.core.docs) == 1
+	// O realce: `proc` na cor de palavra-chave do tema, o TODO em destaque.
+	assert support.shows(win, ">proc</span>")
+	assert support.shows(win, ">TODO</span>")
+	text := support.docText(win)
+	_typed := studioUi.update(win, uiview.edited(text + "// fim\n"), sink)
+	assert support.docDirty(win)
+	assert win.core.caret == len(text + "// fim\n")
+	assert support.shows(win, "●")
+	_closing := studioUi.update(win, uiview.act("close", "0"), sink)
+	assert support.shows(win, "Salvar e fechar")
+	_saved := studioUi.update(win, uiview.act("closeSave", folder + "/main.hive"), sink)
+	assert len(win.core.docs) == 0
+	if hive.file.read(folder + "/main.hive") is Result.Ok(disk) {
+		assert indexOf(disk, "// fim\r\n") is Result.Ok(_)
+	} else {
+		assert false
 	}
+}
 
-	// Um problema do Check abre o arquivo dele.
-	studioUi.update(state, studioUi.Msg.Checked("{folder}/main.hive:2: algo errado\n", false), window)
-	assert len(state.problems) == 1 && state.checked == "✗ 1 problema(s)"
-	studioUi.update(state, studioUi.Msg.Jump(0), window)
-	assert len(state.docs) == 2 && state.status == "linha 2: echo 2"
+test "menus abrem e fecham, e qualquer outro clique fecha o menu" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	assert !support.shows(win, "Fechar aba")
+	_open := studioUi.update(win, uiview.chrome("menu", "Arquivo"), sink)
+	assert win.extra.menu == "Arquivo"
+	assert support.shows(win, "Fechar aba")
+	_other := studioUi.update(win, uiview.act("side", "git"), sink)
+	assert win.extra.menu == ""
+	assert win.core.side == model.SideView.GitSide()
+}
 
-	// A vista é uma árvore do hive.ui; o HTML dela mostra abas, árvore e problema.
-	page := hive.ui.html(studioUi.view(state))
-	assert indexOf(page, "util.hive") is Result.Ok(_)
-	assert indexOf(page, "algo errado") is Result.Ok(_)
-	assert indexOf(page, "Check") is Result.Ok(_)
+test "cada tela desenha: configurações, preview, busca, painel e a paleta" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_settings := studioUi.update(win, uiview.act("settings", ""), sink)
+	assert support.shows(win, "Tema de cor")
+	assert support.shows(win, "Hive Dark")
+	_closed := studioUi.update(win, uiview.act("closeSettings", ""), sink)
+	_md := studioUi.update(win, uiview.act("open", folder + "/LEIAME.md"), sink)
+	assert support.shows(win, "Título")
+	assert support.shows(win, "☑")
+	_code := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_find := studioUi.update(win, uiview.action("find"), sink)
+	_typed := studioUi.update(win, uiview.field("find", "n"), sink)
+	assert support.shows(win, "1 de")
+	_problems := studioUi.update(win, uiview.act("pane", "problems"), sink)
+	assert support.shows(win, "PROBLEMAS")
+	_palette := studioUi.update(win, uiview.action("quickOpen"), sink)
+	assert support.shows(win, "Buscar arquivo pelo nome")
+	_side := studioUi.update(win, uiview.act("side", "outline"), sink)
+	assert support.shows(win, "dobro")
+}
+
+test "as setas da vista realçada a movem, e o cursor volta a mandar nela" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
+	_moved := studioUi.update(win, uiview.chrome("top", "3"), sink)
+	assert win.extra.top == 3
+	_caret := studioUi.update(win, uiview.edited(support.docText(win) + "x"), sink)
+	assert win.extra.top == 0
 }

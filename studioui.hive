@@ -1,561 +1,213 @@
-// Hive Studio desenhado só com o hive.ui: explorador, abas, editor, Check e
-// problemas, sem a página própria (shell.html), sem servidor e sem JavaScript.
-// Um protótipo, para ver até onde os widgets do hive.ui levam uma IDE.
+// Hive Studio desenhado só com os widgets do hive.ui: sem a página própria
+// (assets/shell.html), sem o servidor dela e sem JavaScript da IDE.
 //
-//   hivec run studioui.hive [pasta]
+//     hivec run studioui.hive [pasta]
+//
+// A lógica é a do studio.hive, importado inteiro: o mesmo estado
+// (`model.State`), a mesma dobra (`studio.step`) e a mesma tradução dos
+// eventos (`studio.toMsg`). Muda quem desenha — lib/uiview.hive — e quem manda
+// os eventos: os widgets do hive.ui mandam os mesmos que a página mandaria.
+//
+// A mensagem da janela é o `model.Cmd` do serviço do Hive Studio, então o
+// trabalho que roda em outra thread (git, hivec, o terminal, o vigia do disco,
+// o Error Lens) manda o resultado de volta à janela exatamente como mandava
+// ao serviço.
 
 import hive.ui
+import ./studio
 import ./lib/model
-import ./lib/workspace
-import ./lib/process
+import ./lib/uiview
 import ./lib/settings
-import ./lib/toolchain
+import ./lib/agents
+import ./lib/git
+import ./lib/process
+import ./lib/server
+import ./lib/complete
 
-// Um arquivo aberto numa aba. A aba está suja quando `text != saved`; o texto
-// fica com `\n` e `eol` lembra o fim de linha do arquivo para salvar igual.
-type OpenDoc {
-	path:  Str
-	name:  Str
-	text:  Str
-	saved: Str
-	eol:   Str
+// O estado da janela: o do Hive Studio e o que só esta janela lembra.
+// `started` diz se os vigias (git, disco) já foram postos para rodar — isso
+// espera a primeira mensagem, que é quando a janela passa a ter endereço.
+type Win {
+	core:    model.State
+	extra:   uiview.Chrome
+	started: Bool
 }
 
-// Uma linha `arquivo:linha: mensagem` do compilador, com as continuações
-// (as linhas indentadas que vêm depois) juntadas na mensagem.
-type Problem {
-	file:    Str
-	line:    Int
-	message: Str
+func view(win: Win): hive.ui.View {
+	return uiview.window(win.core, win.extra)
 }
 
-type Msg {
-	Toggle  { path: Str }
-	Open    { path: Str }
-	Pick    { index: Int }
-	Close   { index: Int }
-	Edit    { text: Str }
-	Save
-	SaveAll
-	Choose  { entry: Str }
-	Check
-	Checked { output: Str, ok: Bool }
-	Jump    { index: Int }
-	Refresh
-	// O diálogo de fechar uma aba com alterações por salvar.
-	CloseSaving
-	CloseDiscarding
-	CloseCancel
-}
-
-// `active` e `closing` valem -1 quando não há aba escolhida / diálogo aberto.
-type State {
-	root:     Str
-	compiler: Str
-	saveFirst: Bool
-	entry:    Str
-	entries:  Str[dyn]
-	expanded: Str[dyn]
-	rows:     model.TreeRow[dyn]
-	docs:     OpenDoc[dyn]
-	active:   Int
-	closing:  Int
-	problems: Problem[dyn]
-	checking: Bool
-	checked:  Str
-	status:   Str
-}
-
-// ── funções puras ────────────────────────────────────────────────────────
-
-func dirty(doc: OpenDoc): Bool {
-	return doc.text != doc.saved
-}
-
-func anyDirty(docs: OpenDoc[]): Bool {
-	for each doc in docs {
-		if dirty(doc) {
-			return true
+// Onde o cursor ficou depois de uma edição que só mandou o texto novo: no
+// fim do trecho que mudou (o que vem antes e depois dele é igual nos dois).
+func caretAfter(before: Str, after: Str): Int {
+	a := split(before, "")
+	b := split(after, "")
+	mut same := 0
+	for ; same < len(a) && same < len(b); same++ {
+		if a bounds same && b bounds same {
+			if a[same] != b[same] {
+				break
+			}
 		}
 	}
-	return false
+	mut tail := 0
+	for ; tail < len(a) - same && tail < len(b) - same; tail++ {
+		i := len(a) - 1 - tail
+		j := len(b) - 1 - tail
+		if a bounds i && b bounds j {
+			if a[i] != b[j] {
+				break
+			}
+		}
+	}
+	return len(b) - tail
 }
 
-func lineCount(text: Str): Int {
-	return len(split(text, "\n"))
+func numberOr(text: Str, fallback: Int): Int {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		return n
+	}
+	return fallback
 }
 
-// A linha `n` (a partir de 1) do texto, ou "" quando não existe.
-func lineOf(text: Str, n: Int): Str {
-	lines := split(text, "\n")
-	at := n - 1
-	if lines bounds at {
-		return lines[at]
+// Um agente numa janela de terminal do sistema, na pasta do projeto: o
+// hive.ui não tem um emulador de terminal onde desenhar a tela dele.
+proc launchExternal(root: Str, command: Str, title: Str): Str {
+	if server.isWindows() {
+		result := process.run("cmd", ["/c", "start", title, "cmd", "/k", command], root)
+		if result.code != 0 {
+			return process.firstLine(result.text)
+		}
+		return ""
+	}
+	if hive.file.exists("/usr/bin/osascript") {
+		script := "tell application \"Terminal\" to do script \"cd " + replaceAll(root, "\"", "\\\"") + " && " + replaceAll(command, "\"", "\\\"") + "\""
+		result := process.run("osascript", ["-e", script, "-e", "tell application \"Terminal\" to activate"], root)
+		if result.code != 0 {
+			return process.firstLine(result.text)
+		}
+		return ""
+	}
+	result := process.run("x-terminal-emulator", ["-e", "sh", "-c", command + "; exec $SHELL"], root)
+	if result.code == -1 {
+		return "x-terminal-emulator: " + result.text
 	}
 	return ""
 }
 
-func eolOf(text: Str): Str {
-	if indexOf(text, "\r\n") is Result.Ok(_) {
-		return "\r\n"
+proc openAgent(win: mut Win, agent: Str): void {
+	command := agents.commandOf(win.core.settings, agent)
+	problem := launchExternal(win.core.root, command, "Hive Studio — " + agents.labelOf(agent))
+	win.core.agents.current = agent
+	if problem != "" {
+		win.core.status = agents.labelOf(agent) + ": " + problem
+	} else {
+		win.core.status = agents.labelOf(agent) + " — " + command
 	}
-	return "\n"
 }
 
-func toDisk(doc: OpenDoc): Str {
-	if doc.eol == "\n" {
-		return doc.text
+// O que só esta janela trata: menus, a rolagem da vista realçada e os agentes.
+proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address): void {
+	if what == "menu" {
+		win.extra.menu = arg
+	} else if what == "top" {
+		win.extra.top = numberOr(arg, 0)
+	} else if what == "agent" {
+		openAgent(win, arg)
+	} else if what == "agentPane" {
+		win.core.pane = model.Pane.AgentPane()
+		win.core.panelOpen = true
 	}
-	return replaceAll(doc.text, "\n", doc.eol)
 }
 
-func findDoc(docs: OpenDoc[], path: Str): Int {
-	for i := 0; i < len(docs); i++ {
-		if docs[i].path == path {
-			return i
-		}
-	}
-	return -1
-}
-
-// A aba que fica escolhida depois de fechar `closed`, com `active` escolhida
-// antes: a da esquerda da fechada, se era ela; a mesma, deslocada, se estava depois.
-func activeAfterClose(active: Int, closed: Int, remaining: Int): Int {
-	if remaining == 0 {
-		return -1
-	}
-	if active > closed || (active == closed && active == remaining) {
-		return active - 1
-	}
-	return active
-}
-
-func languageName(path: Str): Str {
-	lang := model.language(path)
-	if lang == "hive" && path is "{stem}.go" {
-		return "Go"
-	}
-	if lang == "hive" {
-		return "Hive"
-	}
-	if lang == "json" {
-		return "JSON"
-	}
-	if model.isMarkdown(path) {
-		return "Markdown"
-	}
-	return "Texto"
-}
-
-// Sem os espaços e tabs das pontas.
-func strip(text: Str): Str {
-	mut rest := text
-	for ;; {
-		if rest is " {tail}" {
-			rest = tail
-		} else if rest is "\t{tail}" {
-			rest = tail
-		} else if rest is "{head} " {
-			rest = head
-		} else if rest is "{head}\t" {
-			rest = head
-		} else {
-			return rest
-		}
-	}
-	return rest
-}
-
-func isHive(path: Str): Bool {
-	return path is "{stem}.hive"
-}
-
-func isEntrypoint(text: Str): Bool {
-	return indexOf(text, "proc main(): void") is Result.Ok(_)
-}
-
-// As linhas do compilador viram problemas; uma linha indentada continua a
-// mensagem da anterior. O que não tem `arquivo:linha:` fica de fora.
-func parseProblems(output: Str): Problem[dyn] {
-	mut Problem[dyn] found = []
-	for each raw in split(replaceAll(output, "\r", ""), "\n") {
-		last := len(found) - 1
-		continued := raw is " {_rest}" || raw is "\t{_rest}"
-		if continued && found bounds last {
-			found[last].message = found[last].message + " " + strip(raw)
-		} else if raw is "{file}:{line is (\d+)}: {message}" {
-			if hive.conv.sti(line) is Result.Ok(n) {
-				append(found, Problem(workspace.tidy(file), n, message))
-			}
-		}
-	}
-	return found
-}
-
-// ── o que mexe no estado ─────────────────────────────────────────────────
-
-proc refreshTree(state: mut State): void {
-	prefs := settings.load()
-	mut model.TreeRow[dyn] rows = []
-	buildTreeOf(state.root, state.expanded, prefs.showHidden, rows)
-	state.rows = rows
-}
-
-proc buildTreeOf(root: Str, expanded: Str[], showHidden: Bool, rows: mut model.TreeRow[dyn]): void {
-	mut Str[dyn] open = []
-	for each path in expanded {
-		append(open, path)
-	}
-	workspace.buildTree(root, 0, open, showHidden, rows)
-}
-
-// As entradas possíveis: os `.hive` da raiz que têm `proc main`.
-proc findEntries(root: Str): Str[dyn] {
-	mut Str[dyn] found = []
-	if workspace.listEntries(root, false) is Result.Ok(entries) {
-		for each entry in entries {
-			if !entry.folder && isHive(entry.path) {
-				if hive.file.read(entry.path) is Result.Ok(text) && isEntrypoint(text) {
-					append(found, entry.path)
-				}
-			}
-		}
-	}
-	return found
-}
-
-proc openPath(state: mut State, path: Str): void {
-	already := findDoc(state.docs, path)
-	if already >= 0 {
-		state.active = already
+// Um evento dos widgets, traduzido como o Hive Studio traduz os da página.
+proc handle(win: mut Win, event: model.Event, self: hive.syslink.Address): void {
+	if event.kind == "chrome" {
+		chromeEvent(win, event.act, event.arg, self)
 		return
 	}
-	read := hive.file.read(path)
-	if read is Result.Ok(raw) {
-		text := replaceAll(raw, "\r\n", "\n")
-		append(state.docs, OpenDoc(path, workspace.baseName(path), text, text, eolOf(raw)))
-		state.active = len(state.docs) - 1
-		state.status = "aberto {workspace.baseName(path)}"
-	} else if read is Result.Error(why) {
-		state.status = "não foi possível abrir {path}: {why.message}"
+	// Qualquer outro clique fecha o menu aberto.
+	win.extra.menu = ""
+	mut sent := event
+	if sent.kind == "edit" && sent.caret < 0 {
+		sent.caret = caretAfter(studio.activeText(win.core), sent.text)
 	}
-}
-
-proc saveAt(state: mut State, index: Int): void {
-	if state.docs bounds index {
-		doc := state.docs[index]
-		written := hive.file.write(doc.path, toDisk(doc))
-		if written is Result.Error(why) {
-			state.status = "não foi possível salvar {doc.name}: {why.message}"
-		} else if state.docs bounds index {
-			state.docs[index].saved = doc.text
-			state.status = "salvo {doc.name}"
-		}
-	}
-}
-
-proc saveAll(state: mut State): void {
-	for i := 0; i < len(state.docs); i++ {
-		if dirty(state.docs[i]) {
-			saveAt(state, i)
-		}
-	}
-}
-
-proc closeAt(state: mut State, index: Int): void {
-	if state.docs bounds index {
-		drop(state.docs, index, index)
-		state.active = activeAfterClose(state.active, index, len(state.docs))
-	}
-	state.closing = -1
-}
-
-proc toggleFolder(state: mut State, path: Str): void {
-	if indexOf(state.expanded, path) is Result.Ok(at) {
-		drop(state.expanded, at, at)
-	} else {
-		append(state.expanded, path)
-	}
-	refreshTree(state)
-}
-
-// Roda numa thread própria: a janela continua respondendo enquanto o
-// compilador trabalha, e o resultado volta como mensagem.
-proc runCheck(window: hive.syslink.Address, compiler: Str, entry: Str): void {
-	result := process.run(toolchain.compilerPath(compiler), ["check", entry], "")
-	mut output := result.text
-	if result.code == -1 {
-		output = "não foi possível iniciar {toolchain.compilerPath(compiler)}: {result.text}"
-	}
-	async window(Msg.Checked(output, result.code == 0))
-}
-
-proc update(state: mut State, message: Msg, window: hive.syslink.Address): Msg {
-	if message is Msg.Toggle(path) {
-		toggleFolder(state, path)
-	} else if message is Msg.Open(path) {
-		openPath(state, path)
-	} else if message is Msg.Pick(index) {
-		if state.docs bounds index {
-			state.active = index
-		}
-	} else if message is Msg.Close(index) {
-		mut unsaved := false
-		if state.docs bounds index {
-			unsaved = dirty(state.docs[index])
-		}
-		if unsaved {
-			state.closing = index
-		} else {
-			closeAt(state, index)
-		}
-	} else if message is Msg.CloseSaving {
-		saveAt(state, state.closing)
-		closeAt(state, state.closing)
-	} else if message is Msg.CloseDiscarding {
-		closeAt(state, state.closing)
-	} else if message is Msg.CloseCancel {
-		state.closing = -1
-	} else if message is Msg.Edit(text) {
-		if state.docs bounds state.active {
-			state.docs[state.active].text = text
-		}
-	} else if message is Msg.Save {
-		saveAt(state, state.active)
-	} else if message is Msg.SaveAll {
-		saveAll(state)
-	} else if message is Msg.Choose(entry) {
-		state.entry = entry
-	} else if message is Msg.Check {
-		if state.entry == "" {
-			state.status = "nenhum arquivo com proc main na pasta"
-		} else if !state.checking {
-			if state.saveFirst {
-				saveAll(state)
+	translated := studio.toMsg(win.core, sent)
+	if translated is Result.Ok(message) {
+		// Um agente pedido pelo menu ou pelo teclado abre num terminal do
+		// sistema; o painel AGENTE mostra os botões de cada um.
+		if message is model.Msg.ShowAgent(agent) {
+			mut chosen := agent
+			if !agents.isAgent(chosen) {
+				chosen = win.core.agents.current
 			}
-			state.checking = true
-			state.status = "checando {workspace.baseName(state.entry)}…"
-			async runCheck(window, state.compiler, state.entry)
-		}
-	} else if message is Msg.Checked(output, ok) {
-		state.checking = false
-		state.problems = parseProblems(output)
-		if ok {
-			state.checked = "✓ sem erros"
-		} else if len(state.problems) == 0 {
-			state.checked = "✗ " + strip(output)
+			openAgent(win, chosen)
+		} else if message is model.Msg.AgentRestart(agent) {
+			openAgent(win, agent)
 		} else {
-			state.checked = "✗ {len(state.problems)} problema(s)"
+			studio.step(win.core, message, self)
 		}
-		state.status = state.checked
-	} else if message is Msg.Jump(index) {
-		if state.problems bounds index {
-			problem := state.problems[index]
-			openPath(state, problem.file)
-			if state.docs bounds state.active {
-				source := strip(lineOf(state.docs[state.active].text, problem.line))
-				state.status = "linha {problem.line}: {source}"
-			}
+	}
+}
+
+// Depois de cada turno: o commit da aba de commit (lido do git uma vez, quando
+// a aba muda) e a vista realçada, que volta a seguir o cursor quando ele, o
+// documento ou a busca mudam.
+proc follow(win: mut Win): void {
+	key := win.core.commit.key
+	if key != win.extra.shown {
+		win.extra.shown = key
+		if key == "" {
+			win.extra.commit = uiview.emptyCommit()
+		} else if key is "work:{path}" {
+			win.extra.commit = git.working(win.core.git, path)
+		} else if git.show(win.core.git, key) is Result.Ok(commit) {
+			win.extra.commit = commit
 		}
-	} else if message is Msg.Refresh {
-		state.entries = findEntries(state.root)
-		refreshTree(state)
-		state.status = "explorador relido"
 	}
-	return message
-}
-
-// ── a vista ──────────────────────────────────────────────────────────────
-
-func muted(content: Str): hive.ui.View {
-	return ui.text([ui.tone(ui.Tone.Muted()), ui.size(ui.TextSize.Caption())], content)
-}
-
-func treeRow(row: model.TreeRow, current: Str): hive.ui.View {
-	indent := ui.row([ui.width(row.depth * 14)], [])
-	if row.entry.folder {
-		mut arrow := "▸ "
-		if row.open {
-			arrow = "▾ "
-		}
-		return ui.row([ui.gap(2)], [indent, ui.link([ui.on(Msg.Toggle(row.entry.path))], "#", arrow + row.entry.name)])
-	}
-	mut hive.ui.Attr[dyn] attrs = [ui.pad(1)]
-	if row.entry.path == current {
-		append(attrs, ui.background(ui.Tone.HEX("#2a3550")))
-	}
-	return ui.row(attrs, [indent, ui.link([ui.on(Msg.Open(row.entry.path)), ui.tone(ui.Tone.Normal())], "#", "  " + row.entry.name)])
-}
-
-func explorer(state: State, current: Str): hive.ui.View {
-	mut hive.ui.View[dyn] items = [
-		ui.row([ui.align(ui.Align.Center())], [
-			muted("EXPLORADOR"),
-			ui.spacer(),
-			ui.button([ui.on(Msg.Refresh())], "↻")
-		]),
-		muted(workspace.baseName(workspace.normalize(state.root)))
-	]
-	for each row in state.rows {
-		append(items, treeRow(row, current))
-	}
-	return ui.column([ui.width(260), ui.pad(8), ui.gap(2), ui.scroll(ui.Axis.Vertical())], items)
-}
-
-func tab(doc: OpenDoc, index: Int, active: Int): hive.ui.View {
-	mut label := doc.name
-	if dirty(doc) {
-		label = "● " + label
-	}
-	mut hive.ui.Attr[dyn] box = [ui.gap(6), ui.pad(6), ui.align(ui.Align.Center())]
-	mut hive.ui.Tone tone = ui.Tone.Muted()
-	if index == active {
-		append(box, ui.background(ui.Tone.HEX("#2a3550")))
-		tone = ui.Tone.Normal()
-	}
-	return ui.row(box, [
-		ui.link([ui.on(Msg.Pick(index)), ui.tone(tone)], "#", label),
-		ui.link([ui.on(Msg.Close(index)), ui.tone(ui.Tone.Muted())], "#", "×")
-	])
-}
-
-func editor(state: State): hive.ui.View {
-	mut hive.ui.View[dyn] tabs = []
-	for i := 0; i < len(state.docs); i++ {
-		append(tabs, tab(state.docs[i], i, state.active))
-	}
-	if state.docs bounds state.active {
-		doc := state.docs[state.active]
-		return ui.column([ui.grow(1), ui.gap(4)], [
-			ui.row([ui.gap(2), ui.scroll(ui.Axis.Horizontal())], tabs),
-			muted(join(workspace.crumbs(state.root, doc.path), " › ")),
-			ui.textarea([ui.grow(1), ui.onInput(Msg.Edit(_))], doc.text)
-		])
-	}
-	return ui.column([ui.grow(1), ui.gap(8), ui.pad(32), ui.align(ui.Align.Center()), ui.justify(ui.Justify.Center())], [
-		ui.text([ui.size(ui.TextSize.Title())], "⬡ Hive Studio"),
-		muted("abra um arquivo no explorador")
-	])
-}
-
-func problemsPanel(state: State): hive.ui.View {
-	mut hive.ui.View[dyn] items = [
-		ui.row([ui.gap(8), ui.align(ui.Align.Center())], [muted("PROBLEMAS"), muted(state.checked)])
-	]
-	for i := 0; i < len(state.problems); i++ {
-		problem := state.problems[i]
-		append(items, ui.row([ui.gap(8)], [
-			ui.icon([ui.tone(ui.Tone.Danger())], ui.Icon.Warning()),
-			ui.link([ui.on(Msg.Jump(i))], "#", "{workspace.baseName(problem.file)}:{problem.line}"),
-			ui.text([], problem.message)
-		]))
-	}
-	return ui.column([ui.height(160), ui.pad(8), ui.gap(4), ui.scroll(ui.Axis.Vertical())], items)
-}
-
-func toolbar(state: State, current: Result<OpenDoc, Bool>): hive.ui.View {
-	mut canSave := false
-	if current is Result.Ok(doc) {
-		canSave = dirty(doc)
-	}
-	return ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center())], [
-		ui.text([ui.size(ui.TextSize.Subtitle())], "⬡ Hive Studio"),
-		muted("hive.ui"),
-		ui.spacer(),
-		ui.button([ui.on(Msg.Save()), ui.disabled(!canSave)], "Salvar"),
-		ui.button([ui.on(Msg.SaveAll()), ui.disabled(!anyDirty(state.docs))], "Salvar tudo"),
-		muted("entrada"),
-		ui.select([ui.onChoose(Msg.Choose(_))], state.entries, state.entry),
-		ui.button([ui.on(Msg.Check()), ui.busy(state.checking), ui.disabled(state.checking || state.entry == "")], "Check")
-	])
-}
-
-func statusBar(state: State, current: Result<OpenDoc, Bool>): hive.ui.View {
-	mut hive.ui.View[dyn] parts = [muted(state.status), ui.spacer()]
-	if current is Result.Ok(doc) {
-		mut saved := "salvo"
-		if dirty(doc) {
-			saved = "não salvo"
-		}
-		append(parts, muted(doc.name))
-		append(parts, muted(languageName(doc.path)))
-		append(parts, muted("{lineCount(doc.text)} linhas"))
-		append(parts, muted(saved))
-	}
-	append(parts, muted(state.checked))
-	return ui.row([ui.gap(16), ui.pad(6), ui.align(ui.Align.Center())], parts)
-}
-
-func closeDialog(state: State): hive.ui.View {
-	mut name := ""
-	if state.docs bounds state.closing {
-		name = state.docs[state.closing].name
-	}
-	return ui.overlay([ui.onDismiss(Msg.CloseCancel())], ui.column([ui.gap(12), ui.pad(20)], [
-		ui.text([ui.size(ui.TextSize.Subtitle())], "Salvar {name} antes de fechar?"),
-		muted("As alterações se perdem se não salvar."),
-		ui.row([ui.gap(8)], [
-			ui.button([ui.on(Msg.CloseSaving())], "Salvar"),
-			ui.button([ui.on(Msg.CloseDiscarding())], "Não salvar"),
-			ui.spacer(),
-			ui.button([ui.on(Msg.CloseCancel())], "Cancelar")
-		])
-	]))
-}
-
-func currentDoc(state: State): Result<OpenDoc, Bool> {
-	if state.docs bounds state.active {
-		return Result.Ok(state.docs[state.active])
-	}
-	return Result.Error(false)
-}
-
-func view(state: State): hive.ui.View {
-	current := currentDoc(state)
 	mut path := ""
-	if current is Result.Ok(doc) {
-		path = doc.path
+	index := win.core.active
+	if win.core.docs bounds index {
+		path = win.core.docs[index].path
 	}
-	mut dialog := ui.none()
-	if state.docs bounds state.closing {
-		dialog = closeDialog(state)
+	if win.core.caret != win.extra.caret || path != win.extra.path || win.core.find.serial != win.extra.findSerial {
+		win.extra.top = 0
+		win.extra.caret = win.core.caret
+		win.extra.path = path
+		win.extra.findSerial = win.core.find.serial
 	}
-	return ui.column([ui.grow(1)], [
-		toolbar(state, current),
-		ui.row([ui.grow(1), ui.gap(8), ui.pad(8)], [explorer(state, path), editor(state)]),
-		problemsPanel(state),
-		statusBar(state, current),
-		dialog
-	])
 }
 
-proc initial(root: Str): State {
+proc update(win: mut Win, command: model.Cmd, self: hive.syslink.Address): model.Cmd {
+	if !win.started {
+		win.started = true
+		async studio.watchGit(self)
+		async studio.watchDocs(self)
+	}
+	if command is model.Cmd.Ui(text) {
+		if model.Event.decode(text, hive.json.codec()) is Result.Ok(event) {
+			handle(win, event, self)
+		}
+	} else {
+		_answer := studio.serve(win.core, command, self)
+	}
+	follow(win)
+	return command
+}
+
+proc initial(folder: Str): Win {
 	prefs := settings.load()
-	entries := findEntries(root)
-	mut entry := ""
-	for each e in entries {
-		entry = e
-		break
-	}
-	// studio.hive, quando existe, é a entrada deste repositório.
-	preferred := workspace.joinPath(root, "studio.hive")
-	if indexOf(entries, preferred) is Result.Ok(_) {
-		entry = preferred
-	}
-	Str[dyn] none = []
-	model.TreeRow[dyn] rows = []
-	OpenDoc[dyn] docs = []
-	Problem[dyn] problems = []
-	mut state := State(root, prefs.compiler, prefs.saveBeforeRun, entry, entries, none, rows, docs, -1, -1, problems, false, "", "pronto")
-	refreshTree(state)
-	return state
+	mut start := model.initial(folder, prefs)
+	studio.openRoot(start, folder)
+	studio.watchFolders(start)
+	return Win(start, uiview.emptyChrome(), false)
 }
 
 proc main(): void {
 	args := hive.term.args()
 	mut folder := "."
 	if args is [first, ...rest] {
-		folder = workspace.normalize(first)
+		folder = first
 	}
-	ui.windowAddressed("Hive Studio (hive.ui)", view, update, initial(folder))
+	ui.windowAddressed("Hive Studio", view, update, initial(folder))
 }
