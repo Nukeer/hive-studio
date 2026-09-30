@@ -32,7 +32,9 @@ import ./markdown
 // seguir o cursor); `caret`, `path` e `findSerial` são o que a vista seguia,
 // para voltar a seguir o cursor quando ele (ou o documento, ou a busca) muda.
 // `ptyPort` e `ptyToken` são o servidor dos terminais dos agentes (o xterm.js
-// e o `/pty`), que studioui.hive abre.
+// e o `/pty`), que studioui.hive abre. `hl` é o realce do editor que a página
+// ainda não tem (`model.HlUpdate` em JSON: tudo, só as linhas que mudaram, ou
+// nada), e `hlPath`/`hlVersion` o documento e a versão a que ele leva.
 type Chrome {
 	menu:       Str
 	commit:     git.Commit
@@ -43,6 +45,9 @@ type Chrome {
 	findSerial: Int
 	ptyPort:    Int
 	ptyToken:   Str
+	hl:         Str
+	hlPath:     Str
+	hlVersion:  Int
 }
 
 func emptyCommit(): git.Commit {
@@ -51,7 +56,7 @@ func emptyCommit(): git.Commit {
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "")
+	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1)
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -861,27 +866,11 @@ func tabStrip(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.row([ui.gap(1), fill(t.tabStrip), ui.scroll(ui.Axis.Horizontal())], items)
 }
 
-// Como o documento aparece: `edit` (só o texto), `split` ou `preview`.
-// Markdown e JSON seguem o modo que a IDE sempre deu a eles. O código abre
-// com o Hive Studio dizendo `edit`, e aqui isso é o texto ao lado da vista
-// realçada; só o texto, escolhido no Editor, é o modo `text`.
+// Como o documento aparece: `edit` (o editor, colorido pela ponte), `split`
+// (o editor e a vista ao lado) ou `preview` (no código, só a vista realçada,
+// de nomes clicáveis).
 func modeOf(doc: model.Doc): Str {
-	if model.hasPreview(doc.path) {
-		return doc.mode
-	}
-	if doc.mode == "edit" {
-		return "split"
-	} else if doc.mode == "text" {
-		return "edit"
-	}
 	return doc.mode
-}
-
-func modeName(doc: model.Doc, mode: Str): Str {
-	if mode == "edit" && !model.hasPreview(doc.path) {
-		return "text"
-	}
-	return mode
 }
 
 // Editor · Dividir · Preview (no código, o terceiro é a vista realçada, só leitura).
@@ -896,7 +885,7 @@ func modeSwitch(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.Vie
 		if option[0] == modeOf(doc) {
 			color = t.accent
 		}
-		append(items, clickable(color, tx(state, option[1]), act("mode", modeName(doc, option[0])), ""))
+		append(items, clickable(color, tx(state, option[1]), act("mode", option[0]), ""))
 	}
 	return ui.row([ui.gap(10)], items)
 }
@@ -2152,6 +2141,53 @@ func palette(state: model.State, t: theme.Theme): hive.ui.View {
 
 // ── a ponte com lib/bridge.go ────────────────────────────────────────────
 
+func noLines(): Str[dyn] {
+	Str[dyn] none = []
+	return none
+}
+
+// O realce que a página ainda não tem, sabendo que ela tem a versão `had` de
+// `hadPath`: nada (`keep`), as linhas que a última edição mudou (`patch`) ou
+// o documento inteiro (`full`) — como `render.hlUpdate` faz para a página própria.
+func hlUpdate(state: model.State, hadPath: Str, had: Int): model.HlUpdate {
+	if render.activeDoc(state) is Result.Ok(doc) {
+		if hadPath == doc.path {
+			if had == doc.version {
+				return model.HlUpdate("keep", 0, 0, noLines(), noLines(), doc.version)
+			}
+			if had == doc.version - 1 {
+				return model.HlUpdate("patch", doc.patch.from, doc.patch.remove, doc.patch.lines, doc.patch.source, doc.version)
+			}
+		}
+		return model.HlUpdate("full", 0, 0, highlight.htmlLines(doc.text, model.language(doc.path)), split(doc.text, "\n"), doc.version)
+	}
+	return model.HlUpdate("none", 0, 0, noLines(), noLines(), -1)
+}
+
+// As cores de cada classe do realce, no tema escolhido.
+type Syntax {
+	tk: Str
+	tt: Str
+	ts: Str
+	tn: Str
+	tc: Str
+	tf: Str
+	ta: Str
+	tb: Str
+	tm: Str
+	td: Str
+	gutter: Str
+	text: Str
+	accent: Str
+	danger: Str
+	warn: Str
+}
+
+func syntaxOf(t: theme.Theme): Syntax {
+	return Syntax(t.synKeyword, t.synType, t.synString, t.synNumber, t.synComment, t.synCall, t.synAtom, t.synLiteral, t.synModule,
+		t.warn, t.gutter, t.text, t.accent, t.danger, t.warn)
+}
+
 // O que o script da ponte precisa saber do estado. `focus` e os `…Ph` são
 // placeholders: é por eles que o script acha cada campo na página.
 type BridgeState {
@@ -2187,6 +2223,9 @@ type BridgeState {
 	vimAck:        Int
 	vimPh:         Str
 	textQuiet:     Bool
+	numbers:       Bool
+	syntax:        Syntax
+	lens:          model.LensMark[dyn]
 }
 
 // O placeholder da linha de comando do Vim: invisível (U+2800), e é por ele
@@ -2285,7 +2324,10 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		vimScroll: state.vim.scroll,
 		vimAck: state.vim.acked,
 		vimPh: vimMark(),
-		textQuiet: state.textSerial == state.quietSerial
+		textQuiet: state.textSerial == state.quietSerial,
+		numbers: state.settings.lineNumbers,
+		syntax: syntaxOf(t),
+		lens: render.lensMarks(state)
 	)
 }
 
@@ -2294,7 +2336,8 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 func bridge(state: model.State, extra: Chrome): hive.ui.View {
 	return ui.row([ui.height(0)], [
 		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state, extra), hive.json.codec())),
-		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], "")
+		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], ""),
+		ui.input([ui.placeholder("hive-hl")], extra.hl)
 	])
 }
 

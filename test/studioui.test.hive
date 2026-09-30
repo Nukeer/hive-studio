@@ -49,16 +49,13 @@ test "a linha de uma posição sai do começo de cada linha" {
 	assert uiview.lineAt(starts, 99) == 3
 }
 
-test "o código abre dividido com o realce, e o Markdown no preview" {
-	code := model.newDoc("a.hive", "a.hive", "", "\n", "edit")
-	assert uiview.modeOf(code) == "split"
-	assert uiview.modeName(code, "edit") == "text"
-	mut plain := code
-	plain.mode = "text"
-	assert uiview.modeOf(plain) == "edit"
-	notes := model.newDoc("a.md", "a.md", "", "\n", "preview")
+test "o código abre no editor colorido, e o Markdown no preview" {
+	code := model.newDoc("a.hive", "a.hive", "", "
+", "edit")
+	assert uiview.modeOf(code) == "edit"
+	notes := model.newDoc("a.md", "a.md", "", "
+", "preview")
 	assert uiview.modeOf(notes) == "preview"
-	assert uiview.modeName(notes, "edit") == "edit"
 }
 
 test "abrir, digitar, salvar e fechar pelos widgets" {
@@ -69,9 +66,9 @@ test "abrir, digitar, salvar e fechar pelos widgets" {
 	assert support.shows(win, "main.hive")
 	_opened := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
 	assert len(win.core.docs) == 1
-	// O realce: `proc` na cor de palavra-chave do tema, o TODO em destaque.
-	assert support.shows(win, ">proc</span>")
-	assert support.shows(win, ">TODO</span>")
+	// O realce que vai à ponte: `proc` como palavra-chave, o TODO em destaque.
+	assert indexOf(support.hlText(win), ">proc</span>") is Result.Ok(_)
+	assert indexOf(support.hlText(win), ">TODO</span>") is Result.Ok(_)
 	text := support.docText(win)
 	_typed := studioUi.update(win, uiview.edited(text + "// fim\n"), sink)
 	assert support.docDirty(win)
@@ -205,4 +202,39 @@ test "o modo Vim: as teclas vão ao motor e a ponte leva o modo, a seleção e a
 	_colon := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"vim\",\"text\":\":\",\"caret\":-1,\"arg\":\"0 30\"}"), sink)
 	assert uiview.bridgeState(win.core, win.extra).focus == uiview.vimMark()
 	assert support.shows(win, "placeholder=\"" + uiview.vimMark() + "\"")
+}
+
+test "o realce vai inteiro ao abrir, só as linhas mudadas ao digitar, e nada quando nada muda" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(full) {
+		assert full.mode == "full"
+		assert len(full.lines) == 4
+		assert indexOf(join(full.lines, "
+"), "<span class=\"tk\">func</span>") is Result.Ok(_)
+	} else {
+		assert false
+	}
+	_typed := studioUi.update(win, uiview.edited("// novo
+" + support.docText(win)), sink)
+	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(patch) {
+		assert patch.mode == "patch"
+		assert patch.from == 0
+	} else {
+		assert false
+	}
+	_idle := studioUi.update(win, uiview.chrome("menu", ""), sink)
+	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(kept) {
+		assert kept.mode == "keep"
+	} else {
+		assert false
+	}
+	_lost := studioUi.update(win, uiview.chrome("hlFull", ""), sink)
+	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(again) {
+		assert again.mode == "full"
+	} else {
+		assert false
+	}
 }

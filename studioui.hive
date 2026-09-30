@@ -92,6 +92,9 @@ proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address):
 		win.extra.menu = arg
 	} else if what == "top" {
 		win.extra.top = numberOr(arg, 0)
+	} else if what == "hlFull" {
+		// A página perdeu o fio do realce: no fim deste turno ele vai inteiro.
+		win.extra.hlVersion = -1
 	}
 	// "hello": a ponte avisa que a página abriu; os vigias começam no turno
 	// dela (ver `update`), e não há mais nada a fazer.
@@ -143,6 +146,12 @@ proc follow(win: mut Win): void {
 	if win.core.docs bounds index {
 		path = win.core.docs[index].path
 	}
+	// O realce que a página ainda não tem vai uma vez só; no turno seguinte,
+	// sem mudança, o campo volta a dizer `keep`.
+	hl := uiview.hlUpdate(win.core, win.extra.hlPath, win.extra.hlVersion)
+	win.extra.hl = encode(hl, hive.json.codec())
+	win.extra.hlPath = path
+	win.extra.hlVersion = hl.version
 	if win.core.caret != win.extra.caret || path != win.extra.path || win.core.find.serial != win.extra.findSerial {
 		win.extra.top = 0
 		win.extra.caret = win.core.caret

@@ -63,3 +63,12 @@ func docDirty(win: studioUi.Win): Bool {
 	}
 	return false
 }
+
+// As linhas realçadas que a janela mandou à ponte no último turno, juntas.
+func hlText(win: studioUi.Win): Str {
+	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(update) {
+		return join(update.lines, "
+")
+	}
+	return ""
+}

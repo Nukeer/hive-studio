@@ -14,6 +14,12 @@
 //   - `hive-bridge` traz de volta um evento no formato da página própria
 //     (`model.Event`), que `studio.toMsg` traduz como sempre.
 //
+// O editor é colorido como na página própria: o `textarea` fica com o texto
+// transparente, e uma camada por cima dele (que não recebe o mouse) mostra as
+// mesmas linhas realçadas, os números de linha e o Error Lens. O realce chega
+// pelo terceiro campo, `hive-hl`: o documento inteiro, só as linhas que a
+// última edição mudou, ou nada (`model.HlUpdate`).
+//
 // Os terminais dos agentes são o xterm.js da página própria, ligado ao
 // pseudoterminal pelo mesmo `/pty` (lib/server.hive), num servidor que
 // studioui.hive abre com um token só dele. O terminal fica numa camada fora do
@@ -40,7 +46,7 @@ func Installed() bool {
 }
 
 const style = `<style>
-input[placeholder="hive-state"],input[placeholder="hive-bridge"]{position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
+input[placeholder="hive-state"],input[placeholder="hive-bridge"],input[placeholder="hive-hl"]{position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 textarea[placeholder="⬡"]{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;
 font-size:13px;line-height:1.55;white-space:pre;overflow:auto;resize:none;border-radius:0;border:0;tab-size:var(--hive-tab,4)}
 textarea[placeholder="⬡"]:focus{outline:none}
@@ -48,6 +54,18 @@ textarea[placeholder="⬡"]:focus{outline:none}
 [style*="padding:9px"] .h-link:hover{text-decoration:underline}
 [style*="height:5px"]{cursor:ns-resize}
 textarea[placeholder="⬡"].hive-block{caret-color:transparent}
+textarea[placeholder="⬡"].hive-colored{color:transparent !important;-webkit-text-fill-color:transparent}
+textarea[placeholder="⬡"].hive-colored.hive-numbers{padding-left:66px !important}
+textarea[placeholder="⬡"].hive-colored::selection{background:rgba(120,150,255,.28);-webkit-text-fill-color:transparent}
+#hive-hl{position:fixed;display:none;pointer-events:none;z-index:2;overflow:hidden}
+#hive-hl pre{position:absolute;top:0;bottom:0;margin:0;overflow:hidden;white-space:pre;font:inherit;border:0;background:transparent}
+#hive-hl .g{left:0;text-align:right;user-select:none}
+#hive-hl .c{left:0;right:0}
+#hive-hl .c .pad{height:6em}
+#hive-hl .l>div{min-height:1lh}
+#hive-hl,textarea[placeholder="⬡"]{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
+#hive-hl .lm{position:absolute;white-space:pre;font-style:italic;opacity:.9}
+#hive-hl .lb{position:absolute;left:0;right:0;opacity:.13}
 #hive-vimcur{position:fixed;display:none;pointer-events:none;z-index:3;border-radius:1px;background:rgba(200,200,200,.45)}
 #hive-vimcur.idle{background:transparent;box-shadow:inset 0 0 0 1px rgba(200,200,200,.55)}
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -128,9 +146,11 @@ const script = `<script>
     var box = byPlaceholder("hive-state");
     var ta = editor();
     if (ta) { guard(ta); }
-    if (!box || box.value === raw) { return; }
+    var hlChanged = readHl();
+    if (!box || box.value === raw) { if (hlChanged || (ta && hl.painted.join("\n") !== ta.value)) { paint(); } return; }
     raw = box.value;
     try { state = JSON.parse(raw); } catch (err) { return; }
+    syntaxColors();
     document.documentElement.style.setProperty("--hive-tab", String(state.tab || 4));
     vimAck = Math.max(vimAck, state.vimAck || 0);
     if (vimAck > vimSent) { vimSent = vimAck; }
@@ -186,6 +206,7 @@ const script = `<script>
       }
     }
     syncAgents();
+    paint();
     if (state.clipSerial !== copied) {
       if (copied >= 0 && state.clip && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(state.clip).catch(function () {});
@@ -222,6 +243,160 @@ const script = `<script>
       }
     }, 120);
   }
+
+  // ── o editor colorido ──
+  var hl = { html: [], src: [], version: -1, raw: null, shown: [], lines: -1, painted: [], waiting: false };
+  var hlLayer = document.createElement("div");
+  hlLayer.id = "hive-hl";
+  hlLayer.innerHTML = '<pre class="g"></pre><pre class="c"><div class="l"></div><div class="pad"></div></pre><div class="lens"></div>';
+  document.body.appendChild(hlLayer);
+  var gutterBox = hlLayer.querySelector(".g"), codeBox = hlLayer.querySelector(".c"), lineBox = hlLayer.querySelector(".l");
+  var lensBox = hlLayer.querySelector(".lens"), synStyle = document.createElement("style");
+  document.head.appendChild(synStyle);
+  var synRaw = "";
+
+  function escapeHtml(text) { return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  function readHl() {
+    var box = byPlaceholder("hive-hl");
+    if (!box || box.value === hl.raw) { return false; }
+    hl.raw = box.value;
+    var u;
+    try { u = JSON.parse(box.value); } catch (err) { return false; }
+    if (u.mode === "full") {
+      hl.html = u.lines.slice(); hl.src = u.source.slice(); hl.version = u.version; hl.waiting = false;
+    } else if (u.mode === "none") {
+      hl.html = []; hl.src = []; hl.version = -1;
+    } else if (u.mode === "patch" && hl.version === u.version - 1) {
+      hl.html.splice.apply(hl.html, [u.from, u.remove].concat(u.lines));
+      hl.src.splice.apply(hl.src, [u.from, u.remove].concat(u.source));
+      hl.version = u.version;
+    } else if (hl.version !== u.version && !hl.waiting) {
+      // Um pedaço do realce se perdeu: o programa manda tudo de novo.
+      hl.waiting = true;
+      post({ kind: "chrome", act: "hlFull" });
+    }
+    return true;
+  }
+
+  function syntaxColors() {
+    var c = state.syntax;
+    if (!c) { return; }
+    var css = ".tk{color:" + c.tk + "}.tt{color:" + c.tt + "}.ts{color:" + c.ts + "}.tn{color:" + c.tn + "}" +
+      ".tc{color:" + c.tc + ";font-style:italic}.tc .td{color:" + c.td + ";font-weight:700;font-style:normal}" +
+      ".tf{color:" + c.tf + "}.ta{color:" + c.ta + "}.tb{color:" + c.tb + "}.tm{color:" + c.tm + "}" +
+      "#hive-hl{color:" + c.text + "}#hive-hl .g{color:" + c.gutter + "}" +
+      "#hive-hl .lm.error{color:" + c.danger + "}#hive-hl .lm.warning{color:" + c.warn + "}" +
+      "#hive-hl .lb.error{background:" + c.danger + "}#hive-hl .lb.warning{background:" + c.warn + "}" +
+      "textarea[placeholder=\"⬡\"].hive-colored{caret-color:" + c.text + "}";
+    if (css !== synRaw) { synRaw = css; synStyle.textContent = css; }
+  }
+
+  // As linhas iguais ao que o programa coloriu vêm coloridas; as outras
+  // (acabaram de ser digitadas) vêm puras até o realce delas chegar. Só as
+  // linhas que mudaram desde o último desenho são trocadas.
+  function paint() {
+    var ta = editor();
+    if (!ta) { return; }
+    var lines = ta.value.split("\n"), n = lines.length, m = hl.src.length, p = 0, s = 0, i;
+    hl.painted = lines;
+    while (p < n && p < m && lines[p] === hl.src[p]) { p++; }
+    while (s < n - p && s < m - p && lines[n - 1 - s] === hl.src[m - 1 - s]) { s++; }
+    var target = new Array(n);
+    for (i = 0; i < p; i++) { target[i] = hl.html[i]; }
+    for (i = p; i < n - s; i++) { target[i] = escapeHtml(lines[i]); }
+    for (i = n - s; i < n; i++) { target[i] = hl.html[m - (n - i)]; }
+    var k = hl.shown.length, a = 0, b = 0;
+    while (a < n && a < k && target[a] === hl.shown[a]) { a++; }
+    while (b < n - a && b < k - a && target[n - 1 - b] === hl.shown[k - 1 - b]) { b++; }
+    if (a < k - b || a < n - b) {
+      var nodes = lineBox.children, after = nodes[k - b] || null;
+      for (i = k - b - 1; i >= a; i--) { lineBox.removeChild(nodes[i]); }
+      var holder = document.createElement("div"), html = "";
+      for (i = a; i < n - b; i++) { html += "<div>" + target[i] + "</div>"; }
+      holder.innerHTML = html;
+      var bundle = document.createDocumentFragment();
+      while (holder.firstChild) { bundle.appendChild(holder.firstChild); }
+      lineBox.insertBefore(bundle, after);
+    }
+    hl.shown = target;
+    if (n !== hl.lines) {
+      hl.lines = n;
+      var numbers = [];
+      for (i = 1; i <= n; i++) { numbers.push(i); }
+      gutterBox.textContent = numbers.join("\n") + "\n\n\n";
+    }
+  }
+
+  // Onde a marca do Error Lens está agora: a linha dela, se ainda tem o mesmo
+  // texto, ou a mais próxima com esse texto. Se a linha mudou, a marca some
+  // até o próximo check.
+  function lensRow(mark) {
+    var row = mark.line - 1;
+    if (hl.painted[row] === mark.source) { return row; }
+    if (mark.source === "") { return -1; }
+    for (var d = 1; d <= 300; d++) {
+      if (hl.painted[row - d] === mark.source) { return row - d; }
+      if (hl.painted[row + d] === mark.source) { return row + d; }
+    }
+    return -1;
+  }
+
+  var lensDrawn = "";
+  function drawLens(ta, st, height, width, padTop, padLeft) {
+    var lens = state.lens || [], rows = {}, order = [];
+    for (var i = 0; i < lens.length; i++) {
+      var row = lensRow(lens[i]);
+      if (row < 0) { continue; }
+      if (!rows[row]) { rows[row] = { severity: lens[i].severity, messages: [] }; order.push(row); }
+      if (lens[i].severity === "error") { rows[row].severity = "error"; }
+      rows[row].messages.push(lens[i].message);
+    }
+    var tab = parseInt(st.tabSize, 10) || 4, html = "";
+    var first = Math.floor(ta.scrollTop / height) - 1, last = first + Math.ceil(ta.clientHeight / height) + 2;
+    for (var k = 0; k < order.length; k++) {
+      var at = order[k];
+      if (at < first || at > last) { continue; }
+      var item = rows[at], line = hl.painted[at] || "", top = padTop + at * height - ta.scrollTop;
+      var left = padLeft + (visualColumn(line, line.length, tab) + 3) * width - ta.scrollLeft;
+      var text = item.messages.join("  ·  ");
+      if (text.length > 240) { text = text.slice(0, 240) + "…"; }
+      html += '<div class="lb ' + item.severity + '" style="top:' + top + 'px;height:' + height + 'px"></div>' +
+        '<span class="lm ' + item.severity + '" style="left:' + left + 'px;top:' + top + 'px;line-height:' + height + 'px">' + escapeHtml(text) + '</span>';
+    }
+    if (html !== lensDrawn) { lensDrawn = html; lensBox.innerHTML = html; }
+  }
+
+  // A camada acompanha o editor: o mesmo lugar, a mesma fonte, a mesma rolagem.
+  function placeHl() {
+    var ta = editor();
+    var on = !!ta && ta.offsetParent !== null && hl.version >= 0;
+    if (ta) {
+      ta.classList.toggle("hive-colored", on);
+      ta.classList.toggle("hive-numbers", on && state.numbers !== false);
+    }
+    if (!on) { hlLayer.style.display = "none"; return; }
+    var r = ta.getBoundingClientRect(), st = getComputedStyle(ta);
+    hlLayer.style.display = "block";
+    hlLayer.style.left = r.left + "px"; hlLayer.style.top = r.top + "px";
+    hlLayer.style.width = ta.clientWidth + parseFloat(st.borderLeftWidth) + "px";
+    hlLayer.style.height = ta.clientHeight + parseFloat(st.borderTopWidth) + "px";
+    hlLayer.style.fontFamily = st.fontFamily;
+    hlLayer.style.fontSize = st.fontSize;
+    hlLayer.style.lineHeight = st.lineHeight;
+    hlLayer.style.tabSize = st.tabSize;
+    var padTop = parseFloat(st.paddingTop) + parseFloat(st.borderTopWidth), padLeft = parseFloat(st.paddingLeft) + parseFloat(st.borderLeftWidth);
+    codeBox.style.padding = padTop + "px " + st.paddingRight + " " + st.paddingBottom + " " + padLeft + "px";
+    codeBox.scrollTop = ta.scrollTop; codeBox.scrollLeft = ta.scrollLeft;
+    var numbers = state.numbers !== false;
+    gutterBox.style.display = numbers ? "block" : "none";
+    gutterBox.style.width = (padLeft - 14) + "px";
+    gutterBox.style.paddingTop = padTop + "px";
+    gutterBox.scrollTop = ta.scrollTop;
+    drawLens(ta, st, lineHeight(ta), measure(ta), padTop, padLeft);
+  }
+
+  document.addEventListener("scroll", function (e) { if (e.target === editor()) { placeHl(); } }, true);
 
   // ── o modo Vim ──
   // As teclas vão para o motor do Vim (lib/vim.hive), como na página própria;
@@ -453,6 +628,7 @@ const script = `<script>
         fitAgent(agents[state.agentShown]);
       }
     }
+    placeHl();
     drawCursor();
     requestAnimationFrame(place);
   }
@@ -515,7 +691,7 @@ const script = `<script>
 
   document.addEventListener("input", function (e) {
     var ta = editor();
-    if (ta && e.target === ta && !composing) { guard(ta); sendEdit(ta); }
+    if (ta && e.target === ta && !composing) { guard(ta); sendEdit(ta); paint(); }
   }, true);
 
   ["keyup", "mouseup", "select"].forEach(function (name) {

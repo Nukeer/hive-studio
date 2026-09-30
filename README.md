@@ -285,11 +285,11 @@ sugestões, preview do Markdown, JSON com o erro na linha, Configurações
 (idioma, tema, editor, agentes, compilador), painel com Problemas, Saída,
 Terminal, Análise e Agente, barra de status, diálogos e os 7 temas.
 
-O editor é um `textarea`, em fonte monoespaçada. Ao lado dele (**Dividir**, o
-padrão do código) fica a **vista realçada**, desenhada com widgets: as cores do
-tema, números de linha, a linha do cursor, as ocorrências da busca, o **Error
-Lens** na própria linha e nomes clicáveis que **vão para a definição**.
-**Realce** mostra só ela, e **Editor** só o texto.
+O editor é o mesmo da janela própria: **o código colorido é a parte
+digitável**, com números de linha e o **Error Lens** na própria linha (ver a
+ponte, abaixo). **Dividir** põe ao lado a **vista realçada** desenhada com
+widgets — a linha do cursor, as ocorrências da busca e nomes clicáveis que
+**vão para a definição** —, e **Realce** mostra só ela.
 
 ### A ponte (`lib/bridge.go`)
 
@@ -323,6 +323,13 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   linha do Vim (modo, mensagens, teclas pendentes e a linha de comando `:`,
   `/`, `?`) é desenhada com widgets embaixo do editor;
 - gravar um atalho novo em Configurações → Atalhos de teclado.
+- **o editor colorido**: o `textarea` fica com o texto transparente, e uma
+  camada por cima dele (que não recebe o mouse) mostra as mesmas linhas
+  realçadas, os números de linha e o Error Lens, na fonte e na rolagem dele. O
+  realce chega por um terceiro campo, `hive-hl`, como na janela própria: o
+  documento inteiro ao abrir, só as linhas que a edição mudou ao digitar, e
+  nada quando nada mudou; o que acabou de ser digitado aparece puro até o
+  realce dele chegar.
 
 O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
 `hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
@@ -333,8 +340,6 @@ traz de volta um evento no formato da página própria (`model.Event`), que
 renomeie faz o build falhar em `lib/bridge.go`, e não em silêncio; a versão do
 CI está fixada em `.github/hivec.txt`.
 
-O que ainda é diferente da janela própria: o realce aparece na vista ao lado
-(ou no modo Realce), não dentro do `textarea` enquanto se digita.
 
 ## Releases
 
