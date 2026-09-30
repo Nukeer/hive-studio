@@ -1916,7 +1916,9 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 		bodyBox = [ui.grow(1)]
 	}
 	return ui.column(box, [
-		rule(t),
+		// O puxador: a ponte (lib/bridge.go) o acha pela altura 5 e deixa
+		// arrastar a altura do painel; o duplo clique maximiza.
+		ui.row([ui.height(5), fill(t.border)], []),
 		ui.row([ui.gap(16), ui.pad(8), ui.align(ui.Align.Center())], head),
 		ui.column(bodyBox, [body])
 	])

@@ -93,6 +93,8 @@ proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address):
 	} else if what == "top" {
 		win.extra.top = numberOr(arg, 0)
 	}
+	// "hello": a ponte avisa que a página abriu; os vigias começam no turno
+	// dela (ver `update`), e não há mais nada a fazer.
 }
 
 // Um evento dos widgets, traduzido como o Hive Studio traduz os da página.

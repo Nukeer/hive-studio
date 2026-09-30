@@ -311,7 +311,12 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   `studioui.hive` abre com um token só dele. O terminal fica numa camada fora
   do `#root` (o `hive.ui` apagaria o que não desenhou), por cima da caixa que o
   painel AGENTE reserva para ele; com o foco nele as teclas são do programa,
-  menos mostrar/ocultar o agente e o painel.
+  menos mostrar/ocultar o agente e o painel;
+- **o mouse**: a borda de cima do painel arrasta a altura dele (duplo clique
+  maximiza), o botão direito numa linha do explorador abre o menu dela e o do
+  meio numa aba a fecha;
+- os vigias (git, disco) começam assim que a janela abre: a ponte manda um
+  "olá", a primeira mensagem, que é quando a janela passa a ter endereço.
 
 O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
 `hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
@@ -324,10 +329,7 @@ CI está fixada em `.github/hivec.txt`.
 
 O que ainda falta (as próximas partes):
 
-- o modo Vim e o realce enquanto se digita (o editor da página própria);
-- arrastar a altura do painel e o botão direito (o **⋯** faz o papel dele);
-- os vigias (git, disco) começam no primeiro clique: a janela só tem endereço
-  quando recebe a primeira mensagem.
+- o modo Vim e o realce enquanto se digita (o editor da página própria).
 
 ## Releases
 

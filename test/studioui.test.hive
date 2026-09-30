@@ -174,3 +174,16 @@ test "o painel AGENTE abre o agente num terminal de verdade e a ponte o mostra" 
 	assert uiview.bridgeState(win.core, win.extra).agentShown == 0
 	assert support.shows(win, "programa-que-nao-existe-hive: não encontrado no PATH")
 }
+
+test "o olá da ponte põe os vigias para rodar, e o painel tem o puxador da altura" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	win.started = false
+	_hello := studioUi.update(win, uiview.chrome("hello", ""), sink)
+	assert win.started
+	assert support.shows(win, "height:5px")
+	_drag := studioUi.update(win, uiview.field("panelHeight", "333"), sink)
+	assert win.core.settings.panelHeight == 333
+	assert support.shows(win, "height:333px")
+}

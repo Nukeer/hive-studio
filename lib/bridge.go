@@ -46,6 +46,7 @@ font-size:13px;line-height:1.55;white-space:pre;overflow:auto;resize:none;border
 textarea[placeholder="⬡"]:focus{outline:none}
 [style*="padding:9px"] .h-text,[style*="padding:9px"] .h-link{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;font-size:13px}
 [style*="padding:9px"] .h-link:hover{text-decoration:underline}
+[style*="height:5px"]{cursor:ns-resize}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:rgba(128,128,128,.35);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
@@ -108,7 +109,17 @@ const script = `<script>
     }
   }
 
+  // A janela só tem endereço depois da primeira mensagem, e é nela que os
+  // vigias (git, disco) começam: um "olá" assim que o socket abre.
+  var greeted = false;
+  function greet() {
+    if (greeted || typeof sock === "undefined" || sock.readyState !== 1 || !byPlaceholder("hive-bridge")) { return; }
+    greeted = true;
+    post({ kind: "chrome", act: "hello" });
+  }
+
   function readState() {
+    greet();
     var box = byPlaceholder("hive-state");
     var ta = editor();
     if (ta) { guard(ta); }
@@ -359,6 +370,67 @@ const script = `<script>
       if (ta && e.target === ta) { caretMoved(ta); }
     }, true);
   });
+
+  // ── o mouse: a borda do painel, o botão direito e o do meio ──
+
+  // O puxador em cima do painel (a caixa de altura 5) muda a altura dele;
+  // o duplo clique maximiza.
+  var dragging = null;
+  document.addEventListener("mousedown", function (e) {
+    var grip = e.target.closest && e.target.closest('#root [style*="height:5px"]');
+    if (!grip || e.button !== 0) { return; }
+    e.preventDefault();
+    var panel = grip.parentElement;
+    dragging = { panel: panel, bottom: panel.getBoundingClientRect().bottom };
+    document.body.style.cursor = "ns-resize";
+  }, true);
+  document.addEventListener("mousemove", function (e) {
+    if (!dragging) { return; }
+    var height = Math.max(90, Math.min(window.innerHeight - 160, dragging.bottom - e.clientY));
+    dragging.panel.style.height = height + "px";
+    dragging.height = height;
+  }, true);
+  document.addEventListener("mouseup", function () {
+    if (!dragging) { return; }
+    var height = dragging.height;
+    dragging = null;
+    document.body.style.cursor = "";
+    if (height) { post({ kind: "field", act: "panelHeight", text: String(Math.round(height)) }); }
+  }, true);
+  document.addEventListener("dblclick", function (e) {
+    if (e.target.closest && e.target.closest('#root [style*="height:5px"]')) { post({ kind: "act", act: "panelMax" }); }
+  }, true);
+
+  // O link de uma linha pelo texto dele (o ⋯ do explorador, o × de uma aba).
+  function linkIn(el, texts) {
+    for (var node = el; node && node.id !== "root"; node = node.parentElement) {
+      var links = node.querySelectorAll ? node.querySelectorAll("a") : [];
+      for (var i = 0; i < links.length; i++) {
+        if (texts.indexOf(links[i].textContent) >= 0) { return links[i]; }
+      }
+      if (links.length > 1) { return null; }
+    }
+    return null;
+  }
+
+  // Botão direito numa linha do explorador: o menu do ⋯ dela.
+  document.addEventListener("contextmenu", function (e) {
+    var t = e.target;
+    if (t.closest && (t.closest("input,textarea") || t.closest("#hive-agents"))) { return; }
+    var more = linkIn(t, ["⋯"]);
+    if (!more) { return; }
+    e.preventDefault();
+    more.click();
+  }, true);
+
+  // Botão do meio numa aba: fecha.
+  document.addEventListener("auxclick", function (e) {
+    if (e.button !== 1) { return; }
+    var closer = linkIn(e.target, ["×", "●"]);
+    if (!closer) { return; }
+    e.preventDefault();
+    closer.click();
+  }, true);
 
   new MutationObserver(readState).observe(document.getElementById("root"),
     { subtree: true, childList: true, attributes: true, attributeFilter: ["value"] });
