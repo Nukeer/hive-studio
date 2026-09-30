@@ -8,6 +8,9 @@
 // eventos (`studio.toMsg`). Muda quem desenha — lib/uiview.hive — e quem manda
 // os eventos: os widgets do hive.ui mandam os mesmos que a página mandaria.
 //
+// O que o hive.ui não faz — teclado, cursor, área de transferência, a fonte
+// do código — vem de lib/bridge.go, um script posto na página da janela.
+//
 // A mensagem da janela é o `model.Cmd` do serviço do Hive Studio, então o
 // trabalho que roda em outra thread (git, hivec, o terminal, o vigia do disco,
 // o Error Lens) manda o resultado de volta à janela exatamente como mandava
@@ -23,6 +26,7 @@ import ./lib/git
 import ./lib/process
 import ./lib/server
 import ./lib/complete
+import ./lib/bridge.go
 
 // O estado da janela: o do Hive Studio e o que só esta janela lembra.
 // `started` diz se os vigias (git, disco) já foram postos para rodar — isso
@@ -128,9 +132,18 @@ proc handle(win: mut Win, event: model.Event, self: hive.syslink.Address): void 
 	}
 	// Qualquer outro clique fecha o menu aberto.
 	win.extra.menu = ""
+	// O cursor andou no editor (a ponte avisa).
+	if event.kind == "caret" {
+		studio.step(win.core, model.Msg.CaretAt(event.caret), self)
+		return
+	}
 	mut sent := event
 	if sent.kind == "edit" && sent.caret < 0 {
 		sent.caret = caretAfter(studio.activeText(win.core), sent.text)
+	}
+	// Uma ação de menu vale onde o cursor está (ir para a definição, sugestões).
+	if sent.kind == "act" && sent.act == "action" {
+		sent.caret = win.core.caret
 	}
 	translated := studio.toMsg(win.core, sent)
 	if translated is Result.Ok(message) {
@@ -208,6 +221,9 @@ proc main(): void {
 	mut folder := "."
 	if args is [first, ...rest] {
 		folder = first
+	}
+	if !bridge.installed() {
+		echo "Hive Studio: a ponte do hive.ui (lib/bridge.go) não entrou na página; sem teclado nem cursor."
 	}
 	ui.windowAddressed("Hive Studio", view, update, initial(folder))
 }

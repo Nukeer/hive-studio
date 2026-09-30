@@ -134,3 +134,24 @@ test "as setas da vista realçada a movem, e o cursor volta a mandar nela" {
 	_caret := studioUi.update(win, uiview.edited(support.docText(win) + "x"), sink)
 	assert win.extra.top == 0
 }
+
+test "a ponte leva ao script os atalhos, o cursor, a busca e o que copiar" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_find := studioUi.update(win, uiview.action("find"), sink)
+	_typed := studioUi.update(win, uiview.field("find", "dobro"), sink)
+	sent := uiview.bridgeState(win.core)
+	assert indexOf(sent.keys, "Ctrl+S") is Result.Ok(_)
+	assert sent.serial == win.core.textSerial
+	assert sent.findFrom == 5 && sent.findTo == 10
+	assert sent.focus == "Buscar"
+	assert support.shows(win, "hive-state")
+	assert support.shows(win, "hive-bridge")
+	// O cursor chega no formato da página própria.
+	_caret := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"caret\",\"caret\":7}"), sink)
+	assert win.core.caret == 7
+	_ctx := studioUi.update(win, uiview.actText("ctx", "copyRelative", folder + "/lib/util.hive"), sink)
+	assert uiview.bridgeState(win.core).clip == "lib/util.hive"
+}

@@ -753,7 +753,7 @@ func gitPanel(state: model.State, t: theme.Theme): hive.ui.View {
 		ui.row([ui.pad(6)], [label(t.text, branch)]),
 		ui.column([ui.gap(6), ui.pad(6)], [
 			ui.textarea([ui.onInput(field("gitMessage", _)), fill(t.input), tone(t.text), ui.height(72),
-				ui.placeholder(tx(state, "Mensagem do commit"))], info.message),
+				ui.placeholder(tx(state, "Mensagem do commit (Ctrl+Enter)"))], info.message),
 			primary(t, commitLabel, act("gitCommit", ""), canCommit)
 		])
 	]
@@ -1202,7 +1202,13 @@ func codeView(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): h
 		down := last + 1
 		append(rows, ui.row([ui.pad(4)], [clickable(t.muted, "▼ " + tx(state, "linhas") + " {down}–{minInt(total, last + viewLines() - 20)}", chrome("top", "{maxInt(1, last - 20)}"), "")]))
 	}
-	return ui.column([ui.grow(1), ui.pad(8), fill(t.editor), ui.scroll(ui.Axis.Both())], rows)
+	return ui.column([ui.grow(1), ui.pad(codePad()), fill(t.editor), ui.scroll(ui.Axis.Both())], rows)
+}
+
+// O recuo das caixas de código: a folha de estilo da ponte (lib/bridge.go)
+// põe em fonte monoespaçada o texto de toda caixa com esse recuo.
+func codePad(): Int {
+	return 9
 }
 
 // ── Markdown e JSON ──────────────────────────────────────────────────────
@@ -1236,7 +1242,7 @@ func mdCode(t: theme.Theme, lang: Str, lines: Str[]): hive.ui.View {
 			append(rows, codeLine(t, highlight.escape(line), -1, 4))
 		}
 	}
-	return ui.column([ui.pad(10), fill(t.input)], rows)
+	return ui.column([ui.pad(codePad()), fill(t.input)], rows)
 }
 
 func mdTable(t: theme.Theme, rows: Str[]): hive.ui.View {
@@ -1432,8 +1438,14 @@ func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.row([ui.gap(8), ui.pad(4), ui.align(ui.Align.Center()), fill(t.panel), ui.scroll(ui.Axis.Horizontal())], items)
 }
 
+// O editor. Não tem evento do hive.ui: quem manda cada edição, com o cursor,
+// é a ponte (lib/bridge.go), que o acha pelo `⬡` do placeholder.
 func textEditor(t: theme.Theme, doc: model.Doc): hive.ui.View {
-	return ui.textarea([ui.grow(1), ui.onInput(edited(_)), fill(t.editor), tone(t.text)], doc.text)
+	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text)], doc.text)
+}
+
+func editorMark(): Str {
+	return "⬡"
 }
 
 func docBody(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): hive.ui.View {
@@ -1680,7 +1692,7 @@ func commitPage(state: model.State, t: theme.Theme, commit: git.Commit): hive.ui
 			ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center()), fill(t.tabStrip)], [
 				fileIcon(workspace.baseName(file.path)), label(color, shown), ui.spacer(), counts(t, file.added, file.removed)
 			]),
-			ui.column([ui.scroll(ui.Axis.Horizontal())], body)
+			ui.column([ui.pad(codePad())], body)
 		]))
 	}
 	mut hive.ui.View[dyn] page = [ui.text([tone(t.text), ui.size(ui.TextSize.Title())], i18n.tr(words, commit.subject))]
@@ -1731,7 +1743,7 @@ func paneTab(t: theme.Theme, text: Str, message: model.Cmd, on: Bool): hive.ui.V
 }
 
 func preText(t: theme.Theme, text: Str): hive.ui.View {
-	return ui.column([ui.grow(1), ui.pad(8), ui.scroll(ui.Axis.Both())], [label(t.text, text)])
+	return ui.column([ui.grow(1), ui.pad(codePad()), ui.scroll(ui.Axis.Both())], [label(t.text, text)])
 }
 
 func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1744,7 +1756,7 @@ func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
 		label(t.accent, "›"),
 		ui.column([ui.grow(1)], [
 			inputField(t, [ui.onInput(field("termInput", _)), ui.onSubmit(actText("termSubmit", "", _)),
-				ui.placeholder(tx(state, "comando (↑ ↓ histórico)"))], term.input)
+				ui.placeholder(terminalHint(state))], term.input)
 		]),
 		headerAction(t, "↑", tx(state, "Anterior"), act("termHistory", "-1")),
 		headerAction(t, "↓", tx(state, "Próximo"), act("termHistory", "1"))
@@ -1999,7 +2011,7 @@ func overlays(state: model.State, t: theme.Theme): hive.ui.View {
 				button(t, tx(state, "Abrir"), actText("openAt", state.peekFile, "{state.peekLine}:0"), true),
 				button(t, tx(state, "Fechar"), act("closePeek", ""), true)
 			]),
-			ui.column([ui.pad(8), fill(t.editor), ui.scroll(ui.Axis.Horizontal())], lines)
+			ui.column([ui.pad(codePad()), fill(t.editor)], lines)
 		]))
 	}
 	return ui.none()
@@ -2031,6 +2043,93 @@ func palette(state: model.State, t: theme.Theme): hive.ui.View {
 	]))
 }
 
+// ── a ponte com lib/bridge.go ────────────────────────────────────────────
+
+// O que o script da ponte precisa saber do estado. `focus` e os `…Ph` são
+// placeholders: é por eles que o script acha cada campo na página.
+type BridgeState {
+	keys:        Str[dyn]
+	serial:      Int
+	caret:       Int
+	popup:       Bool
+	recording:   Bool
+	focus:       Str
+	focusSerial: Int
+	clip:        Str
+	clipSerial:  Int
+	findFrom:    Int
+	findTo:      Int
+	findSerial:  Int
+	tab:         Int
+	findPh:      Str
+	palettePh:   Str
+	termPh:      Str
+	commitPh:    Str
+}
+
+func terminalHint(state: model.State): Str {
+	return tx(state, "comando (↑ ↓ histórico, Ctrl+C encerra o processo)")
+}
+
+// O campo que o programa pediu para focar (`state.focus`), pelo placeholder.
+func focusPlaceholder(state: model.State): Str {
+	target := state.focus
+	if target == "find" {
+		return tx(state, "Buscar")
+	} else if target == "prompt" {
+		return render.promptPlaceholder(state, state.prompt)
+	} else if target == "termInput" {
+		return terminalHint(state)
+	} else if target == "palette" {
+		return tx(state, "Buscar arquivo pelo nome")
+	} else if target == "searchText" {
+		return tx(state, "Buscar no projeto (Enter)")
+	} else if target == "editor" {
+		return editorMark()
+	}
+	return ""
+}
+
+func bridgeState(state: model.State): BridgeState {
+	mut from := -1
+	mut to := -1
+	if state.find.open {
+		matches := render.findMatches(render.searched(state), state.find)
+		if matches bounds state.find.index {
+			from = matches[state.find.index]
+			to = from + len(state.find.text)
+		}
+	}
+	return BridgeState(
+		keys: keys.combos(state.settings.keymap),
+		serial: state.textSerial,
+		caret: state.caret,
+		popup: len(state.suggestions) > 0,
+		recording: state.recording != "",
+		focus: focusPlaceholder(state),
+		focusSerial: state.focusSerial,
+		clip: state.vim.clip,
+		clipSerial: state.vim.clipSerial,
+		findFrom: from,
+		findTo: to,
+		findSerial: state.find.serial,
+		tab: state.settings.tabSize,
+		findPh: tx(state, "Buscar"),
+		palettePh: tx(state, "Buscar arquivo pelo nome"),
+		termPh: terminalHint(state),
+		commitPh: tx(state, "Mensagem do commit (Ctrl+Enter)")
+	)
+}
+
+// Os dois campos escondidos da ponte: o estado que vai para o script, e o
+// canal por onde ele manda de volta um evento da página (`model.Event`).
+func bridge(state: model.State): hive.ui.View {
+	return ui.row([ui.height(0)], [
+		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state), hive.json.codec())),
+		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], "")
+	])
+}
+
 // ── tudo junto ───────────────────────────────────────────────────────────
 
 func window(state: model.State, extra: Chrome): hive.ui.View {
@@ -2045,6 +2144,7 @@ func window(state: model.State, extra: Chrome): hive.ui.View {
 	}
 	append(body, ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], main))
 	return ui.column([ui.grow(1), fill(t.editor), tone(t.text), ui.scroll(ui.Axis.Vertical())], [
+		bridge(state),
 		titleBar(state, t, extra.menu),
 		ui.row([ui.grow(1), ui.scroll(ui.Axis.Both())], body),
 		statusBar(state, t),

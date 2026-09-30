@@ -206,6 +206,7 @@ se existir, vence o compilador configurado.
 | `studio.hive` | entrada: `main`, o serviço, a dobra `update`, evento → `Msg` |
 | `studioui.hive` | a mesma IDE numa janela só com widgets do `hive.ui` (ver abaixo) |
 | `lib/uiview.hive` | estado → widgets do `hive.ui`, para `studioui.hive` |
+| `lib/bridge.go` | a ponte da janela do `hive.ui`: teclado, cursor, área de transferência e fonte (Go + JS) |
 | `test/<arquivo>.test.hive` | os testes de `<arquivo>.hive` (`studio.hive` ou `lib/<arquivo>.hive`) |
 | `test/support/<arquivo>.hive` | funções de apoio dos testes de `<arquivo>` |
 | `test/suite.hive` | importa todos os `.test.hive`: é a entrada do `hivec test` |
@@ -284,33 +285,44 @@ sugestões, preview do Markdown, JSON com o erro na linha, Configurações
 (idioma, tema, editor, agentes, compilador), painel com Problemas, Saída,
 Terminal, Análise e Agente, barra de status, diálogos e os 7 temas.
 
-O editor é um `textarea`. Ao lado dele (**Dividir**, o padrão do código) fica a
-**vista realçada**, desenhada com widgets: as cores do tema, números de linha,
-a linha do cursor, as ocorrências da busca, o **Error Lens** na própria linha e
-nomes clicáveis que **vão para a definição**. **Realce** mostra só ela, e
-**Editor** só o texto.
+O editor é um `textarea`, em fonte monoespaçada. Ao lado dele (**Dividir**, o
+padrão do código) fica a **vista realçada**, desenhada com widgets: as cores do
+tema, números de linha, a linha do cursor, as ocorrências da busca, o **Error
+Lens** na própria linha e nomes clicáveis que **vão para a definição**.
+**Realce** mostra só ela, e **Editor** só o texto.
 
-O que o `hive.ui` (v0.2.9) não deixa fazer:
+### A ponte (`lib/bridge.go`)
 
-- **HTML ou JavaScript próprios**: não há widget para eles, nem folha de estilo.
-  Por isso o editor da página própria (realce enquanto se digita, cursor, Vim)
-  não entra; a janela continua sendo um Chromium em modo aplicativo, o do
-  próprio `hive.ui`.
-- **Teclado**: só uma `scene` ouve teclas, e não enquanto se digita num campo.
-  Nenhum atalho vale (`Ctrl+S`, `F5`…), e não há modo Vim; menus e botões
-  fazem tudo.
-- **Cursor**: o programa não lê nem move o cursor do `textarea`. A posição é
-  deduzida da diferença entre o texto antigo e o novo (para as sugestões), e
-  "ir para a linha" leva a vista realçada até ela.
-- Cada tecla manda o texto inteiro, o que pesa em arquivos muito grandes; a
-  vista realçada desenha 160 linhas por vez (▲ ▼ andam).
-- Sem fonte monoespaçada, botão direito, arrastar (a altura do painel é a das
-  Configurações; ⤢ maximiza) nem área de transferência (o ⋯ mostra os caminhos
-  num campo, para copiar).
-- Sem emulador de terminal: o TERMINAL é o shell linha a linha, e cada agente
-  (Claude Code, Codex, OpenCode) abre num **terminal do sistema**, na pasta do
-  projeto.
-- Os vigias (git, disco) começam no primeiro clique: a janela só tem endereço
+O `hive.ui` não aceita script nem folha de estilo próprios. `lib/bridge.go`
+põe os dois na página pela variável que o runtime dele já tem para isso
+(`uiExtraScript`, a mesma da `scene`), alcançada com `go:linkname`. Com ela:
+
+- **os atalhos de teclado** das Configurações valem, e o do navegador não
+  (`Ctrl+S`, `Ctrl+P`, `F5`…);
+- **o cursor**: cada edição vai como diferença, com a posição, e o programa
+  põe o cursor onde precisa (ir para a definição, abrir na linha, a busca);
+- `Tab` insere tab, `Enter` mantém a indentação (e abre um nível depois de
+  `{`, `[` ou `(`), setas navegam nas sugestões, na paleta e no histórico do
+  terminal, `Ctrl+Enter` faz o commit, `Esc` fecha o que estiver aberto;
+- **a área de transferência**: Copiar caminho e o `y` do Vim copiam;
+- a fonte monoespaçada do código e barras de rolagem finas.
+
+O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
+`hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
+traz de volta um evento no formato da página própria (`model.Event`), que
+`studio.toMsg` traduz como sempre.
+
+**`uiExtraScript` é um nome interno do `hivec` v0.2.9.** Um `hivec` que o
+renomeie faz o build falhar em `lib/bridge.go`, e não em silêncio; a versão do
+CI está fixada em `.github/hivec.txt`.
+
+O que ainda falta (as próximas partes):
+
+- o modo Vim e o realce enquanto se digita (o editor da página própria);
+- um terminal de verdade para os agentes: hoje o TERMINAL é o shell linha a
+  linha, e cada agente abre num **terminal do sistema**, na pasta do projeto;
+- arrastar a altura do painel e o botão direito (o **⋯** faz o papel dele);
+- os vigias (git, disco) começam no primeiro clique: a janela só tem endereço
   quando recebe a primeira mensagem.
 
 ## Releases
