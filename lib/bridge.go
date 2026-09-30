@@ -13,6 +13,12 @@
 //     cursor, o serial do texto, a busca, o foco, o que copiar…);
 //   - `hive-bridge` traz de volta um evento no formato da página própria
 //     (`model.Event`), que `studio.toMsg` traduz como sempre.
+//
+// Os terminais dos agentes são o xterm.js da página própria, ligado ao
+// pseudoterminal pelo mesmo `/pty` (lib/server.hive), num servidor que
+// studioui.hive abre com um token só dele. O terminal fica numa camada fora do
+// `#root` — o hive.ui apagaria o que não desenhou —, por cima da caixa que
+// lib/uiview.hive reserva para ele no painel AGENTE.
 package bridge
 
 import (
@@ -49,7 +55,8 @@ const script = `<script>
 (function () {
   var state = { keys: [], serial: -1, caret: 0, popup: false, recording: false, focus: "", focusSerial: -1,
     clip: "", clipSerial: -1, findFrom: -1, findTo: -1, findSerial: -1, tab: 4,
-    findPh: "", palettePh: "", termPh: "", commitPh: "" };
+    findPh: "", palettePh: "", termPh: "", commitPh: "",
+    ptyPort: 0, ptyToken: "", agentSessions: [], agentShown: 0, agentKeys: [], termBg: "#16181d", termFg: "#d7dae0" };
   var raw = null, applied = -1, focused = -1, copied = -1, found = -1;
   var sent = null, allow = false, lastCaret = -1, caretTimer = 0;
   var nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
@@ -127,9 +134,14 @@ const script = `<script>
     if (state.focusSerial !== focused) {
       var first = focused < 0;
       focused = state.focusSerial;
-      var target = byPlaceholder(state.focus);
-      if (target && !first) { target.focus(); }
+      if (state.focus === "@agent") {
+        focusAgent = true;
+      } else {
+        var target = byPlaceholder(state.focus);
+        if (target && !first) { target.focus(); }
+      }
     }
+    syncAgents();
     if (state.clipSerial !== copied) {
       if (copied >= 0 && state.clip && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(state.clip).catch(function () {});
@@ -185,11 +197,121 @@ const script = `<script>
     document.execCommand("insertText", false, text);
   }
 
+  // ── os terminais dos agentes ──
+  var agents = {}, loading = false, focusAgent = false;
+  var layer = document.createElement("div");
+  layer.id = "hive-agents";
+  layer.style.cssText = "position:fixed;display:none;z-index:5;overflow:hidden";
+  document.body.appendChild(layer);
+  var mono = 'ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace';
+
+  function vendor(name) { return "http://127.0.0.1:" + state.ptyPort + "/vendor/" + name + "?token=" + encodeURIComponent(state.ptyToken); }
+
+  function loadVendor() {
+    if (typeof Terminal !== "undefined" || loading || !state.ptyPort) { return; }
+    loading = true;
+    var css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = vendor("xterm.css");
+    document.head.appendChild(css);
+    var main = document.createElement("script");
+    main.src = vendor("xterm.js");
+    main.onload = function () {
+      var fit = document.createElement("script");
+      fit.src = vendor("addon-fit.js");
+      fit.onload = function () { syncAgents(); };
+      document.head.appendChild(fit);
+    };
+    document.head.appendChild(main);
+  }
+
+  function bytesOf(encoded) {
+    var raw = atob(encoded), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) { out[i] = raw.charCodeAt(i); }
+    return out;
+  }
+
+  function fitAgent(item) {
+    if (!item || item.el.style.display === "none") { return; }
+    try { item.fit.fit(); } catch (err) {}
+    if (item.socket.readyState === 1) { item.socket.send("r" + item.term.cols + " " + item.term.rows); }
+  }
+
+  function openAgent(session) {
+    var el = document.createElement("div");
+    el.style.cssText = "position:absolute;inset:4px 8px 4px 12px;display:none";
+    layer.appendChild(el);
+    var term = new Terminal({ fontFamily: mono, fontSize: 13, cursorBlink: true, scrollback: 5000,
+      theme: { background: state.termBg, foreground: state.termFg, cursor: state.termFg, cursorAccent: state.termBg,
+        selectionBackground: "rgba(128,128,128,.4)" } });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    var socket = new WebSocket("ws://127.0.0.1:" + (state.ptyPort + 1) + "/pty?session=" + session + "&token=" + encodeURIComponent(state.ptyToken));
+    var item = { term: term, fit: fit, socket: socket, el: el };
+    socket.onopen = function () { fitAgent(item); };
+    socket.onmessage = function (e) { if (e.data.charAt(0) === "o") { term.write(bytesOf(e.data.slice(1))); } };
+    term.onData(function (data) { if (socket.readyState === 1) { socket.send("i" + data); } });
+    term.onBinary(function (data) { if (socket.readyState === 1) { socket.send("b" + btoa(data)); } });
+    term.onResize(function (size) { if (socket.readyState === 1) { socket.send("r" + size.cols + " " + size.rows); } });
+    return item;
+  }
+
+  function syncAgents() {
+    var live = state.agentSessions || [], shown = state.agentShown || 0;
+    if (live.length > 0) { loadVendor(); }
+    if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") { return; }
+    for (var i = 0; i < live.length; i++) {
+      if (!agents[live[i]]) { agents[live[i]] = openAgent(live[i]); }
+    }
+    for (var key in agents) {
+      var item = agents[key], number = Number(key);
+      if (live.indexOf(number) < 0) {
+        try { item.socket.close(); } catch (err) {}
+        item.term.dispose(); item.el.remove(); delete agents[key];
+        continue;
+      }
+      var visible = number === shown;
+      if ((item.el.style.display !== "none") !== visible) {
+        item.el.style.display = visible ? "" : "none";
+        if (visible) { fitAgent(item); }
+      }
+    }
+    if (focusAgent && agents[shown]) { focusAgent = false; agents[shown].term.focus(); }
+  }
+
+  // A camada acompanha a caixa que o painel AGENTE reserva (a de recuo 11).
+  var placed = "";
+  function place() {
+    var slot = document.querySelector('#root [style*="padding:11px"]');
+    var shown = state.agentShown && agents[state.agentShown];
+    if (!slot || !shown) {
+      if (layer.style.display !== "none") { layer.style.display = "none"; placed = ""; }
+    } else {
+      var r = slot.getBoundingClientRect();
+      var at = [r.left, r.top, r.width, r.height].join(",");
+      if (at !== placed) {
+        placed = at;
+        layer.style.display = "block";
+        layer.style.left = r.left + "px"; layer.style.top = r.top + "px";
+        layer.style.width = r.width + "px"; layer.style.height = r.height + "px";
+        fitAgent(agents[state.agentShown]);
+      }
+    }
+    requestAnimationFrame(place);
+  }
+  requestAnimationFrame(place);
+
   document.addEventListener("keydown", function (e) {
     if (["Control", "Shift", "Alt", "Meta"].indexOf(e.key) >= 0) { return; }
     readState();
     var combo = comboOf(e), ta = editor(), t = e.target, inEditor = ta && t === ta;
     function take(ev) { e.preventDefault(); e.stopPropagation(); post(ev); }
+    // No terminal de um agente as teclas são do programa (Esc, Ctrl+C, Ctrl+R…),
+    // menos os poucos atalhos que saem dele: mostrar/ocultar o agente e o painel.
+    if (t.closest && t.closest("#hive-agents")) {
+      if ((state.agentKeys || []).indexOf(combo) >= 0) { take({ kind: "key", text: combo }); }
+      return;
+    }
     if (state.recording) { take({ kind: "key", text: combo }); return; }
     if (state.popup && inEditor && !e.ctrlKey && ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].indexOf(e.key) >= 0) {
       take({ kind: "popup", text: e.key }); return;

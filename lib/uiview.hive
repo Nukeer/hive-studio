@@ -31,6 +31,8 @@ import ./markdown
 // `top` é a primeira linha da vista realçada quando as setas ▲ ▼ a movem (0:
 // seguir o cursor); `caret`, `path` e `findSerial` são o que a vista seguia,
 // para voltar a seguir o cursor quando ele (ou o documento, ou a busca) muda.
+// `ptyPort` e `ptyToken` são o servidor dos terminais dos agentes (o xterm.js
+// e o `/pty`), que studioui.hive abre.
 type Chrome {
 	menu:       Str
 	commit:     git.Commit
@@ -39,6 +41,8 @@ type Chrome {
 	caret:      Int
 	path:       Str
 	findSerial: Int
+	ptyPort:    Int
+	ptyToken:   Str
 }
 
 func emptyCommit(): git.Commit {
@@ -47,7 +51,7 @@ func emptyCommit(): git.Commit {
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", emptyCommit(), "", 0, 0, "", 0)
+	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "")
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -1764,17 +1768,44 @@ func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.column([ui.grow(1)], items)
 }
 
-// O painel AGENTE: sem um emulador de terminal no hive.ui, cada agente abre
-// numa janela de terminal do sistema, na pasta do projeto.
-func agentBody(state: model.State, t: theme.Theme): hive.ui.View {
-	mut hive.ui.View[dyn] buttons = []
+// O painel AGENTE: os agentes lado a lado, o aviso de quando um não abriu ou
+// terminou, e a caixa (de recuo 11) sobre a qual a ponte põe o terminal.
+func agentPad(): Int {
+	return 11
+}
+
+func agentPicker(state: model.State, t: theme.Theme): hive.ui.View {
+	mut hive.ui.View[dyn] items = []
 	for each preset in agents.presets() {
-		append(buttons, primary(t, "▶ " + preset.label, chrome("agent", preset.id), true))
+		mut color := t.muted
+		if preset.id == state.agents.current {
+			color = t.accent
+		}
+		append(items, clickable(color, preset.label, act("agent", preset.id), ""))
 	}
-	return ui.column([ui.gap(10), ui.pad(12)], [
-		label(t.text, tx(state, "Os agentes rodam num terminal de verdade. Na janela do hive.ui, cada um abre num terminal do sistema, na pasta do projeto, com o comando de Configurações → Agentes.")),
-		ui.row([ui.gap(8)], buttons)
-	])
+	return ui.row([ui.gap(12)], items)
+}
+
+func agentBody(state: model.State, t: theme.Theme): hive.ui.View {
+	current := agents.sessionOf(state.agents, state.agents.current)
+	mut hive.ui.View[dyn] items = []
+	if current.problem != "" {
+		mut problem := current.problem
+		if problem is "{program}: não encontrado no PATH" {
+			problem = program + ": " + tx(state, "não encontrado no PATH")
+		}
+		append(items, ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center())], [
+			label(t.danger, problem + ". " + tx(state, "Instale o programa ou ajuste o comando em Configurações → Agentes.")),
+			clickable(t.accent, tx(state, "Configurações"), act("settings", ""), "")
+		]))
+	} else if current.exited {
+		append(items, ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center())], [
+			label(t.muted, tx(state, "O agente terminou") + " (" + tx(state, "código") + " {current.code})."),
+			clickable(t.accent, "↻ " + tx(state, "Abrir de novo"), act("agentRestart", current.agent), "")
+		]))
+	}
+	append(items, ui.column([ui.grow(1), ui.pad(agentPad()), fill(t.panel)], []))
+	return ui.column([ui.grow(1)], items)
 }
 
 func scoreColor(t: theme.Theme, score: Int): Str {
@@ -1840,7 +1871,10 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 		]
 	} else if agent {
 		body = agentBody(state, t)
-		actions = []
+		actions = [
+			agentPicker(state, t),
+			headerAction(t, "↻", tx(state, "Reiniciar o agente") + render.keyHint(state, "agentRestart"), act("agentRestart", state.agents.current))
+		]
 	} else if problems {
 		body = problemsBody(state, t)
 	} else if analyzing {
@@ -1864,7 +1898,7 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 	}
 	append(head, paneTab(t, tx(state, "SAÍDA"), act("pane", "output"), !problems && !analyzing && !terminal && !agent))
 	append(head, paneTab(t, tx(state, "TERMINAL"), act("pane", "terminal"), terminal))
-	append(head, paneTab(t, tx(state, "AGENTE"), chrome("agentPane", ""), agent))
+	append(head, paneTab(t, tx(state, "AGENTE"), act("pane", "agent"), agent))
 	append(head, ui.spacer())
 	for each a in actions {
 		append(head, a)
@@ -1877,10 +1911,14 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 	} else {
 		append(box, ui.height(state.settings.panelHeight))
 	}
+	mut hive.ui.Attr[dyn] bodyBox = [ui.grow(1), ui.scroll(ui.Axis.Vertical())]
+	if agent {
+		bodyBox = [ui.grow(1)]
+	}
 	return ui.column(box, [
 		rule(t),
 		ui.row([ui.gap(16), ui.pad(8), ui.align(ui.Align.Center())], head),
-		ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [body])
+		ui.column(bodyBox, [body])
 	])
 }
 
@@ -2065,6 +2103,13 @@ type BridgeState {
 	palettePh:   Str
 	termPh:      Str
 	commitPh:    Str
+	ptyPort:       Int
+	ptyToken:      Str
+	agentSessions: Int[dyn]
+	agentShown:    Int
+	agentKeys:     Str[dyn]
+	termBg:        Str
+	termFg:        Str
 }
 
 func terminalHint(state: model.State): Str {
@@ -2086,11 +2131,14 @@ func focusPlaceholder(state: model.State): Str {
 		return tx(state, "Buscar no projeto (Enter)")
 	} else if target == "editor" {
 		return editorMark()
+	} else if target == "agent" {
+		return "@agent"
 	}
 	return ""
 }
 
-func bridgeState(state: model.State): BridgeState {
+func bridgeState(state: model.State, extra: Chrome): BridgeState {
+	t := theme.byName(state.settings.theme)
 	mut from := -1
 	mut to := -1
 	if state.find.open {
@@ -2117,15 +2165,22 @@ func bridgeState(state: model.State): BridgeState {
 		findPh: tx(state, "Buscar"),
 		palettePh: tx(state, "Buscar arquivo pelo nome"),
 		termPh: terminalHint(state),
-		commitPh: tx(state, "Mensagem do commit (Ctrl+Enter)")
+		commitPh: tx(state, "Mensagem do commit (Ctrl+Enter)"),
+		ptyPort: extra.ptyPort,
+		ptyToken: extra.ptyToken,
+		agentSessions: render.agentSessions(state.agents.sessions),
+		agentShown: render.agentShown(state),
+		agentKeys: render.agentKeys(state.settings.keymap),
+		termBg: t.panel,
+		termFg: t.text
 	)
 }
 
 // Os dois campos escondidos da ponte: o estado que vai para o script, e o
 // canal por onde ele manda de volta um evento da página (`model.Event`).
-func bridge(state: model.State): hive.ui.View {
+func bridge(state: model.State, extra: Chrome): hive.ui.View {
 	return ui.row([ui.height(0)], [
-		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state), hive.json.codec())),
+		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state, extra), hive.json.codec())),
 		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], "")
 	])
 }
@@ -2144,7 +2199,7 @@ func window(state: model.State, extra: Chrome): hive.ui.View {
 	}
 	append(body, ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], main))
 	return ui.column([ui.grow(1), fill(t.editor), tone(t.text), ui.scroll(ui.Axis.Vertical())], [
-		bridge(state),
+		bridge(state, extra),
 		titleBar(state, t, extra.menu),
 		ui.row([ui.grow(1), ui.scroll(ui.Axis.Both())], body),
 		statusBar(state, t),

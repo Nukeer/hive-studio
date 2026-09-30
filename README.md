@@ -305,7 +305,13 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   `{`, `[` ou `(`), setas navegam nas sugestões, na paleta e no histórico do
   terminal, `Ctrl+Enter` faz o commit, `Esc` fecha o que estiver aberto;
 - **a área de transferência**: Copiar caminho e o `y` do Vim copiam;
-- a fonte monoespaçada do código e barras de rolagem finas.
+- a fonte monoespaçada do código e barras de rolagem finas;
+- **os terminais dos agentes** (Claude Code, Codex, OpenCode): o mesmo
+  xterm.js e o mesmo `/pty` da janela própria, num servidor que
+  `studioui.hive` abre com um token só dele. O terminal fica numa camada fora
+  do `#root` (o `hive.ui` apagaria o que não desenhou), por cima da caixa que o
+  painel AGENTE reserva para ele; com o foco nele as teclas são do programa,
+  menos mostrar/ocultar o agente e o painel.
 
 O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
 `hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
@@ -319,8 +325,6 @@ CI está fixada em `.github/hivec.txt`.
 O que ainda falta (as próximas partes):
 
 - o modo Vim e o realce enquanto se digita (o editor da página própria);
-- um terminal de verdade para os agentes: hoje o TERMINAL é o shell linha a
-  linha, e cada agente abre num **terminal do sistema**, na pasta do projeto;
 - arrastar a altura do painel e o botão direito (o **⋯** faz o papel dele);
 - os vigias (git, disco) começam no primeiro clique: a janela só tem endereço
   quando recebe a primeira mensagem.

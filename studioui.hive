@@ -21,9 +21,7 @@ import ./studio
 import ./lib/model
 import ./lib/uiview
 import ./lib/settings
-import ./lib/agents
 import ./lib/git
-import ./lib/process
 import ./lib/server
 import ./lib/complete
 import ./lib/bridge.go
@@ -74,53 +72,26 @@ func numberOr(text: Str, fallback: Int): Int {
 	return fallback
 }
 
-// Um agente numa janela de terminal do sistema, na pasta do projeto: o
-// hive.ui não tem um emulador de terminal onde desenhar a tela dele.
-proc launchExternal(root: Str, command: Str, title: Str): Str {
-	if server.isWindows() {
-		result := process.run("cmd", ["/c", "start", title, "cmd", "/k", command], root)
-		if result.code != 0 {
-			return process.firstLine(result.text)
+// O `/pty` dos terminais dos agentes (o mesmo da página própria), só para
+// quem traz o token.
+proc ptyGate(token: Str, conn: hive.net.WsConnection): void {
+	url := hive.net.wsRequest(conn).url
+	if server.hasToken(url, token) {
+		if url is "/pty?session={number}&{rest}" {
+			if hive.conv.sti(number) is Result.Ok(session) {
+				server.ptyClient(conn, session)
+			}
 		}
-		return ""
 	}
-	if hive.file.exists("/usr/bin/osascript") {
-		script := "tell application \"Terminal\" to do script \"cd " + replaceAll(root, "\"", "\\\"") + " && " + replaceAll(command, "\"", "\\\"") + "\""
-		result := process.run("osascript", ["-e", script, "-e", "tell application \"Terminal\" to activate"], root)
-		if result.code != 0 {
-			return process.firstLine(result.text)
-		}
-		return ""
-	}
-	result := process.run("x-terminal-emulator", ["-e", "sh", "-c", command + "; exec $SHELL"], root)
-	if result.code == -1 {
-		return "x-terminal-emulator: " + result.text
-	}
-	return ""
+	hive.net.wsClose(conn)
 }
 
-proc openAgent(win: mut Win, agent: Str): void {
-	command := agents.commandOf(win.core.settings, agent)
-	problem := launchExternal(win.core.root, command, "Hive Studio — " + agents.labelOf(agent))
-	win.core.agents.current = agent
-	if problem != "" {
-		win.core.status = agents.labelOf(agent) + ": " + problem
-	} else {
-		win.core.status = agents.labelOf(agent) + " — " + command
-	}
-}
-
-// O que só esta janela trata: menus, a rolagem da vista realçada e os agentes.
+// O que só esta janela trata: os menus e a rolagem da vista realçada.
 proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address): void {
 	if what == "menu" {
 		win.extra.menu = arg
 	} else if what == "top" {
 		win.extra.top = numberOr(arg, 0)
-	} else if what == "agent" {
-		openAgent(win, arg)
-	} else if what == "agentPane" {
-		win.core.pane = model.Pane.AgentPane()
-		win.core.panelOpen = true
 	}
 }
 
@@ -145,21 +116,8 @@ proc handle(win: mut Win, event: model.Event, self: hive.syslink.Address): void 
 	if sent.kind == "act" && sent.act == "action" {
 		sent.caret = win.core.caret
 	}
-	translated := studio.toMsg(win.core, sent)
-	if translated is Result.Ok(message) {
-		// Um agente pedido pelo menu ou pelo teclado abre num terminal do
-		// sistema; o painel AGENTE mostra os botões de cada um.
-		if message is model.Msg.ShowAgent(agent) {
-			mut chosen := agent
-			if !agents.isAgent(chosen) {
-				chosen = win.core.agents.current
-			}
-			openAgent(win, chosen)
-		} else if message is model.Msg.AgentRestart(agent) {
-			openAgent(win, agent)
-		} else {
-			studio.step(win.core, message, self)
-		}
+	if studio.toMsg(win.core, sent) is Result.Ok(message) {
+		studio.step(win.core, message, self)
 	}
 }
 
@@ -216,6 +174,17 @@ proc initial(folder: Str): Win {
 	return Win(start, uiview.emptyChrome(), false)
 }
 
+// O servidor dos terminais dos agentes: o xterm.js (`server.page` serve os
+// arquivos dele) e o `/pty`, na porta seguinte. Só para quem tem o token.
+proc servePty(win: mut Win): void {
+	token := hive.crypto.randomHex(16)
+	port := server.freePort()
+	async hive.net.httpServe(port, server.page(token, port + 1, _))
+	async hive.net.wsServe(port + 1, ptyGate(token, _))
+	win.extra.ptyPort = port
+	win.extra.ptyToken = token
+}
+
 proc main(): void {
 	args := hive.term.args()
 	mut folder := "."
@@ -225,5 +194,7 @@ proc main(): void {
 	if !bridge.installed() {
 		echo "Hive Studio: a ponte do hive.ui (lib/bridge.go) não entrou na página; sem teclado nem cursor."
 	}
-	ui.windowAddressed("Hive Studio", view, update, initial(folder))
+	mut start := initial(folder)
+	servePty(start)
+	ui.windowAddressed("Hive Studio", view, update, start)
 }
