@@ -174,30 +174,3 @@ func iconFor(name: Str): FileIcon {
 	}
 	return FileIcon("≡", "#8a8a8a")
 }
-
-func isSame(a: Str, b: Str): Bool {
-	return a == b
-}
-
-test "todo tema tem nome único e um desconhecido cai no primeiro" {
-	all := names()
-	assert len(all) == 7
-	assert byName("Dracula").name == "Dracula"
-	assert byName("não existe").name == "Hive Dark"
-	for each name in all {
-		assert len(filter(all, isSame(_, name))) == 1
-	}
-}
-
-test "o CSS do tema traz interface, sintaxe e fonte" {
-	sheet := css(byName("Monokai"), 14, 4)
-	assert indexOf(sheet, "--syn-keyword:#f92672;") is Result.Ok(_)
-	assert indexOf(sheet, "--line:21px;") is Result.Ok(_)
-	assert indexOf(sheet, "color-scheme:dark") is Result.Ok(_)
-}
-
-test "ícones por extensão" {
-	assert iconFor("app.hive").glyph == "⬡"
-	assert iconFor("util.go").glyph == "◆"
-	assert iconFor("LEIAME").glyph == "≡"
-}

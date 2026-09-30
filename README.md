@@ -9,7 +9,7 @@ Precisa do `hivec` v0.2.9 ou mais novo.
 ```
 hivec run studio.hive [pasta]      # abre a pasta (padrão: a atual)
 hivec build studio.hive            # gera studio.exe (sem console no Windows)
-hivec test studio.hive             # testes, com cobertura
+hivec test test/suite.hive         # testes, com cobertura
 ```
 
 ## O que tem
@@ -203,7 +203,11 @@ se existir, vence o compilador configurado.
 
 | arquivo | papel |
 | --- | --- |
-| `studio.hive` | entrada: `main`, o serviço, a dobra `update`, evento → `Msg`, testes de fluxo |
+| `studio.hive` | entrada: `main`, o serviço, a dobra `update`, evento → `Msg` |
+| `studioui.hive` | protótipo da interface só com widgets do `hive.ui` (ver abaixo) |
+| `test/<arquivo>.test.hive` | os testes de `<arquivo>.hive` (`studio.hive` ou `lib/<arquivo>.hive`) |
+| `test/support/<arquivo>.hive` | funções de apoio dos testes de `<arquivo>` |
+| `test/suite.hive` | importa todos os `.test.hive`: é a entrada do `hivec test` |
 | `lib/model.hive` | estado, mensagens e o protocolo página ↔ programa |
 | `lib/render.hive` | estado → frame (regiões HTML) |
 | `lib/server.hive` | HTTP, WebSocket, push de atualizações, abrir a janela |
@@ -228,6 +232,57 @@ se existir, vence o compilador configurado.
 | `lib/vim.hive` | modo Vim: teclas → movimentos, operadores, macros e linha de comando |
 | `assets/vendor/` | xterm.js e o addon fit (MIT, `LICENSE-xterm.txt`) |
 | `assets/shell.html` → `lib/assets.hive` | a página da janela |
+
+## Testes
+
+Ficam em `test/`, um arquivo por fonte, com o nome `<arquivo>.test.hive`:
+os testes de `lib/vim.hive` estão em `test/vim.test.hive`, os de `studio.hive`
+em `test/studio.test.hive`. Cada um importa o que testa (`import ../lib/vim`) e
+chama pelo nome do módulo (`vim.tokens(...)`).
+
+```
+hivec test test/suite.hive           # a suíte inteira, com cobertura
+hivec test test/vim.test.hive        # só um arquivo
+```
+
+- Um arquivo de teste novo entra em `test/suite.hive`:
+  `import ./<arquivo>.test as <arquivo>Test` (o nome com ponto precisa do `as`).
+- **Um `.test.hive` só tem `import` e `test`.** O `hivec` v0.2.9 gera Go
+  inválido para uma `func`, `proc` ou `type` declarada num módulo com ponto no
+  nome (`vim.test_12_feed`), então o que os testes compartilham vai para
+  `test/support/<arquivo>.hive`, importado `as support`.
+- Pelo mesmo motivo, o nome de um arquivo importado não pode ter `-`
+  (`studio-ui_11_Problem`); daí `studioui.hive`.
+- O teste roda na pasta do projeto gerado (`test/suite.hive-build/`), não em
+  `test/`: quem precisa de arquivos os cria numa pasta própria.
+
+## Protótipo só com `hive.ui`
+
+`studioui.hive` é um teste de como fica a IDE desenhada **só com os widgets do
+`hive.ui`**, sem `assets/shell.html`, JavaScript próprio, servidor ou xterm:
+
+```
+hivec run studioui.hive [pasta]
+```
+
+Tem explorador em árvore, abas (● quando alterada; fechar com alteração
+pergunta), editor (`textarea`), Salvar / Salvar tudo mantendo o fim de linha,
+escolha da entrada (`.hive` da raiz com `proc main`), **Check** numa tarefa à
+parte com o painel de problemas (o clique abre o arquivo) e barra de status.
+
+O que o `hive.ui` (v0.2.9) não deixa fazer, e por isso a IDE principal segue na
+página própria:
+
+- A janela continua sendo um Chromium em modo aplicativo — o que sai é a página
+  própria, não o navegador.
+- `textarea` simples: sem realce, números de linha, fonte monoespaçada nem
+  Error Lens.
+- Sem ler nem mover o cursor ou a seleção (ir para a linha não posiciona).
+- Sem atalhos de teclado fora de uma `scene`: nada de `Ctrl+S`, `F5`,
+  autocomplete ou modo Vim.
+- `onInput` manda o texto inteiro a cada tecla, o que pesa em arquivos grandes.
+- Só botão e link recebem clique: sem botão direito, arrastar ou hover.
+- Nenhum widget hospeda um terminal, então não há terminal nem painel de agentes.
 
 ## Releases
 
@@ -255,7 +310,8 @@ git config core.hooksPath .githooks
 ```
 
 - `pre-commit`: confere que `lib/assets.hive` está em dia com
-  `assets/shell.html`, roda `hivec check` e `hivec test`
+  `assets/shell.html`, roda `hivec check` (em `studio.hive` e `studioui.hive`) e
+  `hivec test test/suite.hive`
   (`HIVE_SKIP_TESTS=1 git commit …` pula os testes).
 - `commit-msg`: recusa mensagens com `Co-Authored-By`.
 

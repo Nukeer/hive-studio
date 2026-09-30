@@ -81,10 +81,12 @@ jobs:
           }
 
       - name: Check
-        run: hivec check studio.hive
+        run: |
+          hivec check studio.hive
+          hivec check studioui.hive
 
       - name: Testes
-        run: hivec test studio.hive
+        run: hivec test test/suite.hive
 
       # Com Go 64 bits o hivec consegue embutir o ícone no executável; ver
       # "Limites conhecidos" no README.

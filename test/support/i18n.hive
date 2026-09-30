@@ -1,0 +1,21 @@
+// Apoio aos testes de test/i18n.test.hive.
+
+import ../../lib/i18n
+
+func unique(values: Str[]): Bool {
+	mut hive.map.Map<Str, Bool> seen = hive.map.new()
+	for each v in values {
+		if hive.map.has(seen, v) {
+			return false
+		}
+		hive.map.set(seen, v, true)
+	}
+	return true
+}
+
+func keyOf(row: Str[]): Str {
+	if row bounds 0 {
+		return row[0]
+	}
+	return ""
+}

@@ -1,0 +1,26 @@
+// Testes de lib/settings.hive.
+
+import ../lib/settings
+
+test "configurações vão e voltam em JSON, com padrões para o que falta" {
+	custom := settings.Settings("Nord", false, true, false, "C:/hive/hivec.exe", 16, 2, false, "save=Ctrl+N", "", 300, "en", true, "npx @anthropic-ai/claude-code", "codex", "opencode", false)
+	text := encode(custom, hive.json.codec())
+	if settings.Settings.decode(text, hive.json.codec()) is Result.Ok(back) {
+		assert back == custom
+	} else {
+		assert false
+	}
+	if settings.Settings.decode(`\{"theme": "Dracula"}`, hive.json.codec()) is Result.Ok(partial) {
+		assert partial.theme == "Dracula"
+		assert partial.errorLens
+		assert partial.lineNumbers
+		assert partial.compiler == "hivec"
+		assert partial.fontSize == 14
+		assert partial.keymap == ""
+		assert !partial.vim
+		assert partial.claudeCommand == "claude"
+		assert partial.opencodeCommand == "opencode"
+	} else {
+		assert false
+	}
+}

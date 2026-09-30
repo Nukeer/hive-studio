@@ -1,0 +1,52 @@
+// Testes de lib/agents.hive.
+
+import ../lib/agents
+import ../lib/settings
+import ../lib/model
+import ../lib/pty.go
+
+test "cada agente tem um comando, partido em programa e argumentos" {
+	prefs := settings.defaults()
+	assert agents.commandOf(prefs, "claude") == "claude"
+	assert agents.commandOf(prefs, "codex") == "codex"
+	assert agents.commandOf(prefs, "opencode") == "opencode"
+	assert agents.words("npx  @anthropic-ai/claude-code") == ["npx", "@anthropic-ai/claude-code"]
+	assert agents.labelOf("codex") == "Codex"
+	assert agents.isAgent("opencode")
+	assert !agents.isAgent("vim")
+	mut empty := prefs
+	empty.claudeCommand = "  "
+	assert agents.start(empty, "claude", ".") is Result.Error(_)
+	mut missing := prefs
+	missing.codexCommand = "programa-que-nao-existe-hive"
+	assert agents.start(missing, "codex", ".") is Result.Error(_)
+}
+
+test "um agente roda num terminal de verdade: tty, tamanho, digitação e saída" {
+	mut prefs := settings.defaults()
+	prefs.claudeCommand = "sh"
+	started := agents.start(prefs, "claude", ".")
+	if started is Result.Ok(session) {
+		_script := pty.write(session, "tty; stty size\r")
+		first := agents.output(session, "24 80", 3000)
+		assert indexOf(first, "/dev/") is Result.Ok(_)
+		assert indexOf(first, "24 80") is Result.Ok(_)
+		_resized := pty.resize(session, 100, 30)
+		_again := pty.write(session, "stty size; echo ação-$TERM\r")
+		second := agents.output(session, "ação-xterm-256color", 3000)
+		assert indexOf(second, "30 100") is Result.Ok(_)
+		assert indexOf(second, "ação-xterm-256color") is Result.Ok(_)
+		assert pty.alive(session)
+		_quit := pty.write(session, "exit 3\r")
+		for waited := 0; waited < 3000; waited = waited + 50 {
+			if !pty.alive(session) {
+				break
+			}
+			hive.task.sleep(50)
+		}
+		assert !pty.alive(session)
+		assert pty.code(session) == 3
+	} else {
+		assert false
+	}
+}

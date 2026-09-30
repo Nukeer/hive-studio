@@ -1,0 +1,142 @@
+// Apoio aos testes de test/studio.test.hive.
+
+import ../../studio
+import hive.ui
+import ../../lib/model
+import ../../lib/workspace
+import ../../lib/analysis
+import ../../lib/toolchain
+import ../../lib/render
+import ../../lib/settings
+import ../../lib/highlight
+import ../../lib/complete
+import ../../lib/keys
+import ../../lib/server
+import ../../lib/git
+import ../../lib/navigate
+import ../../lib/process
+import ../../lib/native.go
+import ../../lib/dialogs
+import ../../lib/i18n
+import ../../lib/search
+import ../../lib/vim
+import ../../lib/agents
+import ../../lib/todo
+import ../../lib/jsonview
+import ../../lib/markdown
+import ../../lib/pty.go
+import ../../lib/watch.go
+
+proc scratch(): Str {
+	folder := "./studio-test"
+	if hive.file.makeDir(folder + "/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/main.hive", "proc main(): void \{\r\n\techo 1\r\n}\r\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/LEIAME.md", "# Título\n\nTexto **forte**.\n") is Result.Error(why) {
+		panic why
+	}
+	return folder
+}
+
+proc fresh(folder: Str): model.State {
+	mut state := model.initial(folder, settings.defaults())
+	studio.openRoot(state, folder)
+	return state
+}
+
+func event(kind: Str, act: Str, arg: Str, text: Str, caret: Int): model.Event {
+	return model.Event(kind, act, arg, text, caret, -1, 0, -1)
+}
+
+func hasRegion(frame: model.Frame, id: Str): Bool {
+	for each r in frame.regions {
+		if r.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Manda um evento ao serviço, como a página faz, e lê o frame que volta.
+proc answer(db: hive.syslink.Address, sent: model.Event): model.Frame {
+	answered := db(model.Cmd.Ui(encode(sent, hive.json.codec())))
+	if answered is Result.Ok(reply) {
+		if reply is model.Cmd.Reply(text) {
+			if model.Frame.decode(text, hive.json.codec()) is Result.Ok(frame) {
+				return frame
+			}
+		}
+	}
+	panic "o serviço não respondeu com um frame"
+}
+
+// O frame depois de `sent`, sempre com o texto: quando nada mudou o frame não
+// o traz (a página já tem), e aqui ele é pedido de novo, como a página faria
+// se o tivesse perdido.
+proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
+	frame := answer(db, sent)
+	if frame.hasText {
+		return frame
+	}
+	return answer(db, event("resync", "", "", "", 0))
+}
+
+// Teclas do Vim, uma por evento, como a página manda.
+proc vimKeys(db: hive.syslink.Address, keys: Str): model.Frame {
+	mut frame := ask(db, event("hello", "", "", "", 0))
+	for each key in vim.tokens(keys) {
+		frame = ask(db, event("vim", "", "0 30", key, -1))
+	}
+	return frame
+}
+
+func regionOf(frame: model.Frame, id: Str): Str {
+	for each r in frame.regions {
+		if r.id == id {
+			return r.html
+		}
+	}
+	return ""
+}
+
+// Uma pasta só para os testes do explorador: `lib/`, `LEIAME.md` e `main.hive`,
+// sem o que os outros testes deixam em `studio-test`.
+proc explorerFolder(name: Str): Str {
+	folder := "./" + name
+	if hive.file.makeDir(folder + "/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/main.hive", "\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/LEIAME.md", "\n") is Result.Error(why) {
+		panic why
+	}
+	return folder
+}
+
+// O nome da linha selecionada no explorador, lido do HTML da barra lateral.
+func selectedName(frame: model.Frame): Str {
+	html := regionOf(frame, "side")
+	if html is "{before} focus\"{row}</div>{after}" {
+		if row is "{head}<span class=\"nm{cls}\">{name}</span>{tail}" {
+			return name
+		}
+	}
+	return ""
+}
+
+proc treeKeys(db: hive.syslink.Address, keys: Str): model.Frame {
+	mut frame := ask(db, event("hello", "", "", "", 0))
+	for each key in vim.tokens(keys) {
+		frame = ask(db, event("tree", "", "", key, 0))
+	}
+	return frame
+}
+
+func rowName(row: model.TreeRow): Str {
+	return row.entry.name
+}

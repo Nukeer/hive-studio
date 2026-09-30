@@ -157,30 +157,3 @@ func reset(stored: Str, action: Str): Str {
 	}
 	return serialize(next)
 }
-
-test "padrões valem até o usuário mudar" {
-	assert keysFor("", "newFile") == "Ctrl+N"
-	assert keysFor("", "togglePanel") == "Ctrl+`"
-	if actionFor("", "Ctrl+N") is Result.Ok(found) {
-		assert found == "newFile"
-	} else {
-		assert false
-	}
-}
-
-test "gravar um atalho tira ele de quem usava antes" {
-	stored := assign("", "save", "Ctrl+N")
-	assert keysFor(stored, "save") == "Ctrl+N"
-	assert keysFor(stored, "newFile") == ""
-	if actionFor(stored, "Ctrl+N") is Result.Ok(found) {
-		assert found == "save"
-	}
-	back := reset(reset(stored, "save"), "newFile")
-	assert back == ""
-	assert keysFor(back, "newFile") == "Ctrl+N"
-}
-
-test "voltar ao padrão não deixa lixo guardado" {
-	assert assign("", "run", "F5") == ""
-	assert assign("", "run", "F9") == "run=F9"
-}

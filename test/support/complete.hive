@@ -1,0 +1,10 @@
+// Apoio aos testes de test/complete.test.hive.
+
+import ../../lib/complete
+import ../../lib/highlight
+import ../../lib/analysis
+import ../../lib/model
+
+func isWord(s: model.Suggestion, word: Str): Bool {
+	return s.word == word
+}

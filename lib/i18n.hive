@@ -341,30 +341,3 @@ func tr(dictionary: hive.map.Map<Str, Str>, text: Str): Str {
 	}
 	return text
 }
-
-func unique(values: Str[]): Bool {
-	mut hive.map.Map<Str, Bool> seen = hive.map.new()
-	for each v in values {
-		if hive.map.has(seen, v) {
-			return false
-		}
-		hive.map.set(seen, v, true)
-	}
-	return true
-}
-
-func keyOf(row: Str[]): Str {
-	if row bounds 0 {
-		return row[0]
-	}
-	return ""
-}
-
-test "traduções existem nos três idiomas e as chaves não repetem" {
-	english := words("en")
-	assert tr(english, "Configurações") == "Settings"
-	assert tr(words("es"), "Configurações") == "Configuración"
-	assert tr(words("pt-BR"), "Configurações") == "Configurações"
-	assert tr(english, "texto sem tradução") == "texto sem tradução"
-	assert unique(map(table(), keyOf))
-}

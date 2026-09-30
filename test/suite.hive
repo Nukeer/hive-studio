@@ -1,0 +1,25 @@
+// A suíte inteira: `hivec test test/suite.hive`.
+// Cada arquivo de teste é test/<arquivo>.test.hive, com os testes de <arquivo>.hive;
+// um arquivo novo entra aqui.
+
+import ./agents.test as agentsTest
+import ./analysis.test as analysisTest
+import ./complete.test as completeTest
+import ./git.test as gitTest
+import ./highlight.test as highlightTest
+import ./i18n.test as i18nTest
+import ./jsonview.test as jsonviewTest
+import ./keys.test as keysTest
+import ./markdown.test as markdownTest
+import ./navigate.test as navigateTest
+import ./process.test as processTest
+import ./render.test as renderTest
+import ./search.test as searchTest
+import ./settings.test as settingsTest
+import ./studio.test as studioTest
+import ./studioui.test as studioUiTest
+import ./theme.test as themeTest
+import ./todo.test as todoTest
+import ./toolchain.test as toolchainTest
+import ./vim.test as vimTest
+import ./workspace.test as workspaceTest

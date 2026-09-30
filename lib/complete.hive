@@ -136,19 +136,6 @@ func contextIn(text: Str, caret: Int): Context {
 	return Context(prefix, qualifier, start)
 }
 
-test "o contexto do cursor só lê o fim do texto antes dele" {
-	mut long := ""
-	for i := 0; i < 300; i++ {
-		long = long + "x "
-	}
-	text := long + "hive.file.re"
-	ctx := context(text, len(text))
-	assert ctx.prefix == "re" && ctx.qualifier == "hive.file" && ctx.start == len(text) - 2
-	short := context("ab cd", 5)
-	assert short.prefix == "cd" && short.start == 3
-	assert around("abcdef", 3, 10) == "abcdef" && around("abcdefghij", 5, 2) == "defg"
-}
-
 func startsWith(word: Str, prefix: Str): Bool {
 	if prefix == "" {
 		return true
@@ -322,34 +309,4 @@ func accept(text: Str, caret: Int, word: Str): TextEdit {
 	ctx := context(text, caret)
 	before := take(text, ctx.start)
 	return TextEdit(before + word + skip(text, caret), len(before) + len(word))
-}
-
-test "o contexto separa prefixo e qualificador" {
-	ctx := context("x := hive.file.re", 17)
-	assert ctx.prefix == "re"
-	assert ctx.qualifier == "hive.file"
-	assert ctx.start == 15
-	plain := context("pro", 3)
-	assert plain.prefix == "pro" && plain.qualifier == ""
-}
-
-test "sugere palavras-chave, membros de módulo e nomes do arquivo" {
-	first := suggest("pr", 2, 10)
-	assert len(filter(first, isWord(_, "proc"))) == 1
-	assert len(filter(first, isWord(_, "prepend"))) == 1
-	files := suggest("hive.file.re", 12, 10)
-	assert len(filter(files, isWord(_, "read"))) == 1
-	source := "func greeting(): Str \{ return \"\" }\ngre"
-	own := suggest(source, len(source), 10)
-	assert len(filter(own, isWord(_, "greeting"))) == 1
-}
-
-func isWord(s: model.Suggestion, word: Str): Bool {
-	return s.word == word
-}
-
-test "aceitar troca o prefixo e move o cursor" {
-	edit := accept("x := hive.file.re\n", 17, "read")
-	assert edit.text == "x := hive.file.read\n"
-	assert edit.caret == 19
 }

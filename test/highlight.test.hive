@@ -1,0 +1,85 @@
+// Testes de lib/highlight.hive.
+
+import ../lib/highlight
+import ./support/highlight as support
+
+test "realce por linha carrega o texto entre crases" {
+	first := highlight.highlightLine("x := `abre", 0)
+	assert first.carry == 1
+	second := highlight.highlightLine("meio", 1)
+	assert second.carry == 1 && second.html == "<span class=\"ts\">meio</span>"
+	third := highlight.highlightLine("fecha` + 1", 1)
+	assert third.carry == 0
+	assert indexOf(third.html, "<span class=\"tn\">1</span>") is Result.Ok(_)
+	assert highlight.highlightLine("// uma crase ` num comentário", 0).carry == 0
+	assert highlight.highlightLine("if c == \"`\" \{", 0).carry == 0
+	assert highlight.highlightLine("x := \"a\\\"`\"", 0).carry == 0
+	assert highlight.highlightLine("x := \"a\" + `abre // não é comentário", 0).carry == 1
+	assert highlight.highlightLine("render(\"- **um", 0).carry == 2
+	assert highlight.highlightLine("  dois \\\" ` três\") + 1", 2).carry == 0
+}
+
+test "rehighlight muda só as linhas editadas e devolve o patch" {
+	before := "proc a(): void \{\n\techo 1\n}\n"
+	after := "proc a(): void \{\n\techo 2\n\techo 3\n}\n"
+	old := highlight.highlightText(before, "hive")
+	done := highlight.rehighlight(old, before, after, "hive")
+	assert done.patch.from == 1
+	assert done.patch.remove == 1
+	assert len(done.patch.lines) == 2
+	assert support.patched(highlight.htmlLines(before, "hive"), done.patch) == join(highlight.htmlLines(after, "hive"), "\n")
+	assert done.result == highlight.highlightText(after, "hive")
+	opening := "a\nb := `x\nc\nd` + 1\n"
+	closed := highlight.highlightText(opening, "hive")
+	assert closed.open == [1, 1, 2, 1] && highlight.carryAt(closed, 2) == 1 && highlight.carryAt(closed, 3) == 0 && highlight.carryAt(closed, -1) == 0
+	closedAfter := replaceAll(opening, "`x", "x")
+	edited := highlight.rehighlight(closed, opening, closedAfter, "hive")
+	assert support.patched(highlight.htmlLines(opening, "hive"), edited.patch) == join(highlight.htmlLines(closedAfter, "hive"), "\n")
+	assert edited.result == highlight.highlightText(closedAfter, "hive")
+	quoted := "a\nb := \"x\nc\nd\" + 1\n"
+	quotedAfter := replaceAll(quoted, "\"x", "x")
+	unquoted := highlight.rehighlight(highlight.highlightText(quoted, "hive"), quoted, quotedAfter, "hive")
+	assert support.patched(highlight.htmlLines(quoted, "hive"), unquoted.patch) == join(highlight.htmlLines(quotedAfter, "hive"), "\n")
+	assert unquoted.result == highlight.highlightText(quotedAfter, "hive")
+	// Linhas abertas depois do trecho são deslocadas quando ele cresce.
+	shifted := "x := 1\nb := `y\nz`\n"
+	grown := "x := 1\nnova\noutra\nb := `y\nz`\n"
+	moved := highlight.rehighlight(highlight.highlightText(shifted, "hive"), shifted, grown, "hive")
+	assert moved.result == highlight.highlightText(grown, "hive") && moved.result.open == [3, 1]
+}
+
+test "palavras-chave, tipos, textos e comentários ganham classes" {
+	html := highlight.highlight("proc main(): void \{ // oi\n\tx := \"a<b\" + 1\n}")
+	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tf\">main</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tk\">void</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tc\">// oi</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"ts\">&quot;a&lt;b&quot;</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tn\">1</span>") is Result.Ok(_)
+}
+
+test "JSON ganha cores de chave, texto, número e literal; TODO se destaca no comentário" {
+	line := highlight.jsonLine("  \"nome\": \"Ada\", \"n\": -3.5, \"ok\": true, \"x\": null")
+	assert indexOf(line, "<span class=\"tt\">&quot;nome&quot;</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"ts\">&quot;Ada&quot;</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"tn\">-3.5</span>") is Result.Ok(_)
+	assert indexOf(line, "<span class=\"tb\">true</span>") is Result.Ok(_)
+	assert highlight.htmlLines("\{\"a\": 1}", "json") == ["\{<span class=\"tt\">&quot;a&quot;</span>: <span class=\"tn\">1</span>}"]
+	assert highlight.htmlLines("x <y>", "") == ["x &lt;y&gt;"]
+	assert indexOf(highlight.highlight("x := 1 // TODO: isto"), "<span class=\"tc\">// <span class=\"td\">TODO</span>: isto</span>") is Result.Ok(_)
+}
+
+test "tipos, átomos e o módulo hive" {
+	html := highlight.highlight("hive.file.read(p) is Result.Ok(#Ready)")
+	assert indexOf(html, "<span class=\"tm\">hive</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tt\">Result</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"ta\">#Ready</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tf\">read</span>") is Result.Ok(_)
+}
+
+test "o texto sai igual, só com marcação em volta" {
+	source := "type A \{ x: Int }\n"
+	html := highlight.highlight(source)
+	plain := replaceAll(replaceAll(html, "<span class=\"tk\">", ""), "</span>", "")
+	assert replaceAll(replaceAll(plain, "<span class=\"tt\">", ""), "&lt;", "<") == source
+}

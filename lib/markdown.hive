@@ -343,39 +343,3 @@ func render(text: Str): Str {
 	}
 	return join(out, "\n")
 }
-
-test "títulos, ênfase e código inline" {
-	html := render("# Olá\n\nTexto **forte** e *leve* com `x := 1`.")
-	assert indexOf(html, "<h1>Olá</h1>") is Result.Ok(_)
-	assert indexOf(html, "<strong>forte</strong>") is Result.Ok(_)
-	assert indexOf(html, "<em>leve</em>") is Result.Ok(_)
-	assert indexOf(html, "<code>x := 1</code>") is Result.Ok(_)
-}
-
-test "listas, citação e bloco hive com realce" {
-	html := render("- um\n- dois\n\n1. a\n2. b\n\n> nota\n\n```hive\nproc main(): void \{}\n```\n")
-	assert indexOf(html, "<ul>\n<li>um</li>\n<li>dois</li>\n</ul>") is Result.Ok(_)
-	assert indexOf(html, "<ol>") is Result.Ok(_)
-	assert indexOf(html, "<blockquote>nota</blockquote>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
-}
-
-test "item de lista e parágrafo em várias linhas ficam inteiros" {
-	html := render("- **um
-  dois** três
-- quatro
-
-linha *a
-b* fim")
-	assert indexOf(html, "<li><strong>um dois</strong> três</li>") is Result.Ok(_)
-	assert indexOf(html, "<li>quatro</li>") is Result.Ok(_)
-	assert indexOf(html, "<p>linha <em>a b</em> fim</p>") is Result.Ok(_)
-}
-
-test "tabela e links seguros" {
-	html := render("| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[site](https://x.dev) e [ruim](javascript:alert)")
-	assert indexOf(html, "<th>a</th><th>b</th>") is Result.Ok(_)
-	assert indexOf(html, "<td>1</td><td>2</td>") is Result.Ok(_)
-	assert indexOf(html, "href=\"https://x.dev\"") is Result.Ok(_)
-	assert indexOf(html, "href=\"\" title=\"javascript:alert\"") is Result.Ok(_)
-}

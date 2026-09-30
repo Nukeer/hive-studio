@@ -1,0 +1,8 @@
+// Apoio aos testes de test/jsonview.test.hive.
+
+import ../../lib/jsonview
+import ../../lib/highlight
+
+func labelsForTest(): jsonview.Labels {
+	return jsonview.Labels("JSON inválido", "linha", "coluna", "mostrando só o começo")
+}

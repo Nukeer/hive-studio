@@ -1,0 +1,46 @@
+// Testes de lib/complete.hive.
+
+import ../lib/complete
+import ../lib/highlight
+import ../lib/analysis
+import ../lib/model
+import ./support/complete as support
+
+test "o contexto do cursor só lê o fim do texto antes dele" {
+	mut long := ""
+	for i := 0; i < 300; i++ {
+		long = long + "x "
+	}
+	text := long + "hive.file.re"
+	ctx := complete.context(text, len(text))
+	assert ctx.prefix == "re" && ctx.qualifier == "hive.file" && ctx.start == len(text) - 2
+	short := complete.context("ab cd", 5)
+	assert short.prefix == "cd" && short.start == 3
+	assert complete.around("abcdef", 3, 10) == "abcdef" && complete.around("abcdefghij", 5, 2) == "defg"
+}
+
+test "o contexto separa prefixo e qualificador" {
+	ctx := complete.context("x := hive.file.re", 17)
+	assert ctx.prefix == "re"
+	assert ctx.qualifier == "hive.file"
+	assert ctx.start == 15
+	plain := complete.context("pro", 3)
+	assert plain.prefix == "pro" && plain.qualifier == ""
+}
+
+test "sugere palavras-chave, membros de módulo e nomes do arquivo" {
+	first := complete.suggest("pr", 2, 10)
+	assert len(filter(first, support.isWord(_, "proc"))) == 1
+	assert len(filter(first, support.isWord(_, "prepend"))) == 1
+	files := complete.suggest("hive.file.re", 12, 10)
+	assert len(filter(files, support.isWord(_, "read"))) == 1
+	source := "func greeting(): Str \{ return \"\" }\ngre"
+	own := complete.suggest(source, len(source), 10)
+	assert len(filter(own, support.isWord(_, "greeting"))) == 1
+}
+
+test "aceitar troca o prefixo e move o cursor" {
+	edit := complete.accept("x := hive.file.re\n", 17, "read")
+	assert edit.text == "x := hive.file.read\n"
+	assert edit.caret == 19
+}

@@ -25,8 +25,9 @@ fi
 
 echo "pre-commit: hivec check"
 hivec check studio.hive
+hivec check studioui.hive
 
 if [ "${HIVE_SKIP_TESTS:-0}" != "1" ]; then
 	echo "pre-commit: hivec test"
-	hivec test studio.hive
+	hivec test test/suite.hive
 fi

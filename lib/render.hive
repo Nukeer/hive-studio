@@ -1454,15 +1454,6 @@ func caretPosition(text: Str, caret: Int): Str {
 	return "Ln {len(lines)}, Col {column}"
 }
 
-test "a posição do cursor em linha e coluna" {
-	assert caretPosition("ab\ncd", 0) == "Ln 1, Col 1"
-	assert caretPosition("ab\ncd", 2) == "Ln 1, Col 3"
-	assert caretPosition("ab\ncd", 3) == "Ln 2, Col 1"
-	assert caretPosition("ab\ncd", 5) == "Ln 2, Col 3"
-	assert caretPosition("ab\ncd", 99) == "Ln 2, Col 3"
-	assert caretPosition("ação", 4) == "Ln 1, Col 5"
-}
-
 func statusBar(state: model.State): Str {
 	t := theme.byName(state.settings.theme)
 	mut Str[dyn] items = [
