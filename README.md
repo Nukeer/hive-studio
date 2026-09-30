@@ -317,6 +317,12 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   meio numa aba a fecha;
 - os vigias (git, disco) começam assim que a janela abre: a ponte manda um
   "olá", a primeira mensagem, que é quando a janela passa a ter endereço.
+- **o modo Vim**: as teclas vão ao mesmo motor (`lib/vim.hive`) que a janela
+  própria usa, e a ponte aplica o texto, o cursor, a seleção e a rolagem que
+  ele devolve, desenha o cursor em bloco e trata as teclas mortas do ABNT2; a
+  linha do Vim (modo, mensagens, teclas pendentes e a linha de comando `:`,
+  `/`, `?`) é desenhada com widgets embaixo do editor;
+- gravar um atalho novo em Configurações → Atalhos de teclado.
 
 O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
 `hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
@@ -327,9 +333,8 @@ traz de volta um evento no formato da página própria (`model.Event`), que
 renomeie faz o build falhar em `lib/bridge.go`, e não em silêncio; a versão do
 CI está fixada em `.github/hivec.txt`.
 
-O que ainda falta (as próximas partes):
-
-- o modo Vim e o realce enquanto se digita (o editor da página própria).
+O que ainda é diferente da janela própria: o realce aparece na vista ao lado
+(ou no modo Realce), não dentro do `textarea` enquanto se digita.
 
 ## Releases
 

@@ -187,3 +187,22 @@ test "o olá da ponte põe os vigias para rodar, e o painel tem o puxador da alt
 	assert win.core.settings.panelHeight == 333
 	assert support.shows(win, "height:333px")
 }
+
+test "o modo Vim: as teclas vão ao motor e a ponte leva o modo, a seleção e a linha de comando" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	win.core.settings.vim = true
+	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	assert uiview.bridgeState(win.core, win.extra).vim == "normal"
+	assert support.shows(win, "VIM NORMAL")
+	_j := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"vim\",\"text\":\"j\",\"caret\":-1,\"arg\":\"0 30\"}"), sink)
+	moved := uiview.bridgeState(win.core, win.extra)
+	assert moved.caret == 26 && moved.selStart == 26 && moved.vimAck == 1
+	_v := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"vim\",\"text\":\"v\",\"caret\":-1,\"arg\":\"0 30\"}"), sink)
+	assert uiview.bridgeState(win.core, win.extra).vim == "visual"
+	_esc := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"vim\",\"text\":\"<Esc>\",\"caret\":-1,\"arg\":\"0 30\"}"), sink)
+	_colon := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"vim\",\"text\":\":\",\"caret\":-1,\"arg\":\"0 30\"}"), sink)
+	assert uiview.bridgeState(win.core, win.extra).focus == uiview.vimMark()
+	assert support.shows(win, "placeholder=\"" + uiview.vimMark() + "\"")
+}

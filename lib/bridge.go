@@ -47,6 +47,9 @@ textarea[placeholder="⬡"]:focus{outline:none}
 [style*="padding:9px"] .h-text,[style*="padding:9px"] .h-link{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;font-size:13px}
 [style*="padding:9px"] .h-link:hover{text-decoration:underline}
 [style*="height:5px"]{cursor:ns-resize}
+textarea[placeholder="⬡"].hive-block{caret-color:transparent}
+#hive-vimcur{position:fixed;display:none;pointer-events:none;z-index:3;border-radius:1px;background:rgba(200,200,200,.45)}
+#hive-vimcur.idle{background:transparent;box-shadow:inset 0 0 0 1px rgba(200,200,200,.55)}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:rgba(128,128,128,.35);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
@@ -57,7 +60,9 @@ const script = `<script>
   var state = { keys: [], serial: -1, caret: 0, popup: false, recording: false, focus: "", focusSerial: -1,
     clip: "", clipSerial: -1, findFrom: -1, findTo: -1, findSerial: -1, tab: 4,
     findPh: "", palettePh: "", termPh: "", commitPh: "",
-    ptyPort: 0, ptyToken: "", agentSessions: [], agentShown: 0, agentKeys: [], termBg: "#16181d", termFg: "#d7dae0" };
+    ptyPort: 0, ptyToken: "", agentSessions: [], agentShown: 0, agentKeys: [], termBg: "#16181d", termFg: "#d7dae0",
+    vim: "", vimSerial: 0, selStart: 0, selEnd: 0, vimScroll: -1, vimAck: 0, vimPh: "", textQuiet: false };
+  var vimSerial = -1, vimApplied = [0, 0], vimSent = 0, vimAck = 0, vimCaret = 0, composing = null;
   var raw = null, applied = -1, focused = -1, copied = -1, found = -1;
   var sent = null, allow = false, lastCaret = -1, caretTimer = 0;
   var nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
@@ -127,13 +132,38 @@ const script = `<script>
     raw = box.value;
     try { state = JSON.parse(raw); } catch (err) { return; }
     document.documentElement.style.setProperty("--hive-tab", String(state.tab || 4));
+    vimAck = Math.max(vimAck, state.vimAck || 0);
+    if (vimAck > vimSent) { vimSent = vimAck; }
+    var textChanged = false;
     if (ta && state.serial !== applied) {
+      textChanged = true;
       applied = state.serial;
-      setText(ta, ta.defaultValue);
-      var at = Math.min(state.caret, ta.value.length);
-      try { ta.setSelectionRange(at, at); } catch (err) {}
-      reveal(ta, at);
-      lastCaret = at;
+      if (state.textQuiet) {
+        // Relido do disco (um agente mudou o arquivo): troca o texto sem mexer
+        // no foco, na rolagem nem no cursor.
+        var top = ta.scrollTop, left = ta.scrollLeft, from = ta.selectionStart, to = ta.selectionEnd;
+        setText(ta, ta.defaultValue);
+        try { ta.setSelectionRange(Math.min(from, ta.value.length), Math.min(to, ta.value.length)); } catch (err) {}
+        ta.scrollTop = top; ta.scrollLeft = left;
+      } else {
+        setText(ta, ta.defaultValue);
+        var at = Math.min(state.caret, ta.value.length);
+        try { ta.setSelectionRange(at, at); } catch (err) {}
+        if (!state.vim) { reveal(ta, at); }
+        lastCaret = at;
+      }
+    }
+    if (ta) { ta.classList.toggle("hive-block", !!state.vim && state.vim !== "insert"); }
+    if (ta && state.vim && (state.vimSerial > vimSerial || textChanged)) {
+      var quietOnly = textChanged && state.textQuiet && !(state.vimSerial > vimSerial);
+      vimSerial = state.vimSerial;
+      try { ta.setSelectionRange(state.selStart, state.selEnd); } catch (err) {}
+      vimApplied = [ta.selectionStart, ta.selectionEnd];
+      vimCaret = state.caret;
+      lastCaret = ta.selectionStart;
+      if (!quietOnly) {
+        if (state.vimScroll >= 0) { ta.scrollTop = state.vimScroll * lineHeight(ta); } else { keepVisible(ta, state.caret); }
+      }
     }
     if (ta && state.findSerial !== found) {
       found = state.findSerial;
@@ -149,7 +179,10 @@ const script = `<script>
         focusAgent = true;
       } else {
         var target = byPlaceholder(state.focus);
-        if (target && !first) { target.focus(); }
+        if (target && !first) {
+          target.focus();
+          if (state.focus === state.vimPh) { try { target.setSelectionRange(target.value.length, target.value.length); } catch (err) {} }
+        }
       }
     }
     syncAgents();
@@ -188,6 +221,118 @@ const script = `<script>
         post({ kind: "caret", caret: lastCaret });
       }
     }, 120);
+  }
+
+  // ── o modo Vim ──
+  // As teclas vão para o motor do Vim (lib/vim.hive), como na página própria;
+  // o programa devolve o texto, o cursor e a seleção.
+
+  function measure(ta) {
+    var c = measure.canvas || (measure.canvas = document.createElement("canvas")), g = c.getContext("2d");
+    var st = getComputedStyle(ta);
+    g.font = st.fontSize + " " + st.fontFamily;
+    return g.measureText("MMMMMMMMMM").width / 10;
+  }
+
+  function visualColumn(line, upto, tab) {
+    var col = 0;
+    for (var i = 0; i < upto && i < line.length; i++) { col = line[i] === "\t" ? col + tab - (col % tab) : col + 1; }
+    return col;
+  }
+
+  // Rola o mínimo para o cursor ficar à vista; um salto para longe centraliza.
+  function keepVisible(ta, caret) {
+    var height = lineHeight(ta), view = ta.clientHeight, margin = Math.min(height * 2, view / 4);
+    var before = ta.value.slice(0, caret), line = before.split("\n").length - 1, top = line * height;
+    if (top < ta.scrollTop - view || top > ta.scrollTop + view * 2) {
+      ta.scrollTop = Math.max(0, top - view / 2);
+    } else if (top < ta.scrollTop + margin) {
+      ta.scrollTop = Math.max(0, top - margin);
+    } else if (top + height > ta.scrollTop + view - margin) {
+      ta.scrollTop = top + height + margin - view;
+    }
+  }
+
+  // A primeira linha visível e quantas cabem, para H, M, L, Ctrl+D, zz…
+  function viewOf(ta) {
+    var height = lineHeight(ta);
+    return Math.floor(ta.scrollTop / height + 0.5) + " " + Math.max(1, Math.floor(ta.clientHeight / height));
+  }
+
+  // O cursor em bloco dos modos normal e visual, por cima do texto.
+  var vimCursor = document.createElement("div");
+  vimCursor.id = "hive-vimcur";
+  document.body.appendChild(vimCursor);
+  function drawCursor() {
+    var ta = editor();
+    if (!ta || !state.vim || state.vim === "insert" || ta.offsetParent === null) { vimCursor.style.display = "none"; return; }
+    var st = getComputedStyle(ta), tab = parseInt(st.tabSize, 10) || 4, height = lineHeight(ta), width = measure(ta);
+    var text = ta.value, caret = Math.max(0, Math.min(vimCaret, text.length));
+    var start = text.lastIndexOf("\n", caret - 1) + 1, end = text.indexOf("\n", start);
+    if (end < 0) { end = text.length; }
+    var row = text.slice(0, start).split("\n").length - 1;
+    var column = visualColumn(text.slice(start, end), caret - start, tab), size = 1;
+    if (text[caret] === "\t") { size = tab - (column % tab); }
+    var box = ta.getBoundingClientRect();
+    var left = box.left + parseFloat(st.paddingLeft) + parseFloat(st.borderLeftWidth) + column * width - ta.scrollLeft;
+    var top = box.top + parseFloat(st.paddingTop) + parseFloat(st.borderTopWidth) + row * height - ta.scrollTop;
+    var visible = top >= box.top && top + height <= box.bottom && left >= box.left && left <= box.right;
+    vimCursor.style.display = visible ? "block" : "none";
+    vimCursor.style.left = left + "px"; vimCursor.style.top = top + "px";
+    vimCursor.style.width = (size * width) + "px"; vimCursor.style.height = height + "px";
+    vimCursor.classList.toggle("idle", document.activeElement !== ta);
+  }
+
+  // Manda uma tecla ao Vim. O cursor só vai junto quando a página o mudou por
+  // conta própria; senão vale o do programa, que pode estar à frente.
+  function sendVim(ta, key) {
+    var caret = -1;
+    if (ta.selectionStart !== vimApplied[0] || ta.selectionEnd !== vimApplied[1]) {
+      caret = ta.selectionStart;
+      vimApplied = [ta.selectionStart, ta.selectionEnd];
+    }
+    vimSent++;
+    post({ kind: "vim", text: key, caret: caret, arg: viewOf(ta) });
+  }
+
+  var vimNames = { Escape: "<Esc>", Enter: "<CR>", Backspace: "<BS>", Delete: "<Del>", Tab: "<Tab>", ArrowLeft: "<Left>",
+    ArrowRight: "<Right>", ArrowUp: "<Up>", ArrowDown: "<Down>", Home: "<Home>", End: "<End>", PageUp: "<PageUp>",
+    PageDown: "<PageDown>", F2: "<F2>", " ": "<Space>" };
+  // As combinações com Ctrl que o Vim usa no modo normal — quando nenhum atalho da IDE as usa.
+  var vimCtrl = ["r", "d", "u", "e", "y", "f", "b", "a", "x", "["];
+
+  // A tecla na notação do Vim: j, $, <Esc>, <C-r>… (null: não é do Vim).
+  function vimKeyName(e) {
+    var k = e.key, altGraph = e.getModifierState && e.getModifierState("AltGraph");
+    if ((e.ctrlKey || e.metaKey) && !altGraph) {
+      if (e.altKey) { return null; }
+      if (k === "[" || e.code === "BracketLeft") { return "<C-[>"; }
+      return k.length === 1 ? "<C-" + k.toLowerCase() + ">" : null;
+    }
+    if (e.altKey && !altGraph) { return null; }
+    if (vimNames[k]) { return vimNames[k]; }
+    return k.length === 1 ? k : null;
+  }
+
+  // O que uma tecla faz com o modo Vim ligado. true = já tratada.
+  function vimRoute(e, combo, ta, command) {
+    var behind = vimSent > vimAck, modified = e.ctrlKey || e.metaKey || e.altKey;
+    if (command && !behind) { return false; }
+    if (state.vim === "insert" && !behind && !command) {
+      if (e.key === "Escape" || (e.ctrlKey && (e.key === "[" || e.code === "BracketLeft"))) {
+        e.preventDefault(); e.stopPropagation(); sendVim(ta, "<Esc>"); return true;
+      }
+      return false;
+    }
+    // Uma tecla morta (~, ^, ´ no ABNT2) compõe o caractere; ele chega no compositionend.
+    if (e.key === "Dead" || e.isComposing || e.keyCode === 229) { return true; }
+    var name = vimKeyName(e);
+    if (state.keys.indexOf(combo) >= 0 && (modified || /^F\d+$/.test(e.key))) { return false; }
+    if (/^F\d+$/.test(e.key) || (modified && name === null)) { return false; }
+    if (name && name.indexOf("<C-") === 0 && vimCtrl.indexOf(name.slice(3, -1)) < 0) { return false; }
+    e.preventDefault(); e.stopPropagation();
+    if (name) { sendVim(ta, name); }
+    return true;
   }
 
   function comboOf(e) {
@@ -308,6 +453,7 @@ const script = `<script>
         fitAgent(agents[state.agentShown]);
       }
     }
+    drawCursor();
     requestAnimationFrame(place);
   }
   requestAnimationFrame(place);
@@ -324,6 +470,14 @@ const script = `<script>
       return;
     }
     if (state.recording) { take({ kind: "key", text: combo }); return; }
+    var command = !!state.vimPh && t.placeholder === state.vimPh;
+    if (state.vim && (inEditor || command) && vimRoute(e, combo, ta, command)) { return; }
+    if (command) {
+      if (e.key === "Backspace" && t.value === "") { take({ kind: "act", act: "vimCancel" }); return; }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") { take({ kind: "act", act: "vimHistory", arg: e.key === "ArrowUp" ? "-1" : "1" }); return; }
+      if (e.key === "Tab") { e.preventDefault(); return; }
+      if (e.ctrlKey && (e.key === "[" || e.code === "BracketLeft" || e.key === "c")) { take({ kind: "act", act: "vimCancel" }); return; }
+    }
     if (state.popup && inEditor && !e.ctrlKey && ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].indexOf(e.key) >= 0) {
       take({ kind: "popup", text: e.key }); return;
     }
@@ -361,15 +515,43 @@ const script = `<script>
 
   document.addEventListener("input", function (e) {
     var ta = editor();
-    if (ta && e.target === ta) { guard(ta); sendEdit(ta); }
+    if (ta && e.target === ta && !composing) { guard(ta); sendEdit(ta); }
   }, true);
 
   ["keyup", "mouseup", "select"].forEach(function (name) {
     document.addEventListener(name, function (e) {
       var ta = editor();
-      if (ta && e.target === ta) { caretMoved(ta); }
+      if (!ta || e.target !== ta) { return; }
+      if (state.vim && name === "mouseup") {
+        if (state.vimPh && byPlaceholder(state.vimPh)) { post({ kind: "act", act: "vimCancel" }); }
+        vimApplied = [ta.selectionStart, ta.selectionEnd];
+        vimCaret = ta.selectionEnd > ta.selectionStart ? ta.selectionEnd - 1 : ta.selectionStart;
+        post({ kind: "vimMouse", caret: ta.selectionStart, arg: String(ta.selectionEnd) });
+        return;
+      }
+      if (!state.vim) { caretMoved(ta); }
     }, true);
   });
+
+  // No modo normal, uma tecla morta (o ~ e o ^ do ABNT2) compõe o caractere no
+  // próprio texto: ele é desfeito e vira uma tecla do Vim.
+  document.addEventListener("compositionstart", function (e) {
+    var ta = editor();
+    if (ta && e.target === ta && state.vim && state.vim !== "insert") {
+      composing = { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd };
+    }
+  }, true);
+  document.addEventListener("compositionend", function (e) {
+    var ta = editor();
+    if (!composing || !ta) { return; }
+    var saved = composing, typed = e.data || "";
+    setTimeout(function () {
+      composing = null;
+      setText(ta, saved.value);
+      try { ta.setSelectionRange(saved.start, saved.end); } catch (err) {}
+      for (var i = 0; i < typed.length; i++) { sendVim(ta, typed[i] === " " ? "<Space>" : typed[i]); }
+    }, 0);
+  }, true);
 
   // ── o mouse: a borda do painel, o botão direito e o do meio ──
 

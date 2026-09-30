@@ -256,7 +256,9 @@ func menuEntries(state: model.State, name: Str): Entry[dyn] {
 			item(state, "Ir para arquivo…", "quickOpen", true),
 			gap(),
 			item(state, "Sugestões (autocomplete)", "suggest", hasDoc),
-			item(state, "Ir para a definição", "definition", hasDoc)
+			item(state, "Ir para a definição", "definition", hasDoc),
+			gap(),
+			checked(state, "Modo Vim", "toggleVim", state.settings.vim)
 		]
 	} else if name == "Ver" {
 		items = [
@@ -1442,10 +1444,16 @@ func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.row([ui.gap(8), ui.pad(4), ui.align(ui.Align.Center()), fill(t.panel), ui.scroll(ui.Axis.Horizontal())], items)
 }
 
-// O editor. Não tem evento do hive.ui: quem manda cada edição, com o cursor,
-// é a ponte (lib/bridge.go), que o acha pelo `⬡` do placeholder.
+// O editor. Quem manda cada edição, com o cursor, é a ponte (lib/bridge.go),
+// que o acha pelo `⬡` do placeholder. O `onSubmit` nunca dispara (o hive.ui
+// não manda submit de um textarea): ele só dá ao editor o `data-h` com que o
+// hive.ui devolve o foco a um campo que ele trocou na página.
 func textEditor(t: theme.Theme, doc: model.Doc): hive.ui.View {
-	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text)], doc.text)
+	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text), ui.onSubmit(kept(_))], doc.text)
+}
+
+func kept(text: Str): model.Cmd {
+	return chrome("keep", "")
 }
 
 func editorMark(): Str {
@@ -1535,7 +1543,11 @@ func keyRow(state: model.State, t: theme.Theme, a: keys.Action): hive.ui.View {
 	if combo == "" {
 		shown = "—"
 	}
-	mut hive.ui.View[dyn] items = [ui.row([ui.width(320)], [label(t.text, tx(state, a.label))]), ui.row([ui.width(180)], [label(t.accent, shown)])]
+	if state.recording == a.id {
+		shown = tx(state, "pressione as teclas…")
+	}
+	mut hive.ui.View[dyn] items = [ui.row([ui.width(320)], [label(t.text, tx(state, a.label))]), ui.row([ui.width(180)], [label(t.accent, shown)]),
+		button(t, tx(state, "Gravar"), act("record", a.id), true)]
 	if !keys.isDefault(a.id, combo) {
 		append(items, small(t.muted, tx(state, "personalizado")))
 		append(items, button(t, tx(state, "Padrão"), act("resetKey", a.id), true))
@@ -1587,6 +1599,8 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 			check(state, t, "errorLens", "Mostrar erros e avisos na linha", prefs.errorLens)),
 		setting(t, tx(state, "Largura do tab"), tx(state, "Quantos espaços um tab ocupa na tela."),
 			ui.select([ui.onChoose(field("tabSize", _)), fill(t.input), tone(t.text)], ["2", "4", "8"], "{prefs.tabSize}")),
+		setting(t, tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
+			check(state, t, "vim", "Usar as teclas do Vim no editor", prefs.vim)),
 		section(t, tx(state, "Explorador")),
 		setting(t, tx(state, "Arquivos ocultos"), "", check(state, t, "showHidden", "Mostrar arquivos ocultos e artefatos de build", prefs.showHidden)),
 		section(t, tx(state, "Agentes")),
@@ -1602,7 +1616,7 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Compilador"), tx(state, "Caminho do hivec. A variável HIVEC, se existir, tem prioridade."),
 			inputField(t, [ui.onInput(field("compiler", _)), ui.placeholder("hivec")], prefs.compiler)),
 		section(t, tx(state, "Atalhos de teclado")),
-		small(t.muted, tx(state, "Os atalhos valem na janela própria do Hive Studio (studio.hive); a janela do hive.ui não recebe teclas.")),
+		small(t.muted, tx(state, "Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.")),
 		button(t, tx(state, "Restaurar todos os padrões"), act("resetKeys", ""), true)
 	]
 	for each row in keyRows {
@@ -1717,6 +1731,42 @@ func commitPage(state: model.State, t: theme.Theme, commit: git.Commit): hive.ui
 	return ui.column([ui.grow(1), ui.gap(12), ui.pad(20), fill(t.editor), ui.scroll(ui.Axis.Vertical())], page)
 }
 
+// A linha do Vim embaixo do editor: o modo, a macro sendo gravada, a última
+// mensagem e as teclas pendentes — ou, aberta, a linha de comando (`:`, `/`, `?`).
+func vimBar(state: model.State, t: theme.Theme): hive.ui.View {
+	v := state.vim
+	if !state.settings.vim || (!editorShown(state) && v.prompt == "") {
+		return ui.none()
+	}
+	if v.prompt != "" {
+		return ui.row([ui.gap(4), ui.pad(4), ui.align(ui.Align.Center()), fill(t.editor)], [
+			ui.text([tone(t.accent), ui.size(ui.TextSize.Subtitle())], v.prompt),
+			ui.column([ui.grow(1)], [
+				ui.input([ui.onInput(field("vimCommand", _)), ui.onSubmit(actText("vimSubmit", "", _)), ui.placeholder(vimMark()),
+					fill(t.editor), tone(t.text)], v.command)
+			])
+		])
+	}
+	mut hive.ui.View[dyn] items = []
+	label := vim.modeLabel(v)
+	if label != "" {
+		append(items, ui.text([tone(t.accent), ui.size(ui.TextSize.Caption())], tx(state, label)))
+	}
+	if v.recordingTo != "" {
+		append(items, small(t.danger, tx(state, "gravando") + " @" + v.recordingTo))
+	}
+	if v.message != "" {
+		mut color := t.text
+		if v.error {
+			color = t.danger
+		}
+		append(items, small(color, render.vimMessage(state)))
+	}
+	append(items, ui.spacer())
+	append(items, small(t.muted, join(v.pending, "")))
+	return ui.row([ui.gap(12), ui.pad(6), ui.align(ui.Align.Center()), fill(t.editor), ui.height(30)], items)
+}
+
 func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View {
 	layout := render.layoutOf(state)
 	mut body := welcome(state, t)
@@ -1732,7 +1782,8 @@ func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View
 		breadcrumb(state, t),
 		findBox(state, t),
 		body,
-		suggestions(state, t)
+		suggestions(state, t),
+		vimBar(state, t)
 	])
 }
 
@@ -1972,6 +2023,13 @@ func statusBar(state: model.State, t: theme.Theme): hive.ui.View {
 	if state.entrypoint != "" {
 		append(items, statusText(t, "▶ " + workspace.baseName(state.entrypoint)))
 	}
+	if state.settings.vim {
+		mut recording := ""
+		if state.vim.recordingTo != "" {
+			recording = " ● @" + state.vim.recordingTo
+		}
+		append(items, statusClick(t, "VIM " + render.vimModeText(state) + recording, action("toggleVim"), tx(state, "Modo Vim — clique para desligar")))
+	}
 	append(items, statusClick(t, "◐ " + t.name, act("settings", ""), tx(state, "Trocar tema")))
 	append(items, statusClick(t, "▭", act("togglePanel", ""), tx(state, "Painel") + render.keyHint(state, "togglePanel")))
 	return ui.row([ui.gap(14), ui.pad(4), ui.align(ui.Align.Center()), fill(t.statusBg)], items)
@@ -1988,6 +2046,15 @@ func question(state: model.State, t: theme.Theme, title: Str, detail: Str, butto
 }
 
 func overlays(state: model.State, t: theme.Theme): hive.ui.View {
+	if state.recording != "" {
+		mut name := state.recording
+		for each a in keys.actions() {
+			if a.id == state.recording {
+				name = tx(state, a.label)
+			}
+		}
+		return dialog(t, [strong(t.text, name), small(t.muted, tx(state, "Pressione a nova combinação de teclas. Esc cancela."))], act("escape", ""))
+	}
 	if state.about {
 		return dialog(t, [
 			ui.text([tone(t.accent), ui.size(ui.TextSize.Title())], "⬡"),
@@ -2112,6 +2179,31 @@ type BridgeState {
 	agentKeys:     Str[dyn]
 	termBg:        Str
 	termFg:        Str
+	vim:           Str
+	vimSerial:     Int
+	selStart:      Int
+	selEnd:        Int
+	vimScroll:     Int
+	vimAck:        Int
+	vimPh:         Str
+	textQuiet:     Bool
+}
+
+// O placeholder da linha de comando do Vim: invisível (U+2800), e é por ele
+// que a ponte a acha.
+func vimMark(): Str {
+	return "⠀"
+}
+
+// O editor de texto está à vista (e não só a vista realçada, nem outra tela).
+func editorShown(state: model.State): Bool {
+	if render.showsDoc(state) {
+		if render.activeDoc(state) is Result.Ok(doc) {
+			mode := modeOf(doc)
+			return mode == "edit" || mode == "split"
+		}
+	}
+	return false
 }
 
 func terminalHint(state: model.State): Str {
@@ -2135,6 +2227,8 @@ func focusPlaceholder(state: model.State): Str {
 		return editorMark()
 	} else if target == "agent" {
 		return "@agent"
+	} else if target == "vimCommand" {
+		return vimMark()
 	}
 	return ""
 }
@@ -2149,6 +2243,15 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 			from = matches[state.find.index]
 			to = from + len(state.find.text)
 		}
+	}
+	mut vimMode := ""
+	mut selStart := state.caret
+	mut selEnd := state.caret
+	if state.settings.vim && editorShown(state) {
+		vimMode = vim.modeName(state.vim)
+		span := vim.shown(render.searched(state), state.caret, state.vim)
+		selStart = span.from
+		selEnd = span.to
 	}
 	return BridgeState(
 		keys: keys.combos(state.settings.keymap),
@@ -2174,7 +2277,15 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		agentShown: render.agentShown(state),
 		agentKeys: render.agentKeys(state.settings.keymap),
 		termBg: t.panel,
-		termFg: t.text
+		termFg: t.text,
+		vim: vimMode,
+		vimSerial: state.vim.serial,
+		selStart: selStart,
+		selEnd: selEnd,
+		vimScroll: state.vim.scroll,
+		vimAck: state.vim.acked,
+		vimPh: vimMark(),
+		textQuiet: state.textSerial == state.quietSerial
 	)
 }
 
