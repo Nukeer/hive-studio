@@ -35,6 +35,9 @@ import ./markdown
 // e o `/pty`), que studioui.hive abre. `hl` é o realce do editor que a página
 // ainda não tem (`model.HlUpdate` em JSON: tudo, só as linhas que mudaram, ou
 // nada), e `hlPath`/`hlVersion` o documento e a versão a que ele leva.
+// `showText` diz se o editor leva o texto neste turno: só quando o serial do
+// texto muda (`textSerial` é o último que foi), porque a digitação a página já
+// tem — e um texto grande em todo turno pesa no diff do hive.ui.
 type Chrome {
 	menu:       Str
 	commit:     git.Commit
@@ -48,6 +51,8 @@ type Chrome {
 	hl:         Str
 	hlPath:     Str
 	hlVersion:  Int
+	textSerial: Int
+	showText:   Bool
 }
 
 func emptyCommit(): git.Commit {
@@ -56,7 +61,7 @@ func emptyCommit(): git.Commit {
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1)
+	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1, -1, false)
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -1437,8 +1442,12 @@ func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 // que o acha pelo `⬡` do placeholder. O `onSubmit` nunca dispara (o hive.ui
 // não manda submit de um textarea): ele só dá ao editor o `data-h` com que o
 // hive.ui devolve o foco a um campo que ele trocou na página.
-func textEditor(t: theme.Theme, doc: model.Doc): hive.ui.View {
-	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text), ui.onSubmit(kept(_))], doc.text)
+func textEditor(t: theme.Theme, doc: model.Doc, showText: Bool): hive.ui.View {
+	mut text := ""
+	if showText {
+		text = doc.text
+	}
+	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text), ui.onSubmit(kept(_))], text)
 }
 
 func kept(text: Str): model.Cmd {
@@ -1449,17 +1458,17 @@ func editorMark(): Str {
 	return "⬡"
 }
 
-func docBody(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): hive.ui.View {
+func docBody(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int, showText: Bool): hive.ui.View {
 	mode := modeOf(doc)
 	if mode == "preview" {
 		return previewOf(state, t, doc, asked)
 	} else if mode == "split" {
 		return ui.row([ui.grow(1), ui.gap(1), fill(t.border), ui.scroll(ui.Axis.Both())], [
-			ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc)]),
+			ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc, showText)]),
 			ui.column([ui.grow(1), ui.scroll(ui.Axis.Both())], [previewOf(state, t, doc, asked)])
 		])
 	}
-	return ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc)])
+	return ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc, showText)])
 }
 
 func welcome(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1764,7 +1773,7 @@ func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View
 	} else if layout == "commit" {
 		body = commitPage(state, t, extra.commit)
 	} else if render.activeDoc(state) is Result.Ok(doc) {
-		body = docBody(state, t, doc, extra.top)
+		body = docBody(state, t, doc, extra.top, extra.showText)
 	}
 	return ui.column([ui.grow(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
 		tabStrip(state, t),
@@ -2224,6 +2233,7 @@ type BridgeState {
 	vimPh:         Str
 	textQuiet:     Bool
 	numbers:       Bool
+	textShown:     Bool
 	syntax:        Syntax
 	lens:          model.LensMark[dyn]
 }
@@ -2326,6 +2336,7 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		vimPh: vimMark(),
 		textQuiet: state.textSerial == state.quietSerial,
 		numbers: state.settings.lineNumbers,
+		textShown: extra.showText,
 		syntax: syntaxOf(t),
 		lens: render.lensMarks(state)
 	)

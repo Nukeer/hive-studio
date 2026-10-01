@@ -81,7 +81,7 @@ const script = `<script>
     ptyPort: 0, ptyToken: "", agentSessions: [], agentShown: 0, agentKeys: [], termBg: "#16181d", termFg: "#d7dae0",
     vim: "", vimSerial: 0, selStart: 0, selEnd: 0, vimScroll: -1, vimAck: 0, vimPh: "", textQuiet: false };
   var vimSerial = -1, vimApplied = [0, 0], vimSent = 0, vimAck = 0, vimCaret = 0, composing = null;
-  var raw = null, applied = -1, focused = -1, copied = -1, found = -1;
+  var raw = null, applied = -1, focused = -1, copied = -1, found = -1, askedText = -1;
   var sent = null, allow = false, lastCaret = -1, caretTimer = 0;
   var nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
 
@@ -104,15 +104,25 @@ const script = `<script>
   // O editor só aceita o texto que o programa manda quando o serial dele
   // muda (abriu outro arquivo, um agente mudou o disco, aceitou uma sugestão):
   // um eco atrasado do que acabou de ser digitado não apaga o que veio depois.
+  // O editor só leva o texto no frame em que o serial muda; quando o hive.ui
+  // troca o nó dele por um novo (vazio), o texto que já estava volta.
+  var lastEditor = null;
   function guard(ta) {
     if (ta.__hive) { return; }
     ta.__hive = true;
+    var replaced = lastEditor !== null && sent !== null && applied === state.serial;
+    lastEditor = ta;
+    if (replaced) {
+      var keepFrom = lastCaret;
+      nativeValue.set.call(ta, sent);
+      try { ta.setSelectionRange(keepFrom, keepFrom); } catch (err) {}
+    }
     Object.defineProperty(ta, "value", {
       configurable: true,
       get: function () { return nativeValue.get.call(ta); },
       set: function (v) { if (allow) { nativeValue.set.call(ta, v); } }
     });
-    sent = nativeValue.get.call(ta);
+    if (!replaced) { sent = nativeValue.get.call(ta); }
   }
 
   function setText(ta, text) {
@@ -155,7 +165,10 @@ const script = `<script>
     vimAck = Math.max(vimAck, state.vimAck || 0);
     if (vimAck > vimSent) { vimSent = vimAck; }
     var textChanged = false;
-    if (ta && state.serial !== applied) {
+    if (ta && state.serial !== applied && !state.textShown) {
+      // O texto deste serial não veio neste frame (a página recarregou): pede.
+      if (askedText !== state.serial) { askedText = state.serial; post({ kind: "chrome", act: "text" }); }
+    } else if (ta && state.serial !== applied) {
       textChanged = true;
       applied = state.serial;
       if (state.textQuiet) {

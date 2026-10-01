@@ -265,8 +265,11 @@ A mesma IDE desenhada **só com os widgets do `hive.ui`**, sem
 
 ```
 hivec run studioui.hive [pasta]
-hivec build studioui.hive
+hivec build studioui.hive            # studioui.exe
 ```
+
+Os releases publicam os dois: `hive-studio-<os>-<arch>` (a janela própria) e
+`hive-studio-ui-<os>-<arch>` (a do `hive.ui`).
 
 A lógica é a do `studio.hive`, importado inteiro: o mesmo estado
 (`model.State`), a mesma dobra (`studio.step`) e a mesma tradução de eventos
@@ -336,9 +339,33 @@ O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
 traz de volta um evento no formato da página própria (`model.Event`), que
 `studio.toMsg` traduz como sempre.
 
-**`uiExtraScript` é um nome interno do `hivec` v0.2.9.** Um `hivec` que o
-renomeie faz o build falhar em `lib/bridge.go`, e não em silêncio; a versão do
-CI está fixada em `.github/hivec.txt`.
+O texto do editor só vai à página quando o programa o troca (outro arquivo,
+o Vim, o disco): a digitação a página já tem, e um arquivo grande em todo
+turno pesaria no diff do `hive.ui`. Medido com o Chromium headless, o realce
+de uma tecla chega em ~17 ms no `studio.hive` (2.900 linhas) e em ~44 ms no
+`lib/assets.hive` (8.000 linhas, 760 KB).
+
+**A ponte depende do `hivec` v0.2.9 por dentro**, e o risco é este:
+
+- `uiExtraScript` é um nome interno do runtime. Um `hivec` que o renomeie faz o
+  build falhar em `lib/bridge.go` — falha alto, não em silêncio.
+- O script conta com a página do `hive.ui` como ela é: a variável `sock`, o
+  `#root`, os `data-h` dos campos com evento e o jeito como o patch troca o
+  valor de um campo. Uma mudança nisso não quebra o build; quem pega são os
+  testes de ponta a ponta, que o CI roda a cada push:
+
+  ```
+  hivec build studioui.hive
+  node tools/e2e/run.mjs ./studioui.exe        # Node 22+, e Edge, Chrome ou Chromium
+  ```
+
+  Cada cenário (`editor`, `vim`, `mouse`, `agente`) abre o executável de
+  verdade num navegador headless, pela pasta de configurações e de projeto
+  temporárias, e diz PASS ou FAIL. `BROWSER` escolhe o navegador.
+- A versão do `hivec` do CI está fixada em `.github/hivec.txt`. Para subir de
+  versão: troque a fixação, rode `hivec check studioui.hive` e o
+  `tools/e2e`; se algo quebrar, o lugar a olhar é o runtime gerado em
+  `studioui.hive-build/hive/ui.go` (o `uiShell` e o `uiOpenWindow`).
 
 
 ## Releases

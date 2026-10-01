@@ -238,3 +238,18 @@ test "o realce vai inteiro ao abrir, só as linhas mudadas ao digitar, e nada qu
 		assert false
 	}
 }
+
+test "o editor só leva o texto quando o programa o troca, e de novo se a página pedir" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	assert win.extra.showText
+	assert uiview.bridgeState(win.core, win.extra).textShown
+	_typed := studioUi.update(win, uiview.edited("// a\n" + support.docText(win)), sink)
+	assert !win.extra.showText
+	assert !support.shows(win, "return n * 2")
+	_lost := studioUi.update(win, uiview.chrome("text", ""), sink)
+	assert win.extra.showText
+	assert support.shows(win, "return n * 2")
+}
