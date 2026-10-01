@@ -1504,6 +1504,8 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Salvar antes de rodar"), "", check(state, t, "saveBeforeRun", "Salvar arquivos antes de Check, Run, Test e Build", prefs.saveBeforeRun)),
 		setting(t, tx(state, "Compilador"), tx(state, "Caminho do hivec. A variável HIVEC, se existir, tem prioridade."),
 			inputField(t, [ui.onInput(field("compiler", _)), ui.placeholder("hivec")], prefs.compiler)),
+		setting(t, tx(state, "Navegador da janela"), tx(state, "Executável Chromium (Edge, Chrome, Brave) usado para a janela. Vazio = automático. Vale na próxima abertura."),
+			inputField(t, [ui.onInput(field("browser", _)), ui.placeholder(tx(state, "automático"))], prefs.browser)),
 		section(t, tx(state, "Atalhos de teclado")),
 		small(t.muted, tx(state, "Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.")),
 		button(t, tx(state, "Restaurar todos os padrões"), act("resetKeys", ""), true)
@@ -2027,6 +2029,7 @@ type BridgeState {
 	marks:         Int[dyn]
 	markLength:    Int
 	markCurrent:   Int
+	title:         Str
 	selected:      Str
 	context:       Str
 	hoverCaret:    Int
@@ -2053,6 +2056,18 @@ func editorShown(state: model.State): Bool {
 		}
 	}
 	return false
+}
+
+// O título da janela, como o da janela própria: "● nome — pasta — Hive Studio".
+func windowTitle(state: model.State): Str {
+	if render.activeDoc(state) is Result.Ok(doc) {
+		mut mark := ""
+		if model.dirty(doc) {
+			mark = "● "
+		}
+		return mark + doc.name + " — " + workspace.baseName(state.root) + " — Hive Studio"
+	}
+	return "Hive Studio"
 }
 
 func terminalHint(state: model.State): Str {
@@ -2161,6 +2176,7 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		marks: marks,
 		markLength: markLength,
 		markCurrent: markCurrent,
+		title: windowTitle(state),
 		selected: state.selected,
 		context: state.context.path,
 		hoverCaret: extra.hoverCaret,

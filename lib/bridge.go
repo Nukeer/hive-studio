@@ -28,6 +28,15 @@
 package bridge
 
 import (
+	"bufio"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	_ "unsafe"
 
 	_ "hiveapp/hive"
@@ -43,6 +52,65 @@ func init() {
 // Installed diz se a ponte entrou na página.
 func Installed() bool {
 	return extraScript != ""
+}
+
+// UseBrowser faz a janela abrir no navegador `browser` (o das Configurações),
+// e não no que o hive.ui acharia sozinho. O hive.ui só sabe escolher o dele
+// ou imprimir o endereço (HIVE_WINDOW=print); então a ponte pede o endereço,
+// lê a própria saída do programa e abre a janela com os mesmos argumentos que
+// o hive.ui usaria — modo aplicativo, perfil próprio. O resto da saída segue
+// para onde ia. false quando não há o que fazer (navegador vazio ou
+// inexistente, ou alguém já pediu o endereço impresso).
+func UseBrowser(browser string) bool {
+	if browser == "" || os.Getenv("HIVE_WINDOW") == "print" {
+		return false
+	}
+	path, err := exec.LookPath(browser)
+	if err != nil {
+		return false
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return false
+	}
+	real := os.Stdout
+	os.Stdout = writer
+	os.Setenv("HIVE_WINDOW", "print")
+	go func() {
+		lines := bufio.NewScanner(reader)
+		for lines.Scan() {
+			line := lines.Text()
+			if url, ok := strings.CutPrefix(line, "hive-window "); ok {
+				os.Stdout = real
+				exec.Command(path, appArguments(url, browser)...).Start()
+				io.Copy(real, reader)
+				return
+			}
+			fmt.Fprintln(real, line)
+		}
+	}()
+	return true
+}
+
+// Os argumentos com que o hive.ui abre a janela, com um perfil próprio por
+// programa e por navegador (perfis de navegadores diferentes não se misturam).
+func appArguments(url string, browser string) []string {
+	arguments := []string{"--app=" + url, "--window-size=1100,780", "--no-first-run", "--no-default-browser-check"}
+	root, err := os.UserCacheDir()
+	if err != nil {
+		root = os.TempDir()
+	}
+	sum := fnv.New32a()
+	if exe, err := os.Executable(); err == nil {
+		sum.Write([]byte(exe))
+	}
+	sum.Write([]byte(browser))
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(os.Args[0])), ".exe")
+	dir := filepath.Join(root, "hive", "windows", name+"-"+strconv.FormatUint(uint64(sum.Sum32()), 16))
+	if os.MkdirAll(dir, 0o700) == nil {
+		arguments = append(arguments, "--user-data-dir="+dir)
+	}
+	return arguments
 }
 
 const style = `<style>
@@ -237,6 +305,7 @@ const script = `<script>
     try { state = JSON.parse(raw); } catch (err) { return; }
     syntaxColors();
     applyTheme();
+    if (state.title && document.title !== state.title) { document.title = state.title; }
     document.documentElement.style.setProperty("--hive-tab", String(state.tab || 4));
     document.documentElement.style.setProperty("--hive-font-size", (state.fontSize || 13) + "px");
     vimAck = Math.max(vimAck, state.vimAck || 0);
@@ -368,6 +437,14 @@ const script = `<script>
       }
     }, 120);
   }
+
+  // O ícone da janela é o da página própria: o hexágono do Hive Studio.
+  (function () {
+    var link = document.querySelector('link[rel="icon"]') || document.head.appendChild(document.createElement("link"));
+    link.rel = "icon";
+    link.type = "image/svg+xml";
+    link.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z' fill='%23f5a623'/%3E%3Cpath d='M16 10 21.2 13v6L16 22l-5.2-3v-6z' fill='%231b1d23' opacity='.82'/%3E%3C/svg%3E";
+  })();
 
   // ── o preview, a árvore do JSON e a aba de commit ──
   // O HTML é o da página própria (doc.view, commit.html), mostrado numa camada

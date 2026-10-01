@@ -228,5 +228,7 @@ proc main(): void {
 	}
 	mut start := initial(folder)
 	servePty(start)
+	// O navegador das Configurações, quando há um: a ponte abre a janela nele.
+	_chosen := bridge.useBrowser(start.core.settings.browser)
 	ui.windowAddressed("Hive Studio", view, update, start)
 }

@@ -339,6 +339,12 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   widgets do `hive.ui` (botões, campos, diálogos) passam a usá-las, nos temas
   claros inclusive;
 - a Saída e o Terminal acompanham o fim quando chega texto novo;
+- **a janela**: o título diz o arquivo e a pasta ("● nome — pasta — Hive
+  Studio"), o ícone é o hexágono da janela própria, e o **Navegador da
+  janela** das Configurações vale — o `hive.ui` só sabe escolher o dele ou
+  imprimir o endereço (`HIVE_WINDOW=print`), então a ponte pede o endereço, lê
+  a própria saída do programa e abre a janela no navegador escolhido, com os
+  mesmos argumentos (modo aplicativo, perfil próprio);
 - **o editor como na janela própria**: Ctrl+passar o mouse sublinha o nome
   que tem para onde ir e Ctrl+clique vai até lá; as sugestões abrem junto do
   cursor; as ocorrências da busca (e da busca do Vim) ficam destacadas no

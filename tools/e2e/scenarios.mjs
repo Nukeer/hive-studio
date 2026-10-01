@@ -171,6 +171,18 @@ export const scenarios = [
     },
   },
   {
+    name: "janela",
+    files: { "a.hive": small },
+    async run(page, { project, check }) {
+      check("o ícone é o do Hive Studio", await page.waitFor(`(document.querySelector('link[rel="icon"]')||{}).href.indexOf("data:image/svg+xml") === 0`));
+      await open(page, project, "a.hive");
+      const folder = project.split("/").pop();
+      check("o título diz o arquivo e a pasta", await page.waitFor(`document.title === ${JSON.stringify("a.hive — " + folder + " — Hive Studio")}`));
+      await page.insertText("x");
+      check("e marca o arquivo alterado", await page.waitFor(`document.title === ${JSON.stringify("● a.hive — " + folder + " — Hive Studio")}`));
+    },
+  },
+  {
     name: "grande",
     files: { "g.hive": Array.from({ length: 3000 }, (_, i) => `func f${i}(n: Int): Int {\n\treturn n + ${i}\n}`).join("\n") + "\n" },
     async run(page, { project, check }) {
