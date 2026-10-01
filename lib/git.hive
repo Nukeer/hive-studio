@@ -401,12 +401,12 @@ proc discard(info: model.GitInfo, path: Str): process.Output {
 
 // Commit, push e pull podem demorar (hooks, rede), então rodam numa thread e
 // respondem com `GitDone`.
-proc runAsync(db: hive.syslink.Address, directory: Str, label: Str, arguments: Str[dyn]): void {
+proc runAsync(db: Address, directory: Str, label: Str, arguments: Str[dyn]): void {
 	result := process.run("git", arguments, directory)
 	async db(model.Cmd.Post(model.Msg.GitDone(label, result.text, result.code == 0)))
 }
 
-proc commitAsync(db: hive.syslink.Address, directory: Str, message: Str, everything: Bool): void {
+proc commitAsync(db: Address, directory: Str, message: Str, everything: Bool): void {
 	if everything {
 		added := process.run("git", ["add", "-A"], directory)
 		if added.code != 0 {

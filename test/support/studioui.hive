@@ -81,3 +81,13 @@ func paneHtml(win: studioUi.Win): Str {
 	}
 	return ""
 }
+
+// O endereço de um serviço que acabou de começar (spawn responde com um
+// Result); um teste que não consegue nem começar o serviço falha aqui.
+func started(spawned: Result<Address, hive.syslink.SyslinkError>): Address {
+	if spawned is Result.Ok(address) {
+		return address
+	} else if spawned is Result.Error(why) {
+		panic "o serviço não começou: " + why.message
+	}
+}

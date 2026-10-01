@@ -84,7 +84,7 @@ test "a visualização fica guardada: o frame só a manda quando muda, e ela é 
 	}
 	mut opened := support.fresh(folder)
 	studio.openDoc(opened, folder + "/dados.json")
-	db := hive.syslink.spawnAddressed(studio.serve, opened)
+	db := support.started(spawn(studio.serve, opened))
 	first := support.answer(db, support.event("hello", "", "", "", 0))
 	assert indexOf(support.regionOf(first, "preview"), "<span class=\"jk\">&quot;a&quot;</span>") is Result.Ok(_)
 	quiet := support.answer(db, support.event("caret", "", "", "", 1))
@@ -357,7 +357,7 @@ test "o frame só leva o texto e o realce que a página ainda não tem" {
 	folder := support.scratch()
 	mut opened := support.fresh(folder)
 	studio.openDoc(opened, folder + "/main.hive")
-	db := hive.syslink.spawnAddressed(studio.serve, opened)
+	db := support.started(spawn(studio.serve, opened))
 	first := support.answer(db, support.event("hello", "", "", "", 0))
 	assert first.hasText && first.text == "proc main(): void \{\n\techo 1\n}\n"
 	assert first.hl.mode == "full" && len(first.hl.lines) == 4 && first.lineCount == 4
@@ -378,7 +378,7 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 	mut start := support.fresh(folder)
 	start.settings.vim = true
 	studio.openDoc(start, folder + "/main.hive")
-	db := hive.syslink.spawnAddressed(studio.serve, start)
+	db := support.started(spawn(studio.serve, start))
 
 	first := support.vimKeys(db, "")
 	assert first.vim == "normal"
@@ -497,7 +497,7 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	mut start := support.fresh(folder)
 	start.settings.vim = true
 	studio.openDoc(start, folder + "/lib/util.hive")
-	db := hive.syslink.spawnAddressed(studio.serve, start)
+	db := support.started(spawn(studio.serve, start))
 
 	// O explorador começa aberto: `:Ex` o fecha e deixa o foco no código.
 	_toClose := support.vimKeys(db, ":")
@@ -578,7 +578,7 @@ test "sem o modo Vim, as setas andam no explorador mas j e k não" {
 	folder := support.explorerFolder("explorer-plain-test")
 	mut start := support.fresh(folder)
 	start.selected = folder + "/lib"
-	db := hive.syslink.spawnAddressed(studio.serve, start)
+	db := support.started(spawn(studio.serve, start))
 	assert support.selectedName(support.treeKeys(db, "")) == "lib"
 	assert support.selectedName(support.treeKeys(db, "j")) == "lib"
 	assert support.selectedName(support.treeKeys(db, "<Down>")) == "LEIAME.md"
@@ -594,7 +594,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	start.settings.claudeCommand = "sh"
 	start.settings.codexCommand = "programa-que-nao-existe-hive --flag"
 	studio.openDoc(start, folder + "/main.hive")
-	db := hive.syslink.spawnAddressed(studio.serve, start)
+	db := support.started(spawn(studio.serve, start))
 
 	opened := support.ask(db, support.event("act", "agent", "claude", "", 0))
 	session := opened.agentShown
@@ -656,7 +656,7 @@ test "a busca de TODO lê o disco, e um documento não salvo entra com o texto d
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
 	studio.withText(state, "// TODO: não salvo\n")
-	db := hive.syslink.spawnAddressed(studio.serve, support.fresh(folder))
+	db := support.started(spawn(studio.serve, support.fresh(folder)))
 	disk := [model.Todo(folder + "/LEIAME.md", 1, 5, "TODO", "do disco")]
 	studio.update(state, model.Msg.TodosFound(disk), db)
 	assert state.todoScanned && !state.todoScanning
@@ -675,7 +675,7 @@ test "a busca de TODO lê o disco, e um documento não salvo entra com o texto d
 
 test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou cancelar" {
 	folder := support.explorerFolder("close-test")
-	db := hive.syslink.spawnAddressed(studio.serve, support.fresh(folder))
+	db := support.started(spawn(studio.serve, support.fresh(folder)))
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
 	studio.update(state, model.Msg.CloseDoc(0), db)
@@ -716,7 +716,7 @@ test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto
 	if hive.file.write(folder + "/lib/util.hive", "\n") is Result.Error(why) {
 		panic why
 	}
-	db := hive.syslink.spawnAddressed(studio.serve, support.fresh(folder))
+	db := support.started(spawn(studio.serve, support.fresh(folder)))
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/LEIAME.md")
 	studio.update(state, model.Msg.AskRemove(folder + "/LEIAME.md"), db)
@@ -750,7 +750,7 @@ test "o botão direito no explorador abre o menu do arquivo, e renomear leva jun
 	if hive.file.write(folder + "/lib/util.hive", "func um(): Int \{\n\treturn 1\n}\n") is Result.Error(why) {
 		panic why
 	}
-	db := hive.syslink.spawnAddressed(studio.serve, support.fresh(folder))
+	db := support.started(spawn(studio.serve, support.fresh(folder)))
 	mut state := support.fresh(folder)
 	studio.update(state, model.Msg.OpenContext(folder + "/main.hive", 40, 60), db)
 	assert state.selected == folder + "/main.hive"
@@ -945,7 +945,7 @@ test "sem o modo Vim, as teclas do Vim não fazem nada e o frame não mostra a b
 	folder := support.scratch()
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
-	db := hive.syslink.spawnAddressed(studio.serve, state)
+	db := support.started(spawn(studio.serve, state))
 	frame := support.vimKeys(db, "dd")
 	assert frame.vim == ""
 	assert support.regionOf(frame, "vimbar") == ""

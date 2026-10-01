@@ -60,7 +60,7 @@ proc pick(mode: Str, start: Str, title: Str): Result<Str, Str> {
 }
 
 // O diálogo espera a pessoa, então roda numa thread e responde com `Picked`.
-proc pickAsync(db: hive.syslink.Address, mode: Str, start: Str, title: Str): void {
+proc pickAsync(db: Address, mode: Str, start: Str, title: Str): void {
 	chosen := pick(mode, start, title)
 	if chosen is Result.Ok(path) {
 		async db(model.Cmd.Post(model.Msg.Picked(mode, path)))

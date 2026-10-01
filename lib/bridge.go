@@ -4,7 +4,7 @@
 // O hive.ui não aceita script nem folha de estilo próprios; esta ponte põe os
 // dois na página pela variável que o runtime do hive.ui já tem para isso
 // (`uiExtraScript`, onde a `scene` põe o dela), alcançada por `go:linkname`.
-// É um nome interno do hivec v0.2.9: um hivec que o renomeie faz o build
+// É um nome interno do hivec (conferido no v0.2.11): um hivec que o renomeie faz o build
 // falhar aqui, e não em silêncio.
 //
 // O protocolo são dois campos escondidos que lib/uiview.hive desenha:

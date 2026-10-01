@@ -23,7 +23,7 @@ type TextEdit {
 
 func builtins(): Str[dyn] {
 	return ["len", "bytes", "append", "prepend", "drop", "join", "split", "replaceFirst", "replaceAll",
-		"indexOf", "row", "column", "toTable", "map", "filter", "filterMap", "sort", "encode"]
+		"indexOf", "row", "column", "toTable", "map", "filter", "filterMap", "sort", "encode", "spawn", "at", "kill"]
 }
 
 func modules(): Str[dyn] {
@@ -42,7 +42,7 @@ func members(module: Str): Str[dyn] {
 	} else if module == "term" {
 		return ["print", "status", "isTerminal", "read", "readSecret", "args", "codec", "exit", "exec", "attach", "execWith", "ExecError", "FlagError"]
 	} else if module == "json" {
-		return ["codec", "flatten", "get", "table", "JsonError"]
+		return ["codec", "JsonValue", "JsonError"]
 	} else if module == "crypto" {
 		return ["sha256", "sha512", "hmacSha256", "encrypt", "decrypt", "base64Encode", "base64Decode", "randomHex", "jwtCodec", "jwtDecode", "jwtHeader", "CryptoError", "JwtError"]
 	} else if module == "net" {
@@ -50,9 +50,9 @@ func members(module: Str): Str[dyn] {
 			"socketConnect", "socketServe", "socketSend", "socketReceive", "socketReceiveLine", "socketPeer", "socketClose",
 			"resolve", "localAddress", "urlEncode", "queryParamsCodec", "HttpRequest", "HttpResponse", "HttpError", "WsConnection", "WsError"]
 	} else if module == "syslink" {
-		return ["spawn", "spawnAddressed", "register", "at", "on", "monitor", "stop", "listen", "node", "peers", "Address", "SyslinkError"]
+		return ["monitor", "listen", "node", "peers", "setKey", "SyslinkError"]
 	} else if module == "task" {
-		return ["sleep", "TimeoutError"]
+		return ["sleep", "sleepForever", "TimeoutError"]
 	} else if module == "time" {
 		return ["now", "timezone", "timezoneOffset", "format", "dateFrom", "dateTimeFrom", "year", "month", "day", "weekday", "lastDayOfMonth", "hour", "minute", "second", "millisecond"]
 	} else if module == "env" {
@@ -60,7 +60,7 @@ func members(module: Str): Str[dyn] {
 	} else if module == "sql" {
 		return ["run", "raw", "connect", "pool", "close", "DatabaseDriver", "SqlConnection", "SqlError", "Fragment"]
 	} else if module == "ui" {
-		return ["window", "html", "page", "row", "column", "spacer", "spinner", "none", "overlay", "text", "image", "link", "icon",
+		return ["window", "webview", "html", "page", "row", "column", "spacer", "spinner", "none", "overlay", "text", "image", "link", "icon",
 			"button", "input", "textarea", "checkbox", "select", "table", "canvas", "scene", "inset",
 			"gap", "pad", "width", "height", "grow", "align", "justify", "scroll", "size", "heading", "tone", "background", "paint",
 			"on", "onInput", "onSubmit", "onChoose", "onToggle", "onPick", "onSort", "View", "Tone", "Align", "Justify", "TextSize", "Axis", "Icon"]

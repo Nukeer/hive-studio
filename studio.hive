@@ -57,7 +57,7 @@ proc withFocus(state: mut model.State, target: Str): void {
 // ── terminal ─────────────────────────────────────────────────────────────
 
 // Lê o shell aos pedaços e entrega à janela até ele terminar.
-proc watchTerminal(db: hive.syslink.Address, session: Int): void {
+proc watchTerminal(db: Address, session: Int): void {
 	for ;; {
 		text := native.read(session)
 		if text != "" {
@@ -76,7 +76,7 @@ proc watchTerminal(db: hive.syslink.Address, session: Int): void {
 }
 
 // Abre o shell se ainda não houver um vivo.
-proc ensureTerminal(state: mut model.State, from: hive.syslink.Address): void {
+proc ensureTerminal(state: mut model.State, from: Address): void {
 	if state.term.session != 0 && native.alive(state.term.session) {
 		return
 	}
@@ -293,7 +293,7 @@ proc watchFolders(state: mut model.State): void {
 
 // Espera o disco mudar e avisa a janela na hora. Sem aviso (uma pasta de rede,
 // o WSL), relê mesmo assim a cada três segundos.
-proc watchDocs(db: hive.syslink.Address): void {
+proc watchDocs(db: Address): void {
 	mut idle := 0
 	for ;; {
 		changed := watch.wait(1000)
@@ -499,7 +499,7 @@ func within(path: Str, target: Str): Bool {
 }
 
 // Um item do menu do botão direito do explorador.
-proc contextAction(state: mut model.State, action: Str, path: Str, from: hive.syslink.Address): void {
+proc contextAction(state: mut model.State, action: Str, path: Str, from: Address): void {
 	folder := render.isFolder(state, path)
 	mut here := path
 	if !folder {
@@ -810,7 +810,7 @@ proc toggleSetting(state: mut model.State, name: Str): void {
 // ── Error Lens ───────────────────────────────────────────────────────────
 
 // Pede um check para quando a digitação parar (o último pedido vence).
-proc lensSoon(state: mut model.State, from: hive.syslink.Address): void {
+proc lensSoon(state: mut model.State, from: Address): void {
 	if (!state.settings.errorLens || render.targetOf(state) == "") && !state.todoScanned && !model.hasPreview(render.activePath(state)) {
 		return
 	}
@@ -818,7 +818,7 @@ proc lensSoon(state: mut model.State, from: hive.syslink.Address): void {
 	async toolchain.lensTimer(from, state.lensDue)
 }
 
-proc startLens(state: mut model.State, from: hive.syslink.Address): void {
+proc startLens(state: mut model.State, from: Address): void {
 	target := render.targetOf(state)
 	if target == "" {
 		return
@@ -862,7 +862,7 @@ func bigView(): Int {
 
 // Um arquivo grande tem a visualização feita numa thread própria: a janela
 // continua respondendo, e o resultado chega em `ViewReady`.
-proc viewWorker(window: hive.syslink.Address, path: Str, version: Int, text: Str, labels: jsonview.Labels): void {
+proc viewWorker(window: Address, path: Str, version: Int, text: Str, labels: jsonview.Labels): void {
 	done := renderView(path, text, labels)
 	async window(model.Cmd.Post(model.Msg.ViewReady(path, version, done.view, done.problem)))
 }
@@ -870,7 +870,7 @@ proc viewWorker(window: hive.syslink.Address, path: Str, version: Int, text: Str
 // Refaz a visualização guardada do documento à vista, se o texto mudou desde
 // a última: o preview do Markdown (quando está à vista) e, num JSON, a árvore
 // e o erro — este também no modo Editor, para o Error Lens.
-proc refreshView(state: mut model.State, from: hive.syslink.Address): void {
+proc refreshView(state: mut model.State, from: Address): void {
 	index := state.active
 	mut found := false
 	mut doc := model.newDoc("", "", "", "\n", "edit")
@@ -917,7 +917,7 @@ proc withView(state: mut model.State, path: Str, version: Int, done: Rendered): 
 
 // Procura os TODO da pasta no disco, numa thread própria; a lista chega em
 // `TodosFound`, onde os documentos não salvos entram com o texto do editor.
-proc scanTodos(state: mut model.State, from: hive.syslink.Address): void {
+proc scanTodos(state: mut model.State, from: Address): void {
 	if state.todoScanning {
 		return
 	}
@@ -1142,7 +1142,7 @@ proc vimEditor(state: mut model.State, caret: Int, view: Str): vim.Editor {
 
 // Leva o que o motor devolveu ao documento ativo e despacha os efeitos
 // (salvar, fechar, abrir…) como mensagens comuns.
-proc vimApply(state: mut model.State, out: mut vim.Editor, from: hive.syslink.Address): void {
+proc vimApply(state: mut model.State, out: mut vim.Editor, from: Address): void {
 	// O que o Vim era antes desta tecla, para comparar no fim.
 	wasPrompt := state.vim.prompt
 	wasCommand := state.vim.command
@@ -1261,7 +1261,7 @@ proc vimEdit(state: mut model.State, path: Str): void {
 
 // As mensagens do modo Vim e do explorador pelo teclado; `false` quando a
 // mensagem não é daqui.
-proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Address): Bool {
+proc updateVim(state: mut model.State, message: model.Msg, from: Address): Bool {
 	if message is model.Msg.VimKey(key, caret, view) {
 		state.vim.acked = state.vim.acked + 1
 		if !vimActive(state) {
@@ -1344,7 +1344,7 @@ proc updateVim(state: mut model.State, message: model.Msg, from: hive.syslink.Ad
 // ── agentes: Claude Code, Codex e OpenCode ───────────────────────────────
 
 // Espera o agente terminar e avisa a janela.
-proc watchAgent(db: hive.syslink.Address, session: Int): void {
+proc watchAgent(db: Address, session: Int): void {
 	for ;; {
 		if !pty.alive(session) {
 			break
@@ -1377,7 +1377,7 @@ proc withAgent(state: mut model.State, session: model.AgentSession): void {
 }
 
 // Abre o agente na pasta aberta: o programa do próprio usuário, num terminal de verdade.
-proc launchAgent(state: mut model.State, agent: Str, from: hive.syslink.Address): void {
+proc launchAgent(state: mut model.State, agent: Str, from: Address): void {
 	started := agents.start(state.settings, agent, state.root)
 	if started is Result.Ok(session) {
 		async watchAgent(from, session)
@@ -1392,7 +1392,7 @@ func showingAgent(state: model.State): Bool {
 }
 
 // As mensagens do painel AGENTE; `false` quando a mensagem não é daqui.
-proc updateAgents(state: mut model.State, message: model.Msg, from: hive.syslink.Address): Bool {
+proc updateAgents(state: mut model.State, message: model.Msg, from: Address): Bool {
 	if message is model.Msg.ShowAgent(agent) {
 		mut chosen := agent
 		if !agents.isAgent(chosen) {
@@ -1635,7 +1635,7 @@ proc treeKey(state: mut model.State, key: Str): void {
 
 // Painel, terminal, git e navegação: separados da dobra principal para cada
 // proc continuar pequeno. `false` quando a mensagem não é daqui.
-proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.Address): Bool {
+proc updateTools(state: mut model.State, message: model.Msg, from: Address): Bool {
 	mut prefs := state.settings
 	if message is model.Msg.TogglePanelMax {
 		state.panelMax = !state.panelMax
@@ -1945,7 +1945,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: hive.syslink.
 	return true
 }
 
-proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Address): void {
+proc update(state: mut model.State, message: model.Msg, from: Address): void {
 	if updateTools(state, message, from) || updateVim(state, message, from) || updateAgents(state, message, from) {
 		return
 	}
@@ -2277,7 +2277,7 @@ proc update(state: mut model.State, message: model.Msg, from: hive.syslink.Addre
 
 // Um passo da dobra. Quando o documento ativo muda, a página precisa receber
 // o texto novo: é o `textSerial` que avisa.
-proc step(state: mut model.State, message: model.Msg, from: hive.syslink.Address): void {
+proc step(state: mut model.State, message: model.Msg, from: Address): void {
 	// O que precisa ser comparado depois: só isto, e não o estado inteiro.
 	wasPath := render.activePath(state)
 	wasText := activeText(state)
@@ -2764,7 +2764,7 @@ proc toMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> 
 // Um turno do serviço: o estado é escrito no lugar, e o que o turno devolve é
 // a resposta de quem perguntou. `from` é o endereço do próprio serviço, para o
 // trabalho que ele começa em outra thread mandar o resultado de volta.
-proc serve(state: mut model.State, command: model.Cmd, from: hive.syslink.Address): model.Cmd {
+proc serve(state: mut model.State, command: model.Cmd, from: Address): model.Cmd {
 	if command is model.Cmd.Ui(text) {
 		decoded := model.Event.decode(text, hive.json.codec())
 		if decoded is Result.Ok(hovered) {
@@ -2862,7 +2862,7 @@ proc quitSoon(): void {
 }
 
 // Relê o git de tempos em tempos, para mudanças feitas fora do Hive Studio.
-proc watchGit(db: hive.syslink.Address): void {
+proc watchGit(db: Address): void {
 	for ;; {
 		server.pause(4000)
 		async db(model.Cmd.Post(model.Msg.GitPoll()))
@@ -2892,8 +2892,16 @@ proc main(): void {
 	mut start := model.initial(folder, prefs)
 	openRoot(start, folder)
 	watchFolders(start)
-	db := hive.syslink.spawnAddressed(serve, start)
+	spawned := spawn(serve, start)
+	if spawned is Result.Ok(db) {
+		open(db, prefs)
+	} else if spawned is Result.Error(why) {
+		panic "o serviço do Hive Studio não começou: " + why.message
+	}
+}
 
+// A página, o WebSocket e a janela, ligados ao serviço do estado em `db`.
+proc open(db: Address, prefs: settings.Settings): void {
 	token := hive.crypto.randomHex(16)
 	port := server.freePort()
 	async hive.net.httpServe(port, server.page(token, port + 1, _))
@@ -2905,7 +2913,7 @@ proc main(): void {
 	if browser == "" {
 		// Sem Chromium conhecido: a janela do próprio hive.ui (que cai numa aba
 		// do navegador padrão) mostra o endereço da IDE.
-		ui.window("Hive Studio", fallbackView, fallbackUpdate, url)
+		_fallback := spawn(ui.window("Hive Studio", fallbackView, fallbackUpdate), url)
 	}
 	hive.term.status("Hive Studio em {url} ({browser})")
 	async watchGit(db)

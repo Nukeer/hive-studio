@@ -61,7 +61,7 @@ func hasRegion(frame: model.Frame, id: Str): Bool {
 }
 
 // Manda um evento ao serviço, como a página faz, e lê o frame que volta.
-proc answer(db: hive.syslink.Address, sent: model.Event): model.Frame {
+proc answer(db: Address, sent: model.Event): model.Frame {
 	answered := db(model.Cmd.Ui(encode(sent, hive.json.codec())))
 	if answered is Result.Ok(reply) {
 		if reply is model.Cmd.Reply(text) {
@@ -76,7 +76,7 @@ proc answer(db: hive.syslink.Address, sent: model.Event): model.Frame {
 // O frame depois de `sent`, sempre com o texto: quando nada mudou o frame não
 // o traz (a página já tem), e aqui ele é pedido de novo, como a página faria
 // se o tivesse perdido.
-proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
+proc ask(db: Address, sent: model.Event): model.Frame {
 	frame := answer(db, sent)
 	if frame.hasText {
 		return frame
@@ -85,7 +85,7 @@ proc ask(db: hive.syslink.Address, sent: model.Event): model.Frame {
 }
 
 // Teclas do Vim, uma por evento, como a página manda.
-proc vimKeys(db: hive.syslink.Address, keys: Str): model.Frame {
+proc vimKeys(db: Address, keys: Str): model.Frame {
 	mut frame := ask(db, event("hello", "", "", "", 0))
 	for each key in vim.tokens(keys) {
 		frame = ask(db, event("vim", "", "0 30", key, -1))
@@ -129,7 +129,7 @@ func selectedName(frame: model.Frame): Str {
 	return ""
 }
 
-proc treeKeys(db: hive.syslink.Address, keys: Str): model.Frame {
+proc treeKeys(db: Address, keys: Str): model.Frame {
 	mut frame := ask(db, event("hello", "", "", "", 0))
 	for each key in vim.tokens(keys) {
 		frame = ask(db, event("tree", "", "", key, 0))
@@ -139,4 +139,14 @@ proc treeKeys(db: hive.syslink.Address, keys: Str): model.Frame {
 
 func rowName(row: model.TreeRow): Str {
 	return row.entry.name
+}
+
+// O endereço de um serviço que acabou de começar (spawn responde com um
+// Result); um teste que não consegue nem começar o serviço falha aqui.
+func started(spawned: Result<Address, hive.syslink.SyslinkError>): Address {
+	if spawned is Result.Ok(address) {
+		return address
+	} else if spawned is Result.Error(why) {
+		panic "o serviço não começou: " + why.message
+	}
 }

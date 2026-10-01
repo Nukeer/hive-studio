@@ -4,7 +4,7 @@ Uma IDE para [Hive](https://hive-lang.run), escrita em Hive.
 A janela é um Chromium (Edge, Chrome, Brave) em modo aplicativo, com perfil
 próprio — o "webview" — e toda a lógica roda no programa Hive.
 
-Precisa do `hivec` v0.2.9 ou mais novo.
+Precisa do `hivec` v0.2.11 ou mais novo.
 
 ```
 hivec run studio.hive [pasta]      # abre a pasta (padrão: a atual)
@@ -249,12 +249,11 @@ hivec test test/vim.test.hive        # só um arquivo
 
 - Um arquivo de teste novo entra em `test/suite.hive`:
   `import ./<arquivo>.test as <arquivo>Test` (o nome com ponto precisa do `as`).
-- **Um `.test.hive` só tem `import` e `test`.** O `hivec` v0.2.9 gera Go
-  inválido para uma `func`, `proc` ou `type` declarada num módulo com ponto no
-  nome (`vim.test_12_feed`), então o que os testes compartilham vai para
-  `test/support/<arquivo>.hive`, importado `as support`.
-- Pelo mesmo motivo, o nome de um arquivo importado não pode ter `-`
-  (`studio-ui_11_Problem`); daí `studioui.hive`.
+- O que os testes de um arquivo compartilham fica em
+  `test/support/<arquivo>.hive`, importado `as support`, e o `.test.hive` só
+  tem `import` e `test`. (Até o `hivec` v0.2.9 era obrigatório: uma `func`
+  num módulo com ponto ou hífen no nome virava Go inválido. O v0.2.10
+  corrigiu; a separação ficou como convenção.)
 - O teste roda na pasta do projeto gerado (`test/suite.hive-build/`), não em
   `test/`: quem precisa de arquivos os cria numa pasta própria.
 
@@ -267,6 +266,11 @@ A mesma IDE desenhada **só com os widgets do `hive.ui`**, sem
 hivec run studioui.hive [pasta]
 hivec build studioui.hive            # studioui.exe
 ```
+
+A janela é aberta com `ui.webview`, que é sempre uma página. A janela nativa
+do `hive.ui` (v0.2.11, no Windows e no Linux, sem navegador) desenha os mesmos
+widgets mas não tem página, e é na página que a ponte (`lib/bridge.go`) põe o
+teclado, o cursor, o editor colorido, o terminal dos agentes e o preview.
 
 Os releases publicam os dois: `hive-studio-<os>-<arch>` (a janela própria) e
 `hive-studio-ui-<os>-<arch>` (a do `hive.ui`).
@@ -373,7 +377,7 @@ Medido com o Chromium headless, do teclado ao realce: ~7,5 ms no
 760 KB) — e ali a maior parte é o próprio navegador refazendo um `textarea`
 com linhas de base64 de dezenas de KB, o mesmo custo da janela própria.
 
-**A ponte depende do `hivec` v0.2.9 por dentro**, e o risco é este:
+**A ponte depende do `hivec` v0.2.11 por dentro**, e o risco é este:
 
 - `uiExtraScript` é um nome interno do runtime. Um `hivec` que o renomeie faz o
   build falhar em `lib/bridge.go` — falha alto, não em silêncio.

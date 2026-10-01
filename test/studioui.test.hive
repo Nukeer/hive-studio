@@ -60,7 +60,7 @@ test "o código abre no editor colorido, e o Markdown no preview" {
 
 test "abrir, digitar, salvar e fechar pelos widgets" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	assert support.shows(win, "Hive Studio")
 	assert support.shows(win, "main.hive")
@@ -87,7 +87,7 @@ test "abrir, digitar, salvar e fechar pelos widgets" {
 
 test "menus abrem e fecham, e qualquer outro clique fecha o menu" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	assert !support.shows(win, "Fechar aba")
 	_open := studioUi.update(win, uiview.chrome("menu", "Arquivo"), sink)
@@ -100,7 +100,7 @@ test "menus abrem e fecham, e qualquer outro clique fecha o menu" {
 
 test "cada tela desenha: configurações, preview, busca, painel e a paleta" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_settings := studioUi.update(win, uiview.act("settings", ""), sink)
 	assert support.shows(win, "Tema de cor")
@@ -124,7 +124,7 @@ test "cada tela desenha: configurações, preview, busca, painel e a paleta" {
 
 test "as setas da vista realçada a movem, e o cursor volta a mandar nela" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
 	_moved := studioUi.update(win, uiview.chrome("top", "3"), sink)
@@ -135,7 +135,7 @@ test "as setas da vista realçada a movem, e o cursor volta a mandar nela" {
 
 test "a ponte leva ao script os atalhos, o cursor, a busca e o que copiar" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	_find := studioUi.update(win, uiview.action("find"), sink)
@@ -156,7 +156,7 @@ test "a ponte leva ao script os atalhos, o cursor, a busca e o que copiar" {
 
 test "o painel AGENTE abre o agente num terminal de verdade e a ponte o mostra" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	win.core.settings.claudeCommand = "sh"
 	win.core.settings.codexCommand = "programa-que-nao-existe-hive --flag"
@@ -175,7 +175,7 @@ test "o painel AGENTE abre o agente num terminal de verdade e a ponte o mostra" 
 
 test "o olá da ponte põe os vigias para rodar, e o painel tem o puxador da altura" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	win.started = false
 	_hello := studioUi.update(win, uiview.chrome("hello", ""), sink)
@@ -188,7 +188,7 @@ test "o olá da ponte põe os vigias para rodar, e o painel tem o puxador da alt
 
 test "o modo Vim: as teclas vão ao motor e a ponte leva o modo, a seleção e a linha de comando" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	win.core.settings.vim = true
 	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
@@ -207,7 +207,7 @@ test "o modo Vim: as teclas vão ao motor e a ponte leva o modo, a seleção e a
 
 test "o realce vai inteiro ao abrir, só as linhas mudadas ao digitar, e nada quando nada muda" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	if model.HlUpdate.decode(win.extra.hl, hive.json.codec()) is Result.Ok(full) {
@@ -242,7 +242,7 @@ test "o realce vai inteiro ao abrir, só as linhas mudadas ao digitar, e nada qu
 
 test "o editor só leva o texto quando o programa o troca, e de novo se a página pedir" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	assert win.extra.showText
@@ -257,7 +257,7 @@ test "o editor só leva o texto quando o programa o troca, e de novo se a págin
 
 test "Ctrl+passar o mouse pergunta se há definição, e o menu Editar manda o comando à ponte" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
 	text := support.docText(win)
@@ -280,7 +280,7 @@ test "Ctrl+passar o mouse pergunta se há definição, e o menu Editar manda o c
 
 test "o explorador anda pelo teclado e o menu do arquivo vai preso ao mouse" {
 	folder := support.fixture()
-	sink := hive.syslink.spawn(support.sink, 0)
+	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	_down := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"tree\",\"text\":\"<Down>\"}"), sink)
 	assert win.core.selected != ""

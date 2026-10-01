@@ -118,7 +118,7 @@ proc ptyInput(conn: hive.net.WsConnection, session: Int): Bool {
 // terminou, por exemplo. Para quando a conexão cai.
 // Uma volta do pusher: se o pulso mudou desde `last`, manda o frame. Devolve o
 // pulso visto, ou -2 quando a conexão caiu.
-proc pushOnce(db: hive.syslink.Address, conn: hive.net.WsConnection, last: Int): Int {
+proc pushOnce(db: Address, conn: hive.net.WsConnection, last: Int): Int {
 	asked := db(model.Cmd.Pulse())
 	if asked is Result.Ok(reply) {
 		if reply is model.Cmd.PulseIs(n) {
@@ -139,7 +139,7 @@ proc pushOnce(db: hive.syslink.Address, conn: hive.net.WsConnection, last: Int):
 	return -2
 }
 
-proc pusher(db: hive.syslink.Address, conn: hive.net.WsConnection): void {
+proc pusher(db: Address, conn: hive.net.WsConnection): void {
 	mut last := -1
 	for ;; {
 		last = pushOnce(db, conn, last)
@@ -156,7 +156,7 @@ proc pause(ms: Int): void {
 }
 
 // Fecha o programa se, pouco depois de uma janela sair, nenhuma outra voltou.
-proc closeIfIdle(db: hive.syslink.Address): void {
+proc closeIfIdle(db: Address): void {
 	hive.task.sleep(2500)
 	asked := db(model.Cmd.Clients())
 	if asked is Result.Ok(reply) {
@@ -169,7 +169,7 @@ proc closeIfIdle(db: hive.syslink.Address): void {
 }
 
 // Um evento da página, respondido com o frame; `false` quando a página fechou.
-proc answerOnce(db: hive.syslink.Address, conn: hive.net.WsConnection): Bool {
+proc answerOnce(db: Address, conn: hive.net.WsConnection): Bool {
 	received := hive.net.wsReceive(conn)
 	if received is Result.Ok(text) {
 		answered := db(model.Cmd.Ui(text))
@@ -185,7 +185,7 @@ proc answerOnce(db: hive.syslink.Address, conn: hive.net.WsConnection): Bool {
 	return false
 }
 
-proc client(db: hive.syslink.Address, token: Str, conn: hive.net.WsConnection): void {
+proc client(db: Address, token: Str, conn: hive.net.WsConnection): void {
 	url := hive.net.wsRequest(conn).url
 	if !hasToken(url, token) {
 		hive.net.wsClose(conn)

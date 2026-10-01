@@ -23,7 +23,7 @@ func compilerPath(configured: Str): Str {
 }
 
 // Roda numa thread própria: a janela continua respondendo enquanto isso.
-proc invoke(window: hive.syslink.Address, compiler: Str, command: Str, entrypoint: Str): void {
+proc invoke(window: Address, compiler: Str, command: Str, entrypoint: Str): void {
 	result := process.run(compilerPath(compiler), [command, entrypoint], "")
 	mut output := result.text
 	if result.code == -1 {
@@ -275,7 +275,7 @@ proc lensSync(mirror: Str, root: Str, target: Str, overlays: Overlay[]): Str {
 // O check do Error Lens: confere a cópia do programa (ver `lensSync`), com o
 // texto ainda não salvo — assim o erro aparece enquanto se digita, sem salvar
 // nada. A saída volta com os caminhos do projeto.
-proc lensCheck(window: hive.syslink.Address, compiler: Str, root: Str, target: Str, packed: Str): void {
+proc lensCheck(window: Address, compiler: Str, root: Str, target: Str, packed: Str): void {
 	mirror := lensFolder()
 	mut rel := ""
 	if Overlays.decode(packed, hive.json.codec()) is Result.Ok(overlays) {
@@ -290,7 +290,7 @@ proc lensCheck(window: hive.syslink.Address, compiler: Str, root: Str, target: S
 }
 
 // Espera a digitação parar: só o último pedido (`n`) vira um check.
-proc lensTimer(window: hive.syslink.Address, n: Int): void {
+proc lensTimer(window: Address, n: Int): void {
 	hive.task.sleep(700)
 	async window(model.Cmd.Post(model.Msg.LensDue(n)))
 }

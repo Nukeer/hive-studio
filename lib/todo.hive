@@ -158,7 +158,7 @@ proc textFor(path: Str): Str {
 
 // Procura em todos os arquivos de texto da pasta (até 1 MB cada), numa thread
 // própria, e manda o que achou de volta para a janela.
-proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool): void {
+proc scan(window: Address, root: Str, showHidden: Bool): void {
 	mut model.Todo[dyn] found = []
 	for each rel in search.allFiles(root, showHidden, 20000) {
 		if search.isTextFile(rel) {

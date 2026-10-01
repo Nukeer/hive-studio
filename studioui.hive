@@ -87,7 +87,7 @@ proc ptyGate(token: Str, conn: hive.net.WsConnection): void {
 }
 
 // O que só esta janela trata: os menus e a rolagem da vista realçada.
-proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address): void {
+proc chromeEvent(win: mut Win, what: Str, arg: Str, self: Address): void {
 	if what == "menu" {
 		win.extra.menu = arg
 	} else if what == "top" {
@@ -121,7 +121,7 @@ proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address):
 }
 
 // Um evento dos widgets, traduzido como o Hive Studio traduz os da página.
-proc handle(win: mut Win, event: model.Event, self: hive.syslink.Address): void {
+proc handle(win: mut Win, event: model.Event, self: Address): void {
 	if event.kind == "chrome" {
 		chromeEvent(win, event.act, event.arg, self)
 		return
@@ -181,7 +181,7 @@ proc follow(win: mut Win): void {
 	}
 }
 
-proc update(win: mut Win, command: model.Cmd, self: hive.syslink.Address): model.Cmd {
+proc update(win: mut Win, command: model.Cmd, self: Address): model.Cmd {
 	if !win.started {
 		win.started = true
 		async studio.watchGit(self)
@@ -230,5 +230,10 @@ proc main(): void {
 	servePty(start)
 	// O navegador das Configurações, quando há um: a ponte abre a janela nele.
 	_chosen := bridge.useBrowser(start.core.settings.browser)
-	ui.windowAddressed("Hive Studio", view, update, start)
+	// A janela é uma página (webview): é nela que a ponte (lib/bridge.go) entra.
+	// A janela nativa do hive.ui não tem página, e sem a ponte não há teclado,
+	// cursor, editor colorido nem terminal dos agentes.
+	if spawn(ui.webview("Hive Studio", view, update), start) is Result.Error(why) {
+		panic "a janela do Hive Studio não abriu: " + why.message
+	}
 }
