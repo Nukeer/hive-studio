@@ -326,6 +326,12 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   linha do Vim (modo, mensagens, teclas pendentes e a linha de comando `:`,
   `/`, `?`) é desenhada com widgets embaixo do editor;
 - gravar um atalho novo em Configurações → Atalhos de teclado.
+- **o editor como na janela própria**: Ctrl+passar o mouse sublinha o nome
+  que tem para onde ir e Ctrl+clique vai até lá; as sugestões abrem junto do
+  cursor; as ocorrências da busca (e da busca do Vim) ficam destacadas no
+  texto; Ctrl+X sem seleção recorta a linha inteira, que volta como linha ao
+  colar; Editar → Desfazer, Refazer, Recortar, Copiar, Colar e Selecionar
+  tudo; e o tamanho da fonte das Configurações.
 - **o editor colorido**: o `textarea` fica com o texto transparente, e uma
   camada por cima dele (que não recebe o mouse) mostra as mesmas linhas
   realçadas, os números de linha e o Error Lens, na fonte e na rolagem dele. O

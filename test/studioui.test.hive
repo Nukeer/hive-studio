@@ -253,3 +253,26 @@ test "o editor só leva o texto quando o programa o troca, e de novo se a págin
 	assert win.extra.showText
 	assert support.shows(win, "return n * 2")
 }
+
+test "Ctrl+passar o mouse pergunta se há definição, e o menu Editar manda o comando à ponte" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
+	text := support.docText(win)
+	if indexOf(text, "dobro(2)") is Result.Ok(at) {
+		_hover := studioUi.update(win, uiview.chrome("hover", "{at + 1}"), sink)
+		assert win.extra.hoverCaret == at + 1
+		assert win.extra.hoverOk
+	} else {
+		assert false
+	}
+	_blank := studioUi.update(win, uiview.chrome("hover", "0"), sink)
+	assert !win.extra.hoverOk
+	_menu := studioUi.update(win, uiview.chrome("menu", "Editar"), sink)
+	assert support.shows(win, "Selecionar tudo")
+	_undo := studioUi.update(win, uiview.chrome("client", "undo"), sink)
+	sent := uiview.bridgeState(win.core, win.extra)
+	assert sent.client == "undo" && sent.clientSerial == 1
+	assert win.extra.menu == ""
+}

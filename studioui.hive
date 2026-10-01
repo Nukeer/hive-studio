@@ -24,6 +24,7 @@ import ./lib/settings
 import ./lib/git
 import ./lib/server
 import ./lib/complete
+import ./lib/navigate
 import ./lib/bridge.go
 
 // O estado da janela: o do Hive Studio e o que só esta janela lembra.
@@ -92,6 +93,20 @@ proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address):
 		win.extra.menu = arg
 	} else if what == "top" {
 		win.extra.top = numberOr(arg, 0)
+	} else if what == "hover" {
+		// Ctrl+passar o mouse: há para onde ir do nome nesta posição?
+		caret := numberOr(arg, -1)
+		mut ok := false
+		if caret >= 0 && win.core.docs bounds win.core.active {
+			doc := win.core.docs[win.core.active]
+			ok = navigate.locate(doc.path, doc.text, caret) is Result.Ok(_)
+		}
+		win.extra.hoverCaret = caret
+		win.extra.hoverOk = ok
+	} else if what == "client" {
+		win.extra.menu = ""
+		win.extra.client = arg
+		win.extra.clientSerial = win.extra.clientSerial + 1
 	} else if what == "text" {
 		// A página não tem o texto do editor (recarregou): vai de novo.
 		win.extra.textSerial = -1

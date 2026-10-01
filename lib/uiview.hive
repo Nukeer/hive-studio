@@ -35,6 +35,9 @@ import ./markdown
 // e o `/pty`), que studioui.hive abre. `hl` é o realce do editor que a página
 // ainda não tem (`model.HlUpdate` em JSON: tudo, só as linhas que mudaram, ou
 // nada), e `hlPath`/`hlVersion` o documento e a versão a que ele leva.
+// `hoverCaret`/`hoverOk` respondem ao Ctrl+passar o mouse (há para onde ir
+// do nome naquela posição?), e `client`/`clientSerial` são o comando de menu
+// que só a página sabe fazer (desfazer, copiar, colar…).
 // `showText` diz se o editor leva o texto neste turno: só quando o serial do
 // texto muda (`textSerial` é o último que foi), porque a digitação a página já
 // tem — e um texto grande em todo turno pesa no diff do hive.ui.
@@ -53,6 +56,10 @@ type Chrome {
 	hlVersion:  Int
 	textSerial: Int
 	showText:   Bool
+	hoverCaret: Int
+	hoverOk:    Bool
+	client:     Str
+	clientSerial: Int
 }
 
 func emptyCommit(): git.Commit {
@@ -61,7 +68,7 @@ func emptyCommit(): git.Commit {
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1, -1, false)
+	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1, -1, false, -1, false, "", 0)
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -229,6 +236,12 @@ func checked(state: model.State, text: Str, name: Str, on: Bool): Entry {
 	return Entry(mark + tx(state, text), keys.keysFor(state.settings.keymap, name), action(name), true)
 }
 
+// Um item que a página resolve no editor (desfazer, copiar…): o programa
+// só passa o pedido à ponte.
+func clientItem(state: model.State, text: Str, command: Str, hint: Str, enabled: Bool): Entry {
+	return Entry(tx(state, text), hint, chrome("client", command), enabled)
+}
+
 // Um separador entre grupos do menu.
 func gap(): Entry {
 	return Entry("", "", chrome("menu", ""), false)
@@ -261,6 +274,15 @@ func menuEntries(state: model.State, name: Str): Entry[dyn] {
 		]
 	} else if name == "Editar" {
 		items = [
+			clientItem(state, "Desfazer", "undo", "Ctrl+Z", hasDoc),
+			clientItem(state, "Refazer", "redo", "Ctrl+Y", hasDoc),
+			gap(),
+			clientItem(state, "Recortar", "cut", "Ctrl+X", hasDoc),
+			clientItem(state, "Copiar", "copy", "Ctrl+C", hasDoc),
+			clientItem(state, "Colar", "paste", "Ctrl+V", hasDoc),
+			gap(),
+			clientItem(state, "Selecionar tudo", "selectAll", "Ctrl+A", hasDoc),
+			gap(),
 			item(state, "Buscar no arquivo", "find", hasDoc),
 			item(state, "Buscar no projeto", "searchProject", true),
 			item(state, "Ir para arquivo…", "quickOpen", true),
@@ -554,6 +576,9 @@ func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 	append(items, ctxItem(state, t, "Renomear…", "rename", path, "F2"))
 	append(items, ctxItem(state, t, "Excluir", "delete", path, "Delete"))
 	append(items, gap())
+	append(items, ctxItem(state, t, "Copiar caminho", "copyPath", path, ""))
+	append(items, ctxItem(state, t, "Copiar caminho relativo", "copyRelative", path, ""))
+	append(items, gap())
 	append(items, ctxItem(state, t, "Mostrar na pasta do sistema", "reveal", path, ""))
 	append(items, ctxItem(state, t, "Abrir no terminal", "terminal", path, ""))
 	if !folder && path is "{stem}.hive" {
@@ -567,10 +592,6 @@ func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 	}
 	mut hive.ui.View[dyn] rows = [
 		ui.row([ui.gap(8), ui.align(ui.Align.Center())], [fileIcon(workspace.baseName(path)), strong(t.text, workspace.baseName(path))]),
-		// Copiar: o hive.ui não chega à área de transferência, então o caminho
-		// fica num campo, pronto para Ctrl+C.
-		inputField(t, [], path),
-		inputField(t, [], render.relPath(state, path)),
 		rule(t)
 	]
 	for each entry in items {
@@ -1418,12 +1439,18 @@ func findBox(state: model.State, t: theme.Theme): hive.ui.View {
 	])
 }
 
-// As sugestões do autocomplete, embaixo do editor.
+// O recuo da caixa de sugestões: a ponte (lib/bridge.go) a acha por ele e a
+// põe junto do cursor.
+func popupPad(): Int {
+	return 13
+}
+
+// As sugestões do autocomplete, que a ponte põe junto do cursor.
 func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 	if len(state.suggestions) == 0 {
 		return ui.none()
 	}
-	mut hive.ui.View[dyn] items = [small(t.muted, tx(state, "Sugestões (autocomplete)"))]
+	mut hive.ui.View[dyn] items = []
 	for i := 0; i < len(state.suggestions); i++ {
 		s := state.suggestions[i]
 		glyph := render.kindGlyph(s.kind)
@@ -1431,11 +1458,9 @@ func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 		if i == state.suggestIndex {
 			append(box, fill(t.selection))
 		}
-		append(items, ui.row(box, [label(glyph.color, glyph.glyph), clickable(t.text, s.word, act("accept", "{i}"), s.detail), small(t.muted, s.detail)]))
+		append(items, ui.row(box, [ui.row([ui.width(18)], [label(glyph.color, glyph.glyph)]), clickable(t.text, s.word, act("accept", "{i}"), s.detail), ui.spacer(), small(t.muted, s.detail)]))
 	}
-	append(items, ui.spacer())
-	append(items, headerAction(t, "✕", tx(state, "Fechar (Esc)"), act("closeSuggest", "")))
-	return ui.row([ui.gap(8), ui.pad(4), ui.align(ui.Align.Center()), fill(t.panel), ui.scroll(ui.Axis.Horizontal())], items)
+	return ui.column([ui.width(440), ui.gap(0), ui.pad(popupPad()), fill(t.side), tone(t.text), ui.scroll(ui.Axis.Vertical())], items)
 }
 
 // O editor. Quem manda cada edição, com o cursor, é a ponte (lib/bridge.go),
@@ -1589,6 +1614,8 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 				ui.row([ui.gap(10)], cards),
 				ui.row([ui.gap(10)], moreCards)
 			])),
+		setting(t, tx(state, "Tamanho da fonte"), tx(state, "Do editor, em pixels."),
+			ui.select([ui.onChoose(field("fontSize", _)), fill(t.input), tone(t.text)], ["11", "12", "13", "14", "15", "16", "18", "20", "22"], "{prefs.fontSize}")),
 		section(t, tx(state, "Editor")),
 		setting(t, tx(state, "Números de linha"), "", check(state, t, "lineNumbers", "Mostrar números de linha", prefs.lineNumbers)),
 		setting(t, tx(state, "Autocomplete"), tx(state, "Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita."),
@@ -2233,6 +2260,14 @@ type BridgeState {
 	vimPh:         Str
 	textQuiet:     Bool
 	numbers:       Bool
+	fontSize:      Int
+	marks:         Int[dyn]
+	markLength:    Int
+	markCurrent:   Int
+	hoverCaret:    Int
+	hoverOk:       Bool
+	client:        Str
+	clientSerial:  Int
 	textShown:     Bool
 	syntax:        Syntax
 	lens:          model.LensMark[dyn]
@@ -2302,6 +2337,24 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		selStart = span.from
 		selEnd = span.to
 	}
+	// As ocorrências que o editor destaca: as da busca (Ctrl+F) ou, no Vim, as
+	// da última busca com / e ?, como a página própria.
+	mut Int[dyn] marks = []
+	mut markLength := len(state.find.text)
+	mut markCurrent := state.find.index
+	if editorShown(state) && state.find.open {
+		marks = render.findMatches(render.searched(state), state.find)
+	} else if vimMode != "" {
+		text := render.searched(state)
+		marks = vim.highlights(text, state.vim)
+		markLength = vim.highlightLength(state.vim)
+		markCurrent = -1
+		if state.vim.prompt == "/" || state.vim.prompt == "?" {
+			markCurrent = vim.currentHighlight(marks, state.caret, state.vim.prompt == "?")
+		} else if indexOf(marks, state.caret) is Result.Ok(here) {
+			markCurrent = here
+		}
+	}
 	return BridgeState(
 		keys: keys.combos(state.settings.keymap),
 		serial: state.textSerial,
@@ -2314,7 +2367,7 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		clipSerial: state.vim.clipSerial,
 		findFrom: from,
 		findTo: to,
-		findSerial: state.find.serial,
+		findSerial: state.find.serial + state.vim.searchSerial,
 		tab: state.settings.tabSize,
 		findPh: tx(state, "Buscar"),
 		palettePh: tx(state, "Buscar arquivo pelo nome"),
@@ -2336,6 +2389,14 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		vimPh: vimMark(),
 		textQuiet: state.textSerial == state.quietSerial,
 		numbers: state.settings.lineNumbers,
+		fontSize: state.settings.fontSize,
+		marks: marks,
+		markLength: markLength,
+		markCurrent: markCurrent,
+		hoverCaret: extra.hoverCaret,
+		hoverOk: extra.hoverOk,
+		client: extra.client,
+		clientSerial: extra.clientSerial,
 		textShown: extra.showText,
 		syntax: syntaxOf(t),
 		lens: render.lensMarks(state)

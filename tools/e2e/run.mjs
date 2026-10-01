@@ -98,8 +98,9 @@ async function connect(port) {
       await sleep(150);
     },
     insertText: (text) => send("Input.insertText", { text }),
-    async mouse(type, x, y, button = "left") {
-      await send("Input.dispatchMouseEvent", { type, x, y, button, clickCount: 1, buttons: button === "left" ? 1 : 0 });
+    async mouse(type, x, y, button = "left", modifiers = 0) {
+      await send("Input.dispatchMouseEvent", { type, x, y, button, modifiers, clickCount: type === "mouseMoved" ? 0 : 1,
+        buttons: button === "left" && type !== "mouseMoved" ? 1 : 0 });
     },
   };
   return page;

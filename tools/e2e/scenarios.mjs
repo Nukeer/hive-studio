@@ -38,6 +38,53 @@ export const scenarios = [
     },
   },
   {
+    name: "teclado",
+    files: { "d.hive": "func dobro(n: Int): Int {\n\treturn n * 2\n}\n\nproc main(): void {\n\techo dobro(2)\n\techo 3\n}\n" },
+    async run(page, { project, check }) {
+      await open(page, project, "d.hive");
+      await page.waitFor(`${editor}.classList.contains("hive-colored")`);
+      // Ocorrências da busca destacadas no editor.
+      await page.post({ kind: "act", act: "action", arg: "find" });
+      await page.post({ kind: "field", act: "find", text: "echo" });
+      check("as ocorrências da busca aparecem no editor", await page.waitFor(`document.querySelectorAll("#hive-hl .mk").length === 2`));
+      await page.post({ kind: "act", act: "findClose" });
+      check("e somem ao fechar a busca", await page.waitFor(`document.querySelectorAll("#hive-hl .mk").length === 0`));
+      // Ctrl + mouse sobre "dobro" na linha 6: sublinha; Ctrl+clique vai à definição.
+      const at = await page.eval(`(function(){
+        var t=${editor}, st=getComputedStyle(t), r=t.getBoundingClientRect(), lh=parseFloat(st.lineHeight);
+        var c=document.createElement("canvas").getContext("2d"); c.font=st.fontSize+" "+st.fontFamily; var w=c.measureText("MMMMMMMMMM").width/10;
+        var col=4+"echo ".length+2;  /* tab (4) + "echo " + dentro do nome */
+        return {x:r.left+parseFloat(st.paddingLeft)+col*w, y:r.top+parseFloat(st.paddingTop)+5*lh+lh/2};
+      })()`);
+      await page.mouse("mouseMoved", at.x, at.y, "none", 2);
+      check("Ctrl+passar o mouse sublinha o nome que tem definição",
+        await page.waitFor(`document.querySelector("#hive-hl .lk").style.display === "block"`, 5000));
+      await page.mouse("mousePressed", at.x, at.y, "left", 2);
+      await page.mouse("mouseReleased", at.x, at.y, "left", 2);
+      check("Ctrl+clique vai à definição", await page.waitFor(`${state("caret")} < 15`, 5000));
+      // Sugestões junto do cursor.
+      await page.eval(`(function(){var t=${editor};t.focus();var at=t.value.indexOf("echo 3")+6;t.setSelectionRange(at,at);})()`);
+      await page.press("Enter");
+      await page.insertText("dob");
+      const near = await page.waitFor(`(function(){var p=document.querySelector('#root [style*="padding:13px"]');if(!p)return false;
+        var t=${editor},r=p.getBoundingClientRect(),e=t.getBoundingClientRect();return r.top>e.top+40&&r.left>e.left&&r.left<e.left+400})()`, 5000);
+      check("as sugestões abrem junto do cursor", near);
+      await page.press("Escape");
+      // Ctrl+X sem seleção recorta a linha inteira.
+      const before = (await page.eval(value)).split("\n").length;
+      await page.press("x", 2);
+      check("Ctrl+X sem seleção recorta a linha", await page.waitFor(`${value}.split("\\n").length === ${before - 1}`, 4000));
+      // Menu Editar: desfazer e selecionar tudo.
+      await page.post({ kind: "chrome", act: "client", arg: "undo" });
+      check("Editar → Desfazer traz a linha de volta", await page.waitFor(`${value}.split("\\n").length === ${before}`, 4000));
+      await page.post({ kind: "chrome", act: "client", arg: "selectAll" });
+      check("Editar → Selecionar tudo", await page.waitFor(`${editor}.selectionStart === 0 && ${editor}.selectionEnd === ${editor}.value.length`, 4000));
+      // Tamanho da fonte.
+      await page.post({ kind: "field", act: "fontSize", text: "18" });
+      check("o tamanho da fonte vale no editor", await page.waitFor(`getComputedStyle(${editor}).fontSize === "18px"`, 4000));
+    },
+  },
+  {
     name: "grande",
     files: { "g.hive": Array.from({ length: 3000 }, (_, i) => `func f${i}(n: Int): Int {\n\treturn n + ${i}\n}`).join("\n") + "\n" },
     async run(page, { project, check }) {

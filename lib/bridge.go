@@ -48,9 +48,9 @@ func Installed() bool {
 const style = `<style>
 input[placeholder="hive-state"],input[placeholder="hive-bridge"],input[placeholder="hive-hl"]{position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 textarea[placeholder="⬡"]{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;
-font-size:13px;line-height:1.55;white-space:pre;overflow:auto;resize:none;border-radius:0;border:0;tab-size:var(--hive-tab,4)}
+font-size:var(--hive-font-size,13px);line-height:1.55;white-space:pre;overflow:auto;resize:none;border-radius:0;border:0;tab-size:var(--hive-tab,4)}
 textarea[placeholder="⬡"]:focus{outline:none}
-[style*="padding:9px"] .h-text,[style*="padding:9px"] .h-link{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;font-size:13px}
+[style*="padding:9px"] .h-text,[style*="padding:9px"] .h-link{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;font-size:var(--hive-font-size,13px)}
 [style*="padding:9px"] .h-link:hover{text-decoration:underline}
 [style*="height:5px"]{cursor:ns-resize}
 textarea[placeholder="⬡"].hive-block{caret-color:transparent}
@@ -66,6 +66,12 @@ textarea[placeholder="⬡"].hive-colored::selection{background:rgba(120,150,255,
 #hive-hl,textarea[placeholder="⬡"]{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
 #hive-hl .lm{position:absolute;white-space:pre;font-style:italic;opacity:.9}
 #hive-hl .lb{position:absolute;left:0;right:0;opacity:.13}
+#hive-hl .mk{position:absolute;background:rgba(255,200,40,.22);border-radius:2px}
+#hive-hl .mk.cur{background:rgba(255,160,0,.5);box-shadow:0 0 0 1px rgba(255,170,0,.8)}
+#hive-hl .lk{position:absolute;border-bottom:1px solid currentColor}
+textarea[placeholder="⬡"].hive-link{cursor:pointer}
+#root [style*="padding:13px"]{position:fixed !important;left:var(--hive-pop-x,0) !important;top:var(--hive-pop-y,0) !important;
+z-index:20;max-height:260px;box-shadow:0 8px 24px rgba(0,0,0,.35);border-radius:4px}
 #hive-vimcur{position:fixed;display:none;pointer-events:none;z-index:3;border-radius:1px;background:rgba(200,200,200,.45)}
 #hive-vimcur.idle{background:transparent;box-shadow:inset 0 0 0 1px rgba(200,200,200,.55)}
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -81,7 +87,7 @@ const script = `<script>
     ptyPort: 0, ptyToken: "", agentSessions: [], agentShown: 0, agentKeys: [], termBg: "#16181d", termFg: "#d7dae0",
     vim: "", vimSerial: 0, selStart: 0, selEnd: 0, vimScroll: -1, vimAck: 0, vimPh: "", textQuiet: false };
   var vimSerial = -1, vimApplied = [0, 0], vimSent = 0, vimAck = 0, vimCaret = 0, composing = null;
-  var raw = null, applied = -1, focused = -1, copied = -1, found = -1, askedText = -1;
+  var raw = null, applied = -1, focused = -1, copied = -1, found = -1, askedText = -1, clientRan = -1;
   var sent = null, allow = false, lastCaret = -1, caretTimer = 0;
   var nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
 
@@ -162,6 +168,7 @@ const script = `<script>
     try { state = JSON.parse(raw); } catch (err) { return; }
     syntaxColors();
     document.documentElement.style.setProperty("--hive-tab", String(state.tab || 4));
+    document.documentElement.style.setProperty("--hive-font-size", (state.fontSize || 13) + "px");
     vimAck = Math.max(vimAck, state.vimAck || 0);
     if (vimAck > vimSent) { vimSent = vimAck; }
     var textChanged = false;
@@ -220,6 +227,11 @@ const script = `<script>
     }
     syncAgents();
     schedulePaint();
+    if (state.clientSerial !== clientRan) {
+      var firstClient = clientRan < 0;
+      clientRan = state.clientSerial;
+      if (!firstClient && state.client && ta) { runClient(ta, state.client); }
+    }
     if (state.clipSerial !== copied) {
       if (copied >= 0 && state.clip && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(state.clip).catch(function () {});
@@ -282,10 +294,11 @@ const script = `<script>
   var hl = { html: [], src: [], version: -1, raw: null, lines: -1, painted: [], waiting: false, p: 0, s: 0, n: 0, m: 0 };
   var hlLayer = document.createElement("div");
   hlLayer.id = "hive-hl";
-  hlLayer.innerHTML = '<pre class="g"></pre><pre class="c"><div class="l"></div><div class="pad"></div></pre><div class="lens"></div>';
+  hlLayer.innerHTML = '<pre class="g"></pre><pre class="c"><div class="l"></div><div class="pad"></div></pre><div class="marks"></div><div class="lens"></div><div class="lk"></div>';
   document.body.appendChild(hlLayer);
   var gutterBox = hlLayer.querySelector(".g"), codeBox = hlLayer.querySelector(".c"), lineBox = hlLayer.querySelector(".l");
   var lensBox = hlLayer.querySelector(".lens"), synStyle = document.createElement("style");
+  var marksBox = hlLayer.querySelector(".marks"), linkBox = hlLayer.querySelector(".lk");
   document.head.appendChild(synStyle);
   var synRaw = "";
 
@@ -442,6 +455,175 @@ const script = `<script>
     if (html !== lensDrawn) { lensDrawn = html; lensBox.innerHTML = html; }
   }
 
+  // Onde começa cada linha do texto pintado (refeito quando ele muda).
+  var startsOf = { lines: null, starts: [0] };
+  function lineStarts() {
+    if (startsOf.lines !== hl.painted) {
+      var starts = [0], at = 0;
+      for (var i = 0; i < hl.painted.length - 1; i++) { at += hl.painted[i].length + 1; starts.push(at); }
+      startsOf = { lines: hl.painted, starts: starts };
+    }
+    return startsOf.starts;
+  }
+  function rowOf(offset) {
+    var starts = lineStarts(), low = 0, high = starts.length - 1;
+    while (low < high) { var mid = (low + high + 1) >> 1; if (starts[mid] <= offset) { low = mid; } else { high = mid - 1; } }
+    return low;
+  }
+
+  // As ocorrências da busca (ou da busca do Vim), só as visíveis.
+  var marksDrawn = "";
+  function drawMarks(ta, st, height, width, padTop, padLeft) {
+    var marks = state.marks || [], len = state.markLength || 0, html = "";
+    if (marks.length && len) {
+      var tab = parseInt(st.tabSize, 10) || 4, starts = lineStarts();
+      var first = Math.floor(ta.scrollTop / height) - 1, last = first + Math.ceil(ta.clientHeight / height) + 2;
+      for (var m = 0; m < marks.length; m++) {
+        var row = rowOf(marks[m]);
+        if (row < first || row > last) { continue; }
+        var line = hl.painted[row] || "", col = marks[m] - starts[row];
+        var begin = visualColumn(line, col, tab), end = visualColumn(line, col + len, tab);
+        html += '<div class="mk' + (m === state.markCurrent ? " cur" : "") + '" style="left:' + (padLeft + begin * width - ta.scrollLeft) +
+          'px;top:' + (padTop + row * height - ta.scrollTop) + 'px;width:' + Math.max(2, (end - begin) * width) + 'px;height:' + height + 'px"></div>';
+      }
+    }
+    if (html !== marksDrawn) { marksDrawn = html; marksBox.innerHTML = html; }
+  }
+
+  // Ctrl+passar o mouse: o nome sob ele fica sublinhado quando há para onde ir.
+  var mouse = null, hovered = null, linked = null;
+  function offsetAt(ta, x, y) {
+    var st = getComputedStyle(ta), r = ta.getBoundingClientRect(), height = lineHeight(ta), width = measure(ta), tab = parseInt(st.tabSize, 10) || 4;
+    var px = x - r.left - parseFloat(st.paddingLeft) - parseFloat(st.borderLeftWidth) + ta.scrollLeft;
+    var py = y - r.top - parseFloat(st.paddingTop) - parseFloat(st.borderTopWidth) + ta.scrollTop;
+    var row = Math.floor(py / height);
+    if (row < 0 || row >= hl.painted.length || px < 0) { return -1; }
+    var line = hl.painted[row], target = px / width, column = 0;
+    for (var i = 0; i < line.length; i++) {
+      var next = line[i] === "\t" ? column + tab - (column % tab) : column + 1;
+      if (target < next) { return lineStarts()[row] + i; }
+      column = next;
+    }
+    return -1;
+  }
+  function spanAt(ta, offset) {
+    var text = ta.value, isName = /[A-Za-z0-9_]/;
+    if (offset < 0 || !isName.test(text[offset] || "")) { return null; }
+    var start = offset, end = offset;
+    while (start > 0 && isName.test(text[start - 1])) { start--; }
+    while (end < text.length && isName.test(text[end])) { end++; }
+    return [start, end];
+  }
+  function hideLink() {
+    var ta = editor();
+    if (ta) { ta.classList.remove("hive-link"); }
+    linkBox.style.display = "none"; linked = null; hovered = null;
+  }
+  function probe(ta) {
+    var offset = mouse ? offsetAt(ta, mouse.x, mouse.y) : -1, span = spanAt(ta, offset);
+    if (!span) { hideLink(); return; }
+    if (hovered && hovered.span[0] === span[0] && hovered.span[1] === span[1]) { return; }
+    hovered = { span: span, caret: offset }; linked = null;
+    linkBox.style.display = "none"; ta.classList.remove("hive-link");
+    post({ kind: "chrome", act: "hover", arg: String(offset) });
+  }
+  function drawLink(ta, st, height, width, padTop, padLeft) {
+    if (hovered && !linked && state.hoverOk && state.hoverCaret === hovered.caret) { linked = hovered.span; ta.classList.add("hive-link"); }
+    if (!linked) { return; }
+    var tab = parseInt(st.tabSize, 10) || 4, row = rowOf(linked[0]), line = hl.painted[row] || "", start = lineStarts()[row];
+    var a = visualColumn(line, linked[0] - start, tab), b = visualColumn(line, linked[1] - start, tab);
+    linkBox.style.display = "block";
+    linkBox.style.left = (padLeft + a * width - ta.scrollLeft) + "px";
+    linkBox.style.top = (padTop + row * height - ta.scrollTop) + "px";
+    linkBox.style.width = ((b - a) * width) + "px";
+    linkBox.style.height = (height - 1) + "px";
+  }
+  document.addEventListener("mousemove", function (e) {
+    var ta = editor();
+    if (!ta || e.target !== ta) { return; }
+    mouse = { x: e.clientX, y: e.clientY };
+    if (e.ctrlKey || e.metaKey) { probe(ta); } else if (hovered || linked) { hideLink(); }
+  }, true);
+  document.addEventListener("keyup", function (e) { if ((e.key === "Control" || e.key === "Meta") && (hovered || linked)) { hideLink(); } }, true);
+  document.addEventListener("mouseleave", function () { mouse = null; }, true);
+  document.addEventListener("mousedown", function (e) {
+    var ta = editor();
+    if (ta && e.target === ta && (e.ctrlKey || e.metaKey) && linked) { e.preventDefault(); }
+  }, true);
+  document.addEventListener("mouseup", function (e) {
+    var ta = editor();
+    if (!ta || e.target !== ta || !(e.ctrlKey || e.metaKey) || !linked || !hovered) { return; }
+    e.stopPropagation();
+    post({ kind: "act", act: "definition", caret: hovered.caret });
+    hideLink();
+  }, true);
+
+  // As sugestões abrem junto do cursor, logo abaixo da linha dele.
+  function placePopup(ta, st, height, width, padTop, padLeft) {
+    if (!state.popup) { return; }
+    var tab = parseInt(st.tabSize, 10) || 4, at = ta.selectionStart, row = rowOf(at), line = hl.painted[row] || "";
+    var col = visualColumn(line, at - lineStarts()[row], tab), r = ta.getBoundingClientRect();
+    var x = Math.min(r.left + padLeft + col * width - ta.scrollLeft, window.innerWidth - 460);
+    var y = r.top + padTop + (row + 1) * height - ta.scrollTop + 2;
+    if (y + 260 > window.innerHeight) { y = Math.max(0, y - height - 264); }
+    document.documentElement.style.setProperty("--hive-pop-x", Math.max(0, x) + "px");
+    document.documentElement.style.setProperty("--hive-pop-y", y + "px");
+  }
+
+  // Ctrl+X sem seleção recorta a linha inteira (como no VS Code): ela vai para
+  // a área de transferência e, colada com o cursor sem seleção, volta inteira
+  // acima da linha do cursor. Corte e colagem passam pelo desfazer do editor.
+  var lineClip = null;
+  function cutLine(ta) {
+    if (ta.selectionStart !== ta.selectionEnd) { return false; }
+    var value = ta.value, at = ta.selectionStart;
+    var start = value.lastIndexOf("\n", at - 1) + 1, end = value.indexOf("\n", at), line;
+    if (end >= 0) {
+      line = value.slice(start, end + 1); end = end + 1;
+    } else {
+      line = value.slice(start) + "\n"; end = value.length;
+      if (start > 0) { start = start - 1; }
+    }
+    if (line === "\n" && value === "") { return true; }
+    lineClip = line;
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(line).catch(function () {}); }
+    ta.setSelectionRange(start, end);
+    editRange = null;
+    document.execCommand("delete");
+    var begin = ta.value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+    ta.setSelectionRange(begin, begin);
+    return true;
+  }
+  function pasteLine(ta, text) {
+    if (lineClip === null || text.replace(/\r/g, "") !== lineClip || ta.selectionStart !== ta.selectionEnd) { return false; }
+    var at = ta.selectionStart, start = ta.value.lastIndexOf("\n", at - 1) + 1;
+    ta.setSelectionRange(start, start);
+    insert(ta, lineClip);
+    ta.setSelectionRange(at + lineClip.length, at + lineClip.length);
+    return true;
+  }
+  document.addEventListener("paste", function (e) {
+    var ta = editor();
+    if (!ta || e.target !== ta) { return; }
+    var text = e.clipboardData ? e.clipboardData.getData("text") : "";
+    if (pasteLine(ta, text)) { e.preventDefault(); }
+  }, true);
+
+  // Os itens do menu Editar que a página faz no editor.
+  function runClient(ta, command) {
+    ta.focus();
+    if (command === "paste") {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(function (text) { if (!pasteLine(ta, text)) { insert(ta, text); } }).catch(function () {});
+      }
+      return;
+    }
+    if (command === "selectAll") { ta.select(); return; }
+    if (command === "cut" && cutLine(ta)) { return; }
+    editRange = null;
+    document.execCommand(command);
+  }
+
   // A camada acompanha o editor: o mesmo lugar, a mesma fonte, a mesma rolagem.
   function placeHl() {
     var ta = editor();
@@ -469,7 +651,11 @@ const script = `<script>
     gutterBox.style.width = (padLeft - 14) + "px";
     gutterBox.style.paddingTop = padTop + "px";
     gutterBox.scrollTop = ta.scrollTop;
-    drawLens(ta, st, lineHeight(ta), measure(ta), padTop, padLeft);
+    var lh = lineHeight(ta), cw = measure(ta);
+    drawLens(ta, st, lh, cw, padTop, padLeft);
+    drawMarks(ta, st, lh, cw, padTop, padLeft);
+    drawLink(ta, st, lh, cw, padTop, padLeft);
+    placePopup(ta, st, lh, cw, padTop, padLeft);
   }
 
   document.addEventListener("scroll", function (e) { if (e.target === editor()) { placeHl(); } }, true);
@@ -754,6 +940,7 @@ const script = `<script>
       var picked = ta ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : "";
       take({ kind: "key", text: combo, caret: caret, arg: picked }); return;
     }
+    if (inEditor && combo === "Ctrl+X" && cutLine(ta)) { e.preventDefault(); return; }
     if (inEditor && e.key === "Tab" && !e.ctrlKey && !e.shiftKey && !e.altKey) { e.preventDefault(); insert(ta, "\t"); return; }
     if (inEditor && e.key === "Enter" && !e.ctrlKey && !e.shiftKey && !e.altKey) {
       e.preventDefault();
