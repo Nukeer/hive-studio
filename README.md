@@ -330,6 +330,15 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   linha do Vim (modo, mensagens, teclas pendentes e a linha de comando `:`,
   `/`, `?`) é desenhada com widgets embaixo do editor;
 - gravar um atalho novo em Configurações → Atalhos de teclado.
+- **o preview do Markdown, a árvore do JSON e a aba de commit** são o mesmo
+  HTML que o Hive Studio monta para a janela própria (`doc.view`,
+  `commit.html`), com o CSS e os cliques dela (recolher um arquivo do diff,
+  rolar até ele pela lista); ele vai à página por um quarto campo,
+  `hive-pane`, só quando muda, e a ponte o mostra sobre a caixa reservada;
+- **o tema inteiro**: as variáveis de `theme.css` valem para a página, e os
+  widgets do `hive.ui` (botões, campos, diálogos) passam a usá-las, nos temas
+  claros inclusive;
+- a Saída e o Terminal acompanham o fim quando chega texto novo;
 - **o editor como na janela própria**: Ctrl+passar o mouse sublinha o nome
   que tem para onde ir e Ctrl+clique vai até lá; as sugestões abrem junto do
   cursor; as ocorrências da busca (e da busca do Vim) ficam destacadas no

@@ -107,8 +107,9 @@ test "cada tela desenha: configurações, preview, busca, painel e a paleta" {
 	assert support.shows(win, "Hive Dark")
 	_closed := studioUi.update(win, uiview.act("closeSettings", ""), sink)
 	_md := studioUi.update(win, uiview.act("open", folder + "/LEIAME.md"), sink)
-	assert support.shows(win, "Título")
-	assert support.shows(win, "☑")
+	// O preview é o HTML da janela própria, que vai à ponte pelo hive-pane.
+	assert indexOf(support.paneHtml(win), "Título</h1>") is Result.Ok(_)
+	assert indexOf(support.paneHtml(win), "<strong>forte</strong>") is Result.Ok(_)
 	_code := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	_find := studioUi.update(win, uiview.action("find"), sink)
 	_typed := studioUi.update(win, uiview.field("find", "n"), sink)

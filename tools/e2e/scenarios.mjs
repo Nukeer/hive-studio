@@ -130,6 +130,47 @@ export const scenarios = [
     },
   },
   {
+    name: "telas",
+    files: {
+      "LEIAME.md": "# Título\n\nTexto **forte** e `código`.\n\n- [x] feito\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+      "dados.json": "{\"nome\": \"hive\", \"lista\": [1, 2, 3], \"obj\": {\"a\": true}}\n",
+      "a.hive": small,
+    },
+    async run(page, { project, check }) {
+      const paneShown = `document.getElementById("hive-pane").style.display === "block"`;
+      await page.post({ kind: "act", act: "open", arg: project + "/LEIAME.md" });
+      check("o preview do Markdown é o da janela própria",
+        await page.waitFor(`${paneShown} && !!document.querySelector("#hive-pane .md h1") && !!document.querySelector("#hive-pane .md strong") && !!document.querySelector("#hive-pane .md table")`, 8000));
+      await page.post({ kind: "act", act: "open", arg: project + "/dados.json" });
+      check("o JSON abre como árvore", await page.waitFor(`${paneShown} && document.querySelectorAll("#hive-pane .jv details").length >= 2`, 8000));
+      await page.eval(`document.querySelector("#hive-pane .jv details summary").click()`);
+      check("e a árvore fecha e abre", await page.waitFor(`!document.querySelector("#hive-pane .jv details").open`, 3000));
+      // Um commit num repositório de verdade: a aba recolhe e rola até o arquivo.
+      const { execFileSync } = await import("node:child_process");
+      const git = (...args) => execFileSync("git", ["-C", project, ...args], { stdio: "ignore" });
+      git("init", "-q"); git("-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "add", ".");
+      git("-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "-m", "primeiro");
+      const hash = execFileSync("git", ["-C", project, "log", "-1", "--format=%h"]).toString().trim();
+      await page.post({ kind: "act", act: "gitRefresh" });
+      await page.post({ kind: "act", act: "gitShow", arg: hash });
+      check("a aba de commit mostra os arquivos", await page.waitFor(`document.querySelectorAll("#hive-pane .cm .df").length === 3`, 8000));
+      await page.eval(`document.querySelector("#hive-pane .df-head").click()`);
+      check("um arquivo do diff recolhe", await page.waitFor(`document.querySelector("#hive-pane .df").classList.contains("collapsed")`, 3000));
+      await page.eval(`document.querySelectorAll("#hive-pane .cm-file")[2].click()`);
+      check("a lista rola até o arquivo", await page.waitFor(`document.getElementById("hive-pane").scrollTop > 0`, 3000));
+      await page.post({ kind: "act", act: "closeCommit" });
+      // O terminal acompanha o fim quando chega texto.
+      await page.post({ kind: "act", act: "pane", arg: "terminal" });
+      await page.sleep(1500);
+      const many = process.platform === "win32" ? "for /L %i in (1,1,150) do @echo linha%i" : "for i in $(seq 150); do echo linha$i; done";
+      await page.post({ kind: "act", act: "termSubmit", text: many });
+      check("o terminal acompanha o fim", await page.waitFor(`(function(){var b=[].slice.call(document.querySelectorAll('#root [style*="gap:3px"]')).filter(function(e){return e.textContent.indexOf("linha150")>=0})[0];return !!b && b.scrollTop>0 && b.scrollTop+b.clientHeight>=b.scrollHeight-4})()`, 15000));
+      // Um tema claro vale para tudo, botões do hive.ui inclusive.
+      await page.post({ kind: "act", act: "theme", arg: "Light Modern" });
+      check("o tema claro pinta os widgets do hive.ui", await page.waitFor(`(function(){var b=document.querySelector("#root .h-button");if(!b)return false;var c=getComputedStyle(b).backgroundColor.match(/\\d+/g).map(Number);return c[0]>200&&c[1]>200&&c[2]>200})()`, 5000));
+    },
+  },
+  {
     name: "grande",
     files: { "g.hive": Array.from({ length: 3000 }, (_, i) => `func f${i}(n: Int): Int {\n\treturn n + ${i}\n}`).join("\n") + "\n" },
     async run(page, { project, check }) {

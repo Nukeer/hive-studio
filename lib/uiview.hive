@@ -22,11 +22,9 @@ import ./complete
 import ./settings
 import ./version
 import ./vim
-import ./markdown
 
 // O que só a janela do hive.ui lembra, fora do estado do Hive Studio: o menu
-// aberto na barra de título e o commit mostrado na aba de commit (`shown` é a
-// `state.commit.key` a que `commit` corresponde).
+// aberto na barra de título e o resto, abaixo.
 //
 // `top` é a primeira linha da vista realçada quando as setas ▲ ▼ a movem (0:
 // seguir o cursor); `caret`, `path` e `findSerial` são o que a vista seguia,
@@ -38,13 +36,14 @@ import ./markdown
 // `hoverCaret`/`hoverOk` respondem ao Ctrl+passar o mouse (há para onde ir
 // do nome naquela posição?), e `client`/`clientSerial` são o comando de menu
 // que só a página sabe fazer (desfazer, copiar, colar…).
+// `pane`/`paneKey` são o HTML do preview (Markdown, a árvore do JSON) ou da
+// aba de commit — o mesmo da página própria —, que vai à página uma vez,
+// quando muda (`paneKey` diz qual é).
 // `showText` diz se o editor leva o texto neste turno: só quando o serial do
 // texto muda (`textSerial` é o último que foi), porque a digitação a página já
 // tem — e um texto grande em todo turno pesa no diff do hive.ui.
 type Chrome {
 	menu:       Str
-	commit:     git.Commit
-	shown:      Str
 	top:        Int
 	caret:      Int
 	path:       Str
@@ -60,15 +59,12 @@ type Chrome {
 	hoverOk:    Bool
 	client:     Str
 	clientSerial: Int
-}
-
-func emptyCommit(): git.Commit {
-	git.DiffFile[dyn] none = []
-	return git.Commit("", "", "", "", "", "", none, false)
+	pane:       Str
+	paneKey:    Str
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", emptyCommit(), "", 0, 0, "", 0, 0, "", "", "", -1, -1, false, -1, false, "", 0)
+	return Chrome("", 0, 0, "", 0, 0, "", "", "", -1, -1, false, -1, false, "", 0, "", "")
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -1243,183 +1239,40 @@ func codePad(): Int {
 	return 9
 }
 
-// ── Markdown e JSON ──────────────────────────────────────────────────────
+// ── Markdown, JSON e commit: o HTML da página própria ────────────────────
+//
+// O preview do Markdown, a árvore do JSON e a aba de commit são o mesmo HTML
+// que o Hive Studio monta para a página própria (`doc.view`, `commit.html`).
+// Aqui fica só a caixa (de recuo 15) sobre a qual a ponte o mostra.
 
-// Um texto de Markdown sem a marcação da linha (ênfase, código, links).
-func mdInline(text: Str): Str {
-	mut out := replaceAll(replaceAll(replaceAll(text, "**", ""), "__", ""), "`", "")
-	for ;; {
-		if out is "{before}]({url}){after}" && indexOf(before, "[") is Result.Ok(_) {
-			if before is "{head}[{name}" {
-				out = head + name + after
-			} else {
-				return out
+func paneSlot(t: theme.Theme): hive.ui.View {
+	return ui.column([ui.grow(1), ui.pad(15), fill(t.editor)], [])
+}
+
+// O HTML que a caixa mostra agora, e a chave dele ("" quando não há caixa).
+type Pane {
+	key:   Str
+	html:  Str
+	fresh: Bool
+}
+
+func paneOf(state: model.State): Pane {
+	if render.showingCommit(state) {
+		return Pane("commit:" + state.commit.key, state.commit.html, true)
+	}
+	if render.showsDoc(state) {
+		if render.activeDoc(state) is Result.Ok(doc) {
+			if model.hasPreview(doc.path) && doc.mode != "edit" {
+				return Pane(render.previewKey(state), doc.view, true)
 			}
-		} else {
-			return out
 		}
 	}
-	return out
-}
-
-func mdCode(t: theme.Theme, lang: Str, lines: Str[]): hive.ui.View {
-	mut hive.ui.View[dyn] rows = []
-	mut carry := 0
-	for each line in lines {
-		if lang == "hive" {
-			done := highlight.highlightLine(line, carry)
-			append(rows, codeLine(t, done.html, -1, 4))
-			carry = done.carry
-		} else {
-			append(rows, codeLine(t, highlight.escape(line), -1, 4))
-		}
-	}
-	return ui.column([ui.pad(codePad()), fill(t.input)], rows)
-}
-
-func mdTable(t: theme.Theme, rows: Str[]): hive.ui.View {
-	mut hive.ui.View[dyn] out = []
-	for i := 0; i < len(rows); i++ {
-		if !markdown.isTableSeparator(rows[i]) {
-			mut hive.ui.View[dyn] cells = []
-			for each cell in markdown.cells(rows[i]) {
-				mut color := t.text
-				if i == 0 {
-					color = t.accent
-				}
-				append(cells, ui.column([ui.width(180), ui.pad(4)], [label(color, mdInline(cell))]))
-			}
-			append(out, ui.row([ui.gap(1)], cells))
-			append(out, rule(t))
-		}
-	}
-	return ui.column([], out)
-}
-
-// O preview do Markdown: títulos, parágrafos, listas (com tarefas), citações,
-// blocos de código (realçados quando são Hive), tabelas e linhas.
-// As linhas do Markdown, com a continuação indentada de um item de lista
-// juntada ao item.
-func mdLines(text: Str): Str[dyn] {
-	mut Str[dyn] out = []
-	mut inList := false
-	mut inFence := false
-	for each line in split(replaceAll(text, "\r", ""), "\n") {
-		last := len(out) - 1
-		fenceLine := markdown.trimSpaces(line) is "```{rest}"
-		if fenceLine {
-			inFence = !inFence
-		}
-		isItem := markdown.listItem(line) is Result.Ok(_) || markdown.orderedItem(line) is Result.Ok(_)
-		continues := !inFence && !fenceLine && inList && !isItem && markdown.indented(line) && markdown.trimBoth(line) != ""
-		if continues && out bounds last {
-			out[last] = out[last] + " " + markdown.trimBoth(line)
-		} else {
-			append(out, line)
-			inList = isItem
-		}
-	}
-	return out
-}
-
-func markdownView(t: theme.Theme, text: Str): hive.ui.View {
-	lines := mdLines(text)
-	mut hive.ui.View[dyn] blocks = []
-	mut Str[dyn] paragraph = []
-	mut Str[dyn] fence = []
-	mut fenceLang := ""
-	mut inFence := false
-	mut Str[dyn] table = []
-	for i := 0; i <= len(lines); i++ {
-		mut line := ""
-		atEnd := !(lines bounds i)
-		if lines bounds i {
-			line = lines[i]
-		}
-		if inFence {
-			if atEnd || markdown.trimSpaces(line) is "```{rest}" {
-				append(blocks, mdCode(t, fenceLang, fence))
-				fence = []
-				inFence = false
-			} else {
-				append(fence, line)
-			}
-			continue
-		}
-		isTable := !atEnd && markdown.trimSpaces(line) is "|{rest}"
-		if !isTable && len(table) > 0 {
-			append(blocks, mdTable(t, table))
-			table = []
-		}
-		blank := markdown.trimBoth(line) == ""
-		startsBlock := blank || atEnd || isTable || markdown.heading(line) is Result.Ok(_) || markdown.listItem(line) is Result.Ok(_) ||
-			markdown.orderedItem(line) is Result.Ok(_) || line is "> {q}" || line is ">" || markdown.isRule(line) || markdown.trimSpaces(line) is "```{rest}"
-		if startsBlock && len(paragraph) > 0 {
-			append(blocks, label(t.text, mdInline(join(paragraph, " "))))
-			paragraph = []
-		}
-		if atEnd {
-			break
-		}
-		if markdown.trimSpaces(line) is "```{lang}" {
-			inFence = true
-			fenceLang = markdown.trimBoth(lang)
-		} else if isTable {
-			append(table, line)
-		} else if line is "###### {h}" {
-			append(blocks, strong(t.text, mdInline(h)))
-		} else if line is "##### {h}" {
-			append(blocks, strong(t.text, mdInline(h)))
-		} else if line is "#### {h}" {
-			append(blocks, strong(t.text, mdInline(h)))
-		} else if line is "### {h}" {
-			append(blocks, strong(t.accent, mdInline(h)))
-		} else if line is "## {h}" {
-			append(blocks, ui.column([ui.gap(4)], [ui.text([tone(t.text), ui.size(ui.TextSize.Title()), ui.heading(2)], mdInline(h)), rule(t)]))
-		} else if line is "# {h}" {
-			append(blocks, ui.text([tone(t.text), ui.size(ui.TextSize.Title()), ui.heading(1)], mdInline(h)))
-		} else if markdown.listItem(line) is Result.Ok(entry) {
-			mut bullet := "•"
-			mut body := entry
-			if entry is "[ ] {rest}" {
-				bullet = "☐"
-				body = rest
-			} else if entry is "[x] {rest}" || entry is "[X] {rest}" {
-				bullet = "☑"
-				body = complete.skip(entry, 4)
-			}
-			append(blocks, ui.row([ui.gap(8)], [spaceOf(8 + 8 * (len(line) - len(markdown.trimSpaces(line)))), label(t.accent, bullet), label(t.text, mdInline(body))]))
-		} else if markdown.orderedItem(line) is Result.Ok(entry) {
-			append(blocks, ui.row([ui.gap(8)], [spaceOf(8), label(t.accent, "›"), label(t.text, mdInline(entry))]))
-		} else if line is "> {q}" {
-			append(blocks, ui.row([ui.gap(10)], [ui.row([ui.width(3), fill(t.accent)], []), label(t.muted, mdInline(q))]))
-		} else if markdown.isRule(line) {
-			append(blocks, rule(t))
-		} else if !blank {
-			append(paragraph, markdown.trimBoth(line))
-		}
-	}
-	return ui.column([ui.grow(1), ui.gap(10), ui.pad(20), fill(t.editor), ui.scroll(ui.Axis.Vertical())], blocks)
-}
-
-// O preview de um JSON: o realce, e o erro de um JSON inválido no topo.
-func jsonView(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): hive.ui.View {
-	mut hive.ui.View[dyn] items = []
-	if doc.problem.line > 0 {
-		append(items, ui.row([ui.pad(8), ui.gap(8), fill(t.input)], [label(t.danger, "⊗"),
-			clickable(t.danger, tx(state, "linha") + " {doc.problem.line}: " + doc.problem.message, actText("openAt", doc.path, "{doc.problem.line}:0"), "")]))
-	} else {
-		append(items, ui.row([ui.pad(8)], [small(t.good, "✓ JSON")]))
-	}
-	append(items, codeView(state, t, doc, asked))
-	return ui.column([ui.grow(1)], items)
+	return Pane("", "", true)
 }
 
 func previewOf(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): hive.ui.View {
-	if model.isMarkdown(doc.path) {
-		return markdownView(t, doc.text)
-	} else if model.isJson(doc.path) {
-		return jsonView(state, t, doc, asked)
+	if model.hasPreview(doc.path) {
+		return paneSlot(t)
 	}
 	return codeView(state, t, doc, asked)
 }
@@ -1663,110 +1516,6 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 
 // ── um commit, ou as alterações de um arquivo ────────────────────────────
 
-func statusColor(t: theme.Theme, status: Str): Str {
-	if status == "A" || status == "R" {
-		return t.gitNew
-	} else if status == "D" {
-		return t.danger
-	}
-	return t.gitMod
-}
-
-func counts(t: theme.Theme, added: Int, removed: Int): hive.ui.View {
-	return ui.row([ui.gap(6)], [small(t.gitNew, "+{added}"), small(t.danger, "−{removed}")])
-}
-
-func numberCell(t: theme.Theme, n: Int): hive.ui.View {
-	mut shown := ""
-	if n > 0 {
-		shown = "{n}"
-	}
-	return ui.row([ui.width(44), ui.justify(ui.Justify.End())], [small(t.gutter, shown)])
-}
-
-func diffLimitShown(): Int {
-	return 600
-}
-
-func diffRow(t: theme.Theme, path: Str, line: git.DiffLine): hive.ui.View {
-	if line.kind == "hunk" || line.kind == "note" {
-		return ui.row([ui.gap(8), ui.pad(2), fill(t.input)], [spaceOf(96), small(t.muted, line.text)])
-	}
-	mut sign := " "
-	mut hive.ui.Attr[dyn] box = [ui.gap(8)]
-	if line.kind == "add" {
-		sign = "+"
-		append(box, fill(t.gitNew + "26"))
-	} else if line.kind == "del" {
-		sign = "−"
-		append(box, fill(t.danger + "26"))
-	}
-	mut html := highlight.escape(line.text)
-	if path is "{stem}.hive" || path is "{stem}.go" {
-		html = highlight.highlight(line.text)
-	}
-	return ui.row(box, [numberCell(t, line.old), numberCell(t, line.new), label(t.muted, sign), codeLine(t, html, -1, 4)])
-}
-
-func commitPage(state: model.State, t: theme.Theme, commit: git.Commit): hive.ui.View {
-	words := state.words
-	mut added := 0
-	mut removed := 0
-	mut hive.ui.View[dyn] list = []
-	mut hive.ui.View[dyn] blocks = []
-	for each file in commit.files {
-		added = added + file.added
-		removed = removed + file.removed
-		color := statusColor(t, file.status)
-		mut shown := file.path
-		if file.status == "R" {
-			shown = file.oldPath + " → " + file.path
-		}
-		append(list, ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
-			fileIcon(workspace.baseName(file.path)), label(color, shown), ui.spacer(), counts(t, file.added, file.removed),
-			small(color, render.statusName(words, file.status))
-		]))
-		mut hive.ui.View[dyn] body = []
-		if file.status == "B" {
-			append(body, empty(t, i18n.tr(words, "Arquivo binário — sem diff de texto.")))
-		} else if len(file.lines) == 0 {
-			append(body, empty(t, i18n.tr(words, "Sem alterações de conteúdo.")))
-		}
-		mut shownLines := 0
-		for each line in file.lines {
-			if shownLines < diffLimitShown() {
-				append(body, diffRow(t, file.path, line))
-			}
-			shownLines++
-		}
-		if shownLines > diffLimitShown() {
-			append(body, empty(t, i18n.tr(words, "O diff é grande demais e foi cortado; use o terminal para vê-lo inteiro.")))
-		}
-		append(blocks, ui.column([ui.gap(0), fill(t.panel)], [
-			ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center()), fill(t.tabStrip)], [
-				fileIcon(workspace.baseName(file.path)), label(color, shown), ui.spacer(), counts(t, file.added, file.removed)
-			]),
-			ui.column([ui.pad(codePad())], body)
-		]))
-	}
-	mut hive.ui.View[dyn] page = [ui.text([tone(t.text), ui.size(ui.TextSize.Title())], i18n.tr(words, commit.subject))]
-	if commit.short != "" {
-		append(page, small(t.muted, commit.short + " · " + commit.author + " · " + commit.date))
-	}
-	if commit.body != "" {
-		append(page, label(t.text, commit.body))
-	}
-	append(page, ui.row([ui.gap(8)], [small(t.muted, "{len(commit.files)} " + i18n.tr(words, "arquivo(s)") + " ·"), counts(t, added, removed)]))
-	append(page, ui.column([ui.gap(4), ui.pad(8), fill(t.panel)], list))
-	if commit.truncated {
-		append(page, empty(t, i18n.tr(words, "O diff é grande demais e foi cortado; use o terminal para vê-lo inteiro.")))
-	}
-	for each block in blocks {
-		append(page, block)
-	}
-	return ui.column([ui.grow(1), ui.gap(12), ui.pad(20), fill(t.editor), ui.scroll(ui.Axis.Vertical())], page)
-}
-
 // A linha do Vim embaixo do editor: o modo, a macro sendo gravada, a última
 // mensagem e as teclas pendentes — ou, aberta, a linha de comando (`:`, `/`, `?`).
 func vimBar(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1809,7 +1558,7 @@ func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View
 	if layout == "settings" {
 		body = settingsPage(state, t)
 	} else if layout == "commit" {
-		body = commitPage(state, t, extra.commit)
+		body = paneSlot(t)
 	} else if render.activeDoc(state) is Result.Ok(doc) {
 		body = docBody(state, t, doc, extra.top, extra.showText)
 	}
@@ -1834,7 +1583,9 @@ func paneTab(t: theme.Theme, text: Str, message: model.Cmd, on: Bool): hive.ui.V
 }
 
 func preText(t: theme.Theme, text: Str): hive.ui.View {
-	return ui.column([ui.grow(1), ui.pad(codePad()), ui.scroll(ui.Axis.Both())], [label(t.text, text)])
+	// O recuo 9 põe a fonte monoespaçada; o gap 3 diz à ponte que esta caixa
+	// acompanha o fim quando chega texto novo (se ela estava no fim).
+	return ui.column([ui.grow(1), ui.pad(codePad()), ui.gap(3), ui.scroll(ui.Axis.Both())], [label(t.text, text)])
 }
 
 func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
@@ -2271,6 +2022,7 @@ type BridgeState {
 	vimPh:         Str
 	textQuiet:     Bool
 	numbers:       Bool
+	themeCss:      Str
 	fontSize:      Int
 	marks:         Int[dyn]
 	markLength:    Int
@@ -2404,6 +2156,7 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		vimPh: vimMark(),
 		textQuiet: state.textSerial == state.quietSerial,
 		numbers: state.settings.lineNumbers,
+		themeCss: theme.css(t, state.settings.fontSize, state.settings.tabSize),
 		fontSize: state.settings.fontSize,
 		marks: marks,
 		markLength: markLength,
@@ -2426,7 +2179,8 @@ func bridge(state: model.State, extra: Chrome): hive.ui.View {
 	return ui.row([ui.height(0)], [
 		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state, extra), hive.json.codec())),
 		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], ""),
-		ui.input([ui.placeholder("hive-hl")], extra.hl)
+		ui.input([ui.placeholder("hive-hl")], extra.hl),
+		ui.input([ui.placeholder("hive-pane")], extra.pane)
 	])
 }
 

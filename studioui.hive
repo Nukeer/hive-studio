@@ -21,7 +21,6 @@ import ./studio
 import ./lib/model
 import ./lib/uiview
 import ./lib/settings
-import ./lib/git
 import ./lib/server
 import ./lib/complete
 import ./lib/navigate
@@ -110,6 +109,9 @@ proc chromeEvent(win: mut Win, what: Str, arg: Str, self: hive.syslink.Address):
 	} else if what == "text" {
 		// A página não tem o texto do editor (recarregou): vai de novo.
 		win.extra.textSerial = -1
+	} else if what == "paneFull" {
+		// A página não tem o preview ou o commit à vista: vai de novo.
+		win.extra.paneKey = "-"
 	} else if what == "hlFull" {
 		// A página perdeu o fio do realce: no fim deste turno ele vai inteiro.
 		win.extra.hlVersion = -1
@@ -148,16 +150,13 @@ proc handle(win: mut Win, event: model.Event, self: hive.syslink.Address): void 
 // a aba muda) e a vista realçada, que volta a seguir o cursor quando ele, o
 // documento ou a busca mudam.
 proc follow(win: mut Win): void {
-	key := win.core.commit.key
-	if key != win.extra.shown {
-		win.extra.shown = key
-		if key == "" {
-			win.extra.commit = uiview.emptyCommit()
-		} else if key is "work:{path}" {
-			win.extra.commit = git.working(win.core.git, path)
-		} else if git.show(win.core.git, key) is Result.Ok(commit) {
-			win.extra.commit = commit
-		}
+	// O preview e a aba de commit vão à página uma vez, quando mudam.
+	pane := uiview.paneOf(win.core)
+	if pane.key != win.extra.paneKey {
+		win.extra.paneKey = pane.key
+		win.extra.pane = encode(pane, hive.json.codec())
+	} else {
+		win.extra.pane = encode(uiview.Pane(pane.key, "", false), hive.json.codec())
 	}
 	mut path := ""
 	index := win.core.active

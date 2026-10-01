@@ -46,7 +46,7 @@ func Installed() bool {
 }
 
 const style = `<style>
-input[placeholder="hive-state"],input[placeholder="hive-bridge"],input[placeholder="hive-hl"]{position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
+input[placeholder="hive-state"],input[placeholder="hive-bridge"],input[placeholder="hive-hl"],input[placeholder="hive-pane"]{position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 textarea[placeholder="⬡"]{font-family:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace;
 font-size:var(--hive-font-size,13px);line-height:1.55;white-space:pre;overflow:auto;resize:none;border-radius:0;border:0;tab-size:var(--hive-tab,4)}
 textarea[placeholder="⬡"]:focus{outline:none}
@@ -74,6 +74,71 @@ textarea[placeholder="⬡"].hive-link{cursor:pointer}
 max-height:80vh;overflow:auto;border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.38);z-index:30}
 #root [style*="padding:13px"]{position:fixed !important;left:var(--hive-pop-x,0) !important;top:var(--hive-pop-y,0) !important;
 z-index:20;max-height:260px;box-shadow:0 8px 24px rgba(0,0,0,.35);border-radius:4px}
+html.hive-modal #hive-hl,html.hive-modal #hive-pane,html.hive-modal #hive-agents,html.hive-modal #hive-vimcur{filter:brightness(.55)}
+#hive-pane{position:fixed;display:none;z-index:2;overflow:auto;padding:28px 44px;background:var(--editor);color:var(--text);
+font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+#hive-pane .md{max-width:880px;margin:0 auto;font-size:15px;line-height:1.7}
+#hive-pane .md h1,#hive-pane .md h2{border-bottom:1px solid var(--border);padding-bottom:.3em;font-weight:600}
+#hive-pane .md code{font-family:var(--mono);background:var(--input);padding:1px 5px;border-radius:4px;font-size:.88em}
+#hive-pane .md pre.md-code{background:var(--input);padding:12px 16px;border-radius:6px;overflow:auto;line-height:1.5}
+#hive-pane .md pre code{background:none;padding:0;font-size:13px}
+#hive-pane .md blockquote{border-left:4px solid var(--accent);margin:0 0 1em;padding:4px 16px;color:var(--muted)}
+#hive-pane .md table{border-collapse:collapse;margin:0 0 1em}
+#hive-pane .md th,#hive-pane .md td{border:1px solid var(--border);padding:6px 12px}
+#hive-pane .md th{background:var(--side)}
+#hive-pane .md a{color:var(--accent);text-decoration:none}
+#hive-pane .md a:hover{text-decoration:underline}
+#hive-pane .md img{max-width:100%}
+#hive-pane .jv{font-family:var(--mono);font-size:13px;line-height:1.65}
+#hive-pane .jv details{display:inline}
+#hive-pane .jv details>summary{cursor:pointer;list-style:none;display:inline}
+#hive-pane .jv details>summary::-webkit-details-marker{display:none}
+#hive-pane .jv details>summary::before{content:"\25B8";display:inline-block;width:12px;margin:0 2px 0 4px;color:var(--muted)}
+#hive-pane .jv details[open]>summary::before{content:"\25BE"}
+#hive-pane .jv details.o:not([open])>summary::after{content:" \2026  }";color:var(--muted)}
+#hive-pane .jv details.a:not([open])>summary::after{content:" \2026  ]";color:var(--muted)}
+#hive-pane .jv .jb{padding-left:20px;border-left:1px solid var(--border);margin-left:4px}
+#hive-pane .jv .jr{padding-left:14px}
+#hive-pane .jv .jk{color:var(--syn-type)}#hive-pane .jv .jp{color:var(--muted)}
+#hive-pane .jv .jn{color:var(--muted);font-size:11px;margin-left:6px}#hive-pane .jv details[open]>summary .jn{display:none}
+#hive-pane .jv .ji{color:var(--muted);font-size:11px;margin-right:8px;user-select:none}
+#hive-pane .jv .jnote{color:var(--muted);font-family:"Segoe UI",system-ui,sans-serif;font-size:12px;margin-bottom:8px}
+#hive-pane .jv .jmore{color:var(--muted)}
+#hive-pane .jv .jerr{color:var(--danger);font-family:"Segoe UI",system-ui,sans-serif;padding:10px 12px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in srgb,var(--danger) 10%,transparent)}
+#hive-pane .cm{max-width:1400px}
+#hive-pane .cm-head{padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:14px}
+#hive-pane .cm-subject{font-size:18px;font-weight:600;margin-bottom:4px}
+#hive-pane .cm-meta{color:var(--muted);font-size:12px}
+#hive-pane .cm-meta .hash{font-family:var(--mono);color:var(--accent)}
+#hive-pane .cm-body{font-family:inherit;white-space:pre-wrap;margin:10px 0 0;color:var(--text)}
+#hive-pane .cm-stats{margin-top:10px;font-size:12px;color:var(--muted)}
+#hive-pane .plus{color:var(--git-new)}#hive-pane .minus{color:var(--danger)}
+#hive-pane .g-new{color:var(--git-new)}#hive-pane .g-mod{color:var(--git-mod)}#hive-pane .g-del{color:var(--danger)}
+#hive-pane .empty{color:var(--muted);padding:6px 0}
+#hive-pane .cm-files{margin-bottom:18px;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+#hive-pane .cm-file{display:flex;gap:8px;align-items:center;padding:5px 12px;cursor:pointer;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+#hive-pane .cm-file:last-child{border-bottom:0}
+#hive-pane .cm-file:hover{background:var(--selection)}
+#hive-pane .cm-file .grow,#hive-pane .df-head .grow{flex:1}
+#hive-pane .cm-file .ic,#hive-pane .df-head .ic{width:18px;text-align:center;font-size:11px;font-weight:700}
+#hive-pane .cm-file .st{font-size:11px;width:72px;text-align:right}
+#hive-pane .df{border:1px solid var(--border);border-radius:6px;margin-bottom:16px;overflow:hidden}
+#hive-pane .df-head{display:flex;gap:8px;align-items:center;padding:6px 12px;background:var(--side);cursor:pointer;position:sticky;top:-28px;z-index:1;border-bottom:1px solid var(--border)}
+#hive-pane .df-head .chev{width:12px;color:var(--muted)}
+#hive-pane .df.collapsed .df-body,#hive-pane .df.collapsed .empty{display:none}
+#hive-pane .df.collapsed .df-head{border-bottom:0}
+#hive-pane .df.collapsed .chev{transform:rotate(-90deg)}
+#hive-pane .df-body{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:var(--font-size);line-height:var(--line);tab-size:var(--tab)}
+#hive-pane .df-body td{padding:0 8px;vertical-align:top}
+#hive-pane .df-body td.no{width:1%;min-width:44px;text-align:right;color:var(--gutter);user-select:none;white-space:nowrap}
+#hive-pane .df-body td.sign{width:1%;user-select:none;padding:0 4px}
+#hive-pane .df-body td.code{white-space:pre;width:100%}
+#hive-pane .df-body tr.add td{background:color-mix(in srgb,var(--git-new) 13%,transparent)}
+#hive-pane .df-body tr.add td.sign{color:var(--git-new)}
+#hive-pane .df-body tr.del td{background:color-mix(in srgb,var(--danger) 13%,transparent)}
+#hive-pane .df-body tr.del td.sign{color:var(--danger)}
+#hive-pane .df-body tr.hunk td{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--muted)}
+#hive-pane .df-body tr.note td{color:var(--muted);font-style:italic}
 #hive-vimcur{position:fixed;display:none;pointer-events:none;z-index:3;border-radius:1px;background:rgba(200,200,200,.45)}
 #hive-vimcur.idle{background:transparent;box-shadow:inset 0 0 0 1px rgba(200,200,200,.55)}
 ::-webkit-scrollbar{width:10px;height:10px}
@@ -166,10 +231,12 @@ const script = `<script>
     var ta = editor();
     if (ta) { guard(ta); }
     if (readHl()) { schedulePaint(); }
+    readPane();
     if (!box || box.value === raw) { return; }
     raw = box.value;
     try { state = JSON.parse(raw); } catch (err) { return; }
     syntaxColors();
+    applyTheme();
     document.documentElement.style.setProperty("--hive-tab", String(state.tab || 4));
     document.documentElement.style.setProperty("--hive-font-size", (state.fontSize || 13) + "px");
     vimAck = Math.max(vimAck, state.vimAck || 0);
@@ -300,6 +367,85 @@ const script = `<script>
         post({ kind: "caret", caret: lastCaret });
       }
     }, 120);
+  }
+
+  // ── o preview, a árvore do JSON e a aba de commit ──
+  // O HTML é o da página própria (doc.view, commit.html), mostrado numa camada
+  // sobre a caixa que lib/uiview.hive reserva para ele (a de recuo 15).
+  var paneLayer = document.createElement("div");
+  paneLayer.id = "hive-pane";
+  document.body.appendChild(paneLayer);
+  var pane = { raw: null, key: null, asked: null };
+  function readPane() {
+    var box = byPlaceholder("hive-pane");
+    if (!box || box.value === pane.raw) { return; }
+    pane.raw = box.value;
+    var u;
+    try { u = JSON.parse(box.value); } catch (err) { return; }
+    if (u.fresh) {
+      // O mesmo documento (o texto mudou) guarda a rolagem; outro começa no topo.
+      var same = pane.key !== null && pane.key.split("#")[0] === u.key.split("#")[0];
+      var top = paneLayer.scrollTop;
+      paneLayer.innerHTML = u.html;
+      paneLayer.scrollTop = same ? top : 0;
+      pane.key = u.key;
+    } else if (u.key !== pane.key && pane.asked !== u.key) {
+      // A página não tem este HTML (recarregou): pede de novo.
+      pane.asked = u.key;
+      post({ kind: "chrome", act: "paneFull" });
+    }
+  }
+  function placePane() {
+    var slot = document.querySelector('#root [style*="padding:15px"]');
+    if (!slot || !pane.key) { paneLayer.style.display = "none"; return; }
+    var r = slot.getBoundingClientRect();
+    paneLayer.style.display = "block";
+    paneLayer.style.left = r.left + "px"; paneLayer.style.top = r.top + "px";
+    paneLayer.style.width = r.width + "px"; paneLayer.style.height = r.height + "px";
+  }
+  // Os cliques do HTML da página própria: recolher um arquivo do diff, rolar
+  // até ele pela lista, e links que não saem da janela.
+  paneLayer.addEventListener("click", function (e) {
+    var link = e.target.closest("a");
+    if (link) { e.preventDefault(); }
+    var jump = e.target.closest("[data-scrollto]");
+    if (jump) {
+      var block = paneLayer.querySelector("#" + CSS.escape(jump.getAttribute("data-scrollto")));
+      if (block) { block.classList.remove("collapsed"); block.scrollIntoView({ block: "start" }); }
+      return;
+    }
+    var fold = e.target.closest("[data-collapse]");
+    if (fold) { fold.parentNode.classList.toggle("collapsed"); }
+  });
+
+  // As cores do tema valem para a página inteira, widgets do hive.ui
+  // inclusive: o hive.ui usa --bg, --fg, --line e --surface.
+  var themeStyle = document.createElement("style");
+  document.head.appendChild(themeStyle);
+  var themeRaw = "";
+  function applyTheme() {
+    if (!state.themeCss || state.themeCss === themeRaw) { return; }
+    themeRaw = state.themeCss;
+    themeStyle.textContent = state.themeCss +
+      ':root{--bg:var(--editor);--fg:var(--text);--line:var(--border);--surface:var(--button);' +
+      '--mono:ui-monospace,"Cascadia Code","Cascadia Mono",Consolas,"Liberation Mono","Courier New",monospace}' +
+      "body{background:var(--editor);color:var(--text)}";
+  }
+
+  // A Saída e o Terminal (as caixas de gap 3) acompanham o fim quando chega
+  // texto novo, se estavam no fim.
+  document.addEventListener("scroll", function (e) {
+    var el = e.target;
+    if (el && el.getAttribute && (el.getAttribute("style") || "").indexOf("gap:3px") >= 0) {
+      el.__hiveStick = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+    }
+  }, true);
+  function followEnds() {
+    var boxes = document.querySelectorAll('#root [style*="gap:3px"]');
+    for (var i = 0; i < boxes.length; i++) {
+      var el = boxes[i];
+      if (el.__hiveStick !== false && el.scrollTop + el.clientHeight < el.scrollHeight - 1) { el.scrollTop = el.scrollHeight; }
+    }
   }
 
   // ── o editor colorido ──
@@ -905,8 +1051,13 @@ const script = `<script>
       }
     }
     placeHl();
+    placePane();
+    followEnds();
     placeMenu();
     document.documentElement.classList.toggle("hive-explorer", explorerFocus);
+    // Um diálogo do hive.ui escurece a página; as camadas da ponte, que ficam
+    // fora dela, escurecem junto.
+    document.documentElement.classList.toggle("hive-modal", !!document.querySelector("#root .h-backdrop:not(.h-pinned)"));
     drawCursor();
     requestAnimationFrame(place);
   }

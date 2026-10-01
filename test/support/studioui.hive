@@ -72,3 +72,12 @@ func hlText(win: studioUi.Win): Str {
 	}
 	return ""
 }
+
+// O HTML do preview (ou do commit) que a janela mandou à ponte, "" quando
+// não mandou neste turno.
+func paneHtml(win: studioUi.Win): Str {
+	if uiview.Pane.decode(win.extra.pane, hive.json.codec()) is Result.Ok(pane) {
+		return pane.html
+	}
+	return ""
+}
