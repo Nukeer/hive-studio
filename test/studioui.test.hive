@@ -276,3 +276,19 @@ test "Ctrl+passar o mouse pergunta se há definição, e o menu Editar manda o c
 	assert sent.client == "undo" && sent.clientSerial == 1
 	assert win.extra.menu == ""
 }
+
+test "o explorador anda pelo teclado e o menu do arquivo vai preso ao mouse" {
+	folder := support.fixture()
+	sink := hive.syslink.spawn(support.sink, 0)
+	mut win := support.window(folder)
+	_down := studioUi.update(win, model.Cmd.Ui("\{\"kind\":\"tree\",\"text\":\"<Down>\"}"), sink)
+	assert win.core.selected != ""
+	assert uiview.bridgeState(win.core, win.extra).selected == win.core.selected
+	assert support.shows(win, "gap:5px")
+	_menu := studioUi.update(win, uiview.actText("context", folder + "/main.hive", "0,0"), sink)
+	assert uiview.bridgeState(win.core, win.extra).context == folder + "/main.hive"
+	assert support.shows(win, "width:380px")
+	assert support.shows(win, "Copiar caminho relativo")
+	_close := studioUi.update(win, uiview.act("closeContext", ""), sink)
+	assert uiview.bridgeState(win.core, win.extra).context == ""
+}

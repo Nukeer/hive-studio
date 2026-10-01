@@ -316,8 +316,12 @@ põe os dois na página pela variável que o runtime dele já tem para isso
   painel AGENTE reserva para ele; com o foco nele as teclas são do programa,
   menos mostrar/ocultar o agente e o painel;
 - **o mouse**: a borda de cima do painel arrasta a altura dele (duplo clique
-  maximiza), o botão direito numa linha do explorador abre o menu dela e o do
-  meio numa aba a fecha;
+  maximiza), o botão direito numa linha do explorador abre o menu dela onde o
+  mouse está (um clique fora o fecha) e o do meio numa aba a fecha;
+- **o explorador pelo teclado**: com o foco nele (um clique, ou `:Ex` no Vim),
+  `↑`/`↓` andam, `→`/`←` abrem e fecham pastas, `Enter` abre, `Home`/`End`,
+  `Delete`, `F2`; no Vim também `j k l h o gg G`, contagens e `:`; `Esc` volta
+  ao editor;
 - os vigias (git, disco) começam assim que a janela abre: a ponte manda um
   "olá", a primeira mensagem, que é quando a janela passa a ter endereço.
 - **o modo Vim**: as teclas vão ao mesmo motor (`lib/vim.hive`) que a janela

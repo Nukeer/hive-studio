@@ -70,6 +70,8 @@ textarea[placeholder="⬡"].hive-colored::selection{background:rgba(120,150,255,
 #hive-hl .mk.cur{background:rgba(255,160,0,.5);box-shadow:0 0 0 1px rgba(255,170,0,.8)}
 #hive-hl .lk{position:absolute;border-bottom:1px solid currentColor}
 textarea[placeholder="⬡"].hive-link{cursor:pointer}
+#root [style*="width:380px"]{position:fixed !important;left:var(--hive-ctx-x,0) !important;top:var(--hive-ctx-y,0) !important;
+max-height:80vh;overflow:auto;border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.38);z-index:30}
 #root [style*="padding:13px"]{position:fixed !important;left:var(--hive-pop-x,0) !important;top:var(--hive-pop-y,0) !important;
 z-index:20;max-height:260px;box-shadow:0 8px 24px rgba(0,0,0,.35);border-radius:4px}
 #hive-vimcur{position:fixed;display:none;pointer-events:none;z-index:3;border-radius:1px;background:rgba(200,200,200,.45)}
@@ -88,6 +90,7 @@ const script = `<script>
     vim: "", vimSerial: 0, selStart: 0, selEnd: 0, vimScroll: -1, vimAck: 0, vimPh: "", textQuiet: false };
   var vimSerial = -1, vimApplied = [0, 0], vimSent = 0, vimAck = 0, vimCaret = 0, composing = null;
   var raw = null, applied = -1, focused = -1, copied = -1, found = -1, askedText = -1, clientRan = -1;
+  var explorerFocus = false, lastSelected = null, pointer = { x: 0, y: 0 };
   var sent = null, allow = false, lastCaret = -1, caretTimer = 0;
   var nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
 
@@ -215,9 +218,11 @@ const script = `<script>
     if (state.focusSerial !== focused) {
       var first = focused < 0;
       focused = state.focusSerial;
+      explorerFocus = state.focus === "@explorer";
+      if (explorerFocus && document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
       if (state.focus === "@agent") {
         focusAgent = true;
-      } else {
+      } else if (!explorerFocus) {
         var target = byPlaceholder(state.focus);
         if (target && !first) {
           target.focus();
@@ -227,6 +232,13 @@ const script = `<script>
     }
     syncAgents();
     schedulePaint();
+    if (state.selected !== lastSelected) {
+      lastSelected = state.selected;
+      requestAnimationFrame(function () {
+        var row = document.querySelector('#root [style*="width:300px"] [style*="gap:5px"]');
+        if (row && row.scrollIntoView) { row.scrollIntoView({ block: "nearest" }); }
+      });
+    }
     if (state.clientSerial !== clientRan) {
       var firstClient = clientRan < 0;
       clientRan = state.clientSerial;
@@ -335,7 +347,8 @@ const script = `<script>
       "#hive-hl{color:" + c.text + "}#hive-hl .g{color:" + c.gutter + "}" +
       "#hive-hl .lm.error{color:" + c.danger + "}#hive-hl .lm.warning{color:" + c.warn + "}" +
       "#hive-hl .lb.error{background:" + c.danger + "}#hive-hl .lb.warning{background:" + c.warn + "}" +
-      "textarea[placeholder=\"⬡\"].hive-colored{caret-color:" + c.text + "}";
+      "textarea[placeholder=\"⬡\"].hive-colored{caret-color:" + c.text + "}" +
+      "html.hive-explorer #root [style*=\"width:300px\"] [style*=\"gap:5px\"]{box-shadow:inset 0 0 0 1px " + c.accent + "}";
     if (css !== synRaw) { synRaw = css; synStyle.textContent = css; }
   }
 
@@ -892,6 +905,8 @@ const script = `<script>
       }
     }
     placeHl();
+    placeMenu();
+    document.documentElement.classList.toggle("hive-explorer", explorerFocus);
     drawCursor();
     requestAnimationFrame(place);
   }
@@ -902,6 +917,16 @@ const script = `<script>
     readState();
     var combo = comboOf(e), ta = editor(), t = e.target, inEditor = ta && t === ta;
     function take(ev) { e.preventDefault(); e.stopPropagation(); post(ev); }
+    // Com o foco no explorador, as teclas andam pela árvore (e, no modo Vim,
+    // abrem a linha de comando), como na página própria.
+    if (explorerFocus && !(e.ctrlKey || e.metaKey || e.altKey) && e.key !== "Tab" && !(t.closest && t.closest("input,textarea"))) {
+      var treeKey = vimKeyName(e);
+      if (treeKey) {
+        if (treeKey === "<Esc>") { explorerFocus = false; }
+        take({ kind: "tree", text: treeKey });
+        return;
+      }
+    }
     // No terminal de um agente as teclas são do programa (Esc, Ctrl+C, Ctrl+R…),
     // menos os poucos atalhos que saem dele: mostrar/ocultar o agente e o painel.
     if (t.closest && t.closest("#hive-agents")) {
@@ -999,6 +1024,27 @@ const script = `<script>
 
   // ── o mouse: a borda do painel, o botão direito e o do meio ──
 
+  // Um clique no explorador dá o teclado a ele; um clique fora tira. Um
+  // clique fora do menu do explorador o fecha.
+  document.addEventListener("mousedown", function (e) {
+    pointer = { x: e.clientX, y: e.clientY };
+    var t = e.target, side = document.querySelector('#root [style*="width:300px"]');
+    var menu = document.querySelector('#root [style*="width:380px"]');
+    if (state.context && menu && !menu.contains(t)) { post({ kind: "act", act: "closeContext" }); }
+    if (menu && menu.contains(t)) { return; }
+    explorerFocus = !!side && side.contains(t) && !(t.closest && t.closest("input,textarea"));
+  }, true);
+
+  // O menu do explorador abre onde o mouse estava, sem passar da janela.
+  function placeMenu() {
+    var menu = state.context ? document.querySelector('#root [style*="width:380px"]') : null;
+    if (!menu) { return; }
+    var w = menu.offsetWidth, h = menu.offsetHeight;
+    var x = Math.max(4, Math.min(pointer.x, window.innerWidth - w - 8)), y = Math.max(4, Math.min(pointer.y, window.innerHeight - h - 8));
+    document.documentElement.style.setProperty("--hive-ctx-x", x + "px");
+    document.documentElement.style.setProperty("--hive-ctx-y", y + "px");
+  }
+
   // O puxador em cima do painel (a caixa de altura 5) muda a altura dele;
   // o duplo clique maximiza.
   var dragging = null;
@@ -1042,6 +1088,7 @@ const script = `<script>
   // Botão direito numa linha do explorador: o menu do ⋯ dela.
   document.addEventListener("contextmenu", function (e) {
     var t = e.target;
+    pointer = { x: e.clientX, y: e.clientY };
     if (t.closest && (t.closest("input,textarea") || t.closest("#hive-agents"))) { return; }
     var more = linkIn(t, ["⋯"]);
     if (!more) { return; }

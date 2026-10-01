@@ -85,6 +85,51 @@ export const scenarios = [
     },
   },
   {
+    name: "explorador",
+    files: { "a.hive": small, "b.hive": small, "c.hive": small },
+    settings: { vim: true },
+    async run(page, { project, check }) {
+      const side = `document.querySelector('#root [style*="width:300px"]')`;
+      const rowOf = (name) => page.eval(`(function(){var a=[].slice.call(${side}.querySelectorAll("a")).filter(function(x){return x.textContent===${JSON.stringify(name)}})[0];var r=a.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+      // Um clique no fundo do explorador dá o teclado a ele.
+      const empty = await page.eval(`(function(){var r=${side}.getBoundingClientRect();return {x:r.left+150,y:r.bottom-20}})()`);
+      await page.mouse("mousePressed", empty.x, empty.y);
+      await page.mouse("mouseReleased", empty.x, empty.y);
+      await page.press("ArrowDown");
+      check("↓ seleciona a primeira linha", await page.waitFor(`${state("selected")}.indexOf("a.hive") >= 0`));
+      check("a linha selecionada se destaca com o foco no explorador",
+        await page.waitFor(`document.documentElement.classList.contains("hive-explorer") && !!${side}.querySelector('[style*="gap:5px"]')`));
+      await page.press("ArrowDown");
+      check("↓ de novo vai para a seguinte", await page.waitFor(`${state("selected")}.indexOf("b.hive") >= 0`));
+      await page.press("F2");
+      check("F2 abre o nome para renomear", await page.waitFor(`[].slice.call(document.querySelectorAll("#root input")).some(function(i){return i.value==="b.hive"})`, 5000));
+      await page.press("Escape");
+      await page.mouse("mousePressed", empty.x, empty.y);
+      await page.mouse("mouseReleased", empty.x, empty.y);
+      await page.press("Enter");
+      check("Enter abre o arquivo", await page.waitFor(`!!${editor}`, 5000));
+      // :Ex no Vim abre o explorador fechado e põe o foco nele; j anda nele.
+      await page.post({ kind: "act", act: "action", arg: "toggleSidebar" });
+      await page.waitFor(`!${side}`, 5000);
+      await page.eval(`${editor}.focus()`);
+      await page.sleep(300);
+      for (const k of [":", "E", "x"]) await page.press(k);
+      await page.press("Enter");
+      check(":Ex abre o explorador com o foco nele", await page.waitFor(`!!${side} && document.documentElement.classList.contains("hive-explorer")`, 5000));
+      const before = await page.eval(state("selected"));
+      await page.press("j");
+      check("j anda na árvore", await page.waitFor(`${state("selected")} !== ${JSON.stringify(before)}`, 5000));
+      // O menu do botão direito abre onde o mouse está e fecha num clique fora.
+      const a = await rowOf("a.hive");
+      await page.mouse("mousePressed", a.x, a.y, "right");
+      await page.mouse("mouseReleased", a.x, a.y, "right");
+      check("o menu abre junto do mouse", await page.waitFor(`(function(){var m=document.querySelector('#root [style*="width:380px"]');if(!m)return false;var r=m.getBoundingClientRect();return Math.abs(r.left-${a.x})<30&&Math.abs(r.top-${a.y})<30})()`, 5000));
+      await page.mouse("mousePressed", 900, 600);
+      await page.mouse("mouseReleased", 900, 600);
+      check("um clique fora fecha o menu", await page.waitFor(`${state("context")} === "" && !document.querySelector('#root [style*="width:380px"]')`, 5000));
+    },
+  },
+  {
     name: "grande",
     files: { "g.hive": Array.from({ length: 3000 }, (_, i) => `func f${i}(n: Int): Int {\n\treturn n + ${i}\n}`).join("\n") + "\n" },
     async run(page, { project, check }) {

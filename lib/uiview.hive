@@ -483,10 +483,21 @@ func promptRow(state: model.State, t: theme.Theme): hive.ui.View {
 	])
 }
 
+// O espaço entre as peças da linha selecionada do explorador: um a mais que o
+// das outras, e é por ele que a ponte acha a linha (para destacá-la quando o
+// explorador tem o foco do teclado, e para rolá-la para a vista).
+func selectedGap(): Int {
+	return 5
+}
+
 func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.View {
 	entry := row.entry
 	current := entry.path == render.activePath(state) && render.showsDoc(state)
-	mut hive.ui.Attr[dyn] box = [ui.gap(4), ui.align(ui.Align.Center())]
+	mut gapSize := 4
+	if entry.path == state.selected {
+		gapSize = selectedGap()
+	}
+	mut hive.ui.Attr[dyn] box = [ui.gap(gapSize), ui.align(ui.Align.Center())]
 	if current {
 		append(box, fill(t.selection))
 	} else if entry.path == state.selected {
@@ -557,8 +568,8 @@ func ctxItem(state: model.State, t: theme.Theme, text: Str, name: Str, path: Str
 	return Entry(tx(state, text), hint, actText("ctx", name, path), true)
 }
 
-// O menu de um arquivo ou de uma pasta do explorador (o do botão direito na
-// página própria; aqui, o ⋯ da linha).
+// O menu de um arquivo ou de uma pasta do explorador: o do botão direito, ou
+// o do ⋯ da linha.
 func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 	path := state.context.path
 	if path == "" {
@@ -590,14 +601,14 @@ func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 		append(items, ctxItem(state, t, "Preparar (stage)", "stage", path, ""))
 		append(items, ctxItem(state, t, "Descartar alterações…", "discard", path, ""))
 	}
-	mut hive.ui.View[dyn] rows = [
-		ui.row([ui.gap(8), ui.align(ui.Align.Center())], [fileIcon(workspace.baseName(path)), strong(t.text, workspace.baseName(path))]),
-		rule(t)
-	]
+	mut hive.ui.View[dyn] rows = []
 	for each entry in items {
 		append(rows, menuRow(t, entry))
 	}
-	return ui.overlay([ui.onDismiss(act("closeContext", ""))], ui.column([ui.width(380), ui.pad(14), ui.gap(4), fill(t.panel), tone(t.text)], rows))
+	// Preso no canto, sem escurecer a página; a ponte o põe onde o mouse
+	// estava (a caixa de largura 380) e o fecha num clique fora dele.
+	return ui.overlay([ui.align(ui.Align.Start()), ui.justify(ui.Justify.Start())],
+		ui.column([ui.width(380), ui.pad(6), ui.gap(1), fill(t.side), tone(t.text)], rows))
 }
 
 // ── buscar no projeto ────────────────────────────────────────────────────
@@ -2264,6 +2275,8 @@ type BridgeState {
 	marks:         Int[dyn]
 	markLength:    Int
 	markCurrent:   Int
+	selected:      Str
+	context:       Str
 	hoverCaret:    Int
 	hoverOk:       Bool
 	client:        Str
@@ -2313,6 +2326,8 @@ func focusPlaceholder(state: model.State): Str {
 		return "@agent"
 	} else if target == "vimCommand" {
 		return vimMark()
+	} else if target == "explorer" {
+		return "@explorer"
 	}
 	return ""
 }
@@ -2393,6 +2408,8 @@ func bridgeState(state: model.State, extra: Chrome): BridgeState {
 		marks: marks,
 		markLength: markLength,
 		markCurrent: markCurrent,
+		selected: state.selected,
+		context: state.context.path,
 		hoverCaret: extra.hoverCaret,
 		hoverOk: extra.hoverOk,
 		client: extra.client,
