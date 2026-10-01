@@ -11,6 +11,7 @@ import ./i18n.test as i18nTest
 import ./jsonview.test as jsonviewTest
 import ./keys.test as keysTest
 import ./markdown.test as markdownTest
+import ./native.test as nativeTest
 import ./navigate.test as navigateTest
 import ./process.test as processTest
 import ./render.test as renderTest

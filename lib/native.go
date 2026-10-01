@@ -184,6 +184,65 @@ func RemoveAll(path string) (bool, error) {
 	return true, nil
 }
 
+// runeOffset é onde, em bytes, começa o caractere `n` de `text` (len(text)
+// quando o texto tem menos que isso).
+func runeOffset(text string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	count := 0
+	for at := range text {
+		if count == n {
+			return at
+		}
+		count++
+	}
+	return len(text)
+}
+
+// Splice troca, a partir do caractere `at`, `cut` caracteres de `text` por
+// `insert` — o mesmo que take(text, at) + insert + skip(text, at + cut), numa
+// passada só pelo texto (a edição de um arquivo grande, a cada tecla).
+func Splice(text string, at int, cut int, insert string) string {
+	if cut < 0 {
+		cut = 0
+	}
+	from := runeOffset(text, at)
+	to := from + runeOffset(text[from:], cut)
+	return text[:from] + insert + text[to:]
+}
+
+// Slice são os `count` caracteres de `text` a partir do caractere `from` (o que
+// houver, perto do fim), numa passada só — o trecho em volta do cursor que o
+// autocomplete lê de um arquivo grande.
+func Slice(text string, from int, count int) string {
+	if count <= 0 {
+		return ""
+	}
+	start := runeOffset(text, from)
+	end := start + runeOffset(text[start:], count)
+	return text[start:end]
+}
+
+// CaretLabel é o "Ln N, Col M" da barra de status para o cursor em `caret`
+// (caracteres desde o começo do texto), contado numa passada só.
+func CaretLabel(text string, caret int) string {
+	line, column, count := 1, 1, 0
+	for _, r := range text {
+		if count >= caret {
+			break
+		}
+		if r == '\n' {
+			line++
+			column = 1
+		} else {
+			column++
+		}
+		count++
+	}
+	return "Ln " + strconv.Itoa(line) + ", Col " + strconv.Itoa(column)
+}
+
 // Lower e Upper trocam a caixa das letras, acentuadas inclusive, uma letra
 // por outra: o texto continua com o mesmo número de caracteres.
 func Lower(text string) string {

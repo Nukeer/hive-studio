@@ -38,6 +38,33 @@ export const scenarios = [
     },
   },
   {
+    name: "grande",
+    files: { "g.hive": Array.from({ length: 3000 }, (_, i) => `func f${i}(n: Int): Int {\n\treturn n + ${i}\n}`).join("\n") + "\n" },
+    async run(page, { project, check }) {
+      await open(page, project, "g.hive");
+      check("só as linhas à vista vão para a camada",
+        await page.waitFor(`${editor}.classList.contains("hive-colored") && document.querySelectorAll("#hive-hl .l > div").length < 400`));
+      // Edições no meio: Enter, texto, Backspace e colar várias linhas.
+      await page.eval(`(function(){var t=${editor};var at=t.value.indexOf("func f1500(");t.setSelectionRange(at,at);t.scrollTop=1500*parseFloat(getComputedStyle(t).lineHeight)*3;})()`);
+      await page.sleep(300);
+      await page.insertText("// a");
+      await page.press("Enter");
+      await page.press("Backspace");
+      await page.insertText("x\ny\nz ");
+      await page.sleep(800);
+      const same = `(function(){
+        var t=${editor}, lines=t.value.split("\\n"), box=document.querySelector("#hive-hl .l");
+        var lh=parseFloat(getComputedStyle(t).lineHeight), first=Math.round(parseFloat(box.style.paddingTop)/lh);
+        var rows=box.children; if (!rows.length) return false;
+        for (var i=0;i<rows.length;i++) { if (rows[i].textContent !== lines[first+i]) return "linha "+(first+i+1)+": "+JSON.stringify(rows[i].textContent)+" != "+JSON.stringify(lines[first+i]); }
+        return true;
+      })()`;
+      const result = await page.waitFor(`${same} === true`, 5000);
+      check("a camada mostra as mesmas linhas do editor depois de editar" + (result ? "" : " (" + (await page.eval(same)) + ")"), result);
+      check("o texto chegou ao programa", await page.waitFor(`${state("caret")} > 0`));
+    },
+  },
+  {
     name: "vim",
     files: { "a.hive": small },
     settings: { vim: true },

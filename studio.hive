@@ -2730,7 +2730,7 @@ proc toMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> 
 			return Result.Error(false)
 		}
 		text := activeText(state)
-		return Result.Ok(model.Msg.EditAt(complete.take(text, event.at) + event.arg + complete.skip(text, event.at + event.cut), event.caret))
+		return Result.Ok(model.Msg.EditAt(native.splice(text, event.at, event.cut, event.arg), event.caret))
 	} else if event.kind == "edit" {
 		return Result.Ok(model.Msg.EditAt(event.text, event.caret))
 	} else if event.kind == "popup" {

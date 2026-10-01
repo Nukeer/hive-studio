@@ -19,6 +19,7 @@ import ./complete
 import ./version
 import ./vim
 import ./agents
+import ./native.go
 
 // O texto da interface no idioma escolhido.
 func tx(state: model.State, text: Str): Str {
@@ -1436,22 +1437,9 @@ func statusItem(label: Str, action: Str, arg: Str, tip: Str): Str {
 	return "<span class=\"si click\"" + act(action, arg) + attr("title", tip) + ">" + label + "</span>"
 }
 
-// Só o texto antes do cursor, partido em linhas: a última é a coluna.
+// A linha e a coluna do cursor, contadas numa passada só pelo texto antes dele.
 func caretPosition(text: Str, caret: Int): Str {
-	mut before := text
-	last := caret - 1
-	if caret <= 0 {
-		before = ""
-	} else if text bounds last {
-		before = text[:last]
-	}
-	lines := split(before, "\n")
-	mut column := 1
-	end := len(lines) - 1
-	if lines bounds end {
-		column = len(lines[end]) + 1
-	}
-	return "Ln {len(lines)}, Col {column}"
+	return native.caretLabel(text, caret)
 }
 
 func statusBar(state: model.State): Str {

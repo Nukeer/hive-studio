@@ -6,6 +6,7 @@
 import ./highlight
 import ./analysis
 import ./model
+import ./native.go
 
 // O que está sendo digitado: o pedaço de nome antes do cursor e, se houver,
 // o que vem antes do ponto (`hive.file` em `hive.file.re|`).
@@ -84,23 +85,20 @@ type Window {
 
 func before(text: Str, caret: Int, size: Int): Window {
 	if caret <= size {
-		return Window(take(text, caret), 0)
+		return Window(native.slice(text, 0, caret), 0)
 	}
 	from := caret - size
-	return Window(take(skip(text, from), size), from)
+	return Window(native.slice(text, from, size), from)
 }
 
 // O texto perto do cursor (`radius` caracteres para cada lado), para ler os
 // nomes de um arquivo grande sem passar por ele todo.
 func around(text: Str, caret: Int, radius: Int): Str {
-	if len(text) <= radius * 2 {
-		return text
-	}
 	mut from := caret - radius
 	if from < 0 {
 		from = 0
 	}
-	return take(skip(text, from), radius * 2)
+	return native.slice(text, from, radius * 2)
 }
 
 func context(text: Str, caret: Int): Context {

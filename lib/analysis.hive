@@ -260,6 +260,16 @@ func moduleOf(name: Str): Str {
 }
 
 func symbolOf(line: Str, number: Int): Result<model.Symbol, Bool> {
+	// Só uma linha que começa com f, p, t, q ou i pode declarar algo: as outras
+	// (quase todas) não passam pelos padrões, que são expressões regulares.
+	if line bounds 0 {
+		first := line[0]
+		if first != "f" && first != "p" && first != "t" && first != "q" && first != "i" {
+			return Result.Error(false)
+		}
+	} else {
+		return Result.Error(false)
+	}
 	if line is "func {name is (\w+)}{rest}" {
 		return Result.Ok(model.Symbol("func", name, number))
 	} else if line is "proc {name is (\w+)}{rest}" {

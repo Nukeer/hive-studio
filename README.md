@@ -341,9 +341,12 @@ traz de volta um evento no formato da página própria (`model.Event`), que
 
 O texto do editor só vai à página quando o programa o troca (outro arquivo,
 o Vim, o disco): a digitação a página já tem, e um arquivo grande em todo
-turno pesaria no diff do `hive.ui`. Medido com o Chromium headless, o realce
-de uma tecla chega em ~17 ms no `studio.hive` (2.900 linhas) e em ~44 ms no
-`lib/assets.hive` (8.000 linhas, 760 KB).
+turno pesaria no diff do `hive.ui`. A camada colorida
+só desenha as linhas à vista, e a ponte manda e pinta só o trecho editado.
+Medido com o Chromium headless, do teclado ao realce: ~7,5 ms no
+`studio.hive` (2.900 linhas) e ~28 ms no `lib/assets.hive` (8.000 linhas,
+760 KB) — e ali a maior parte é o próprio navegador refazendo um `textarea`
+com linhas de base64 de dezenas de KB, o mesmo custo da janela própria.
 
 **A ponte depende do `hivec` v0.2.9 por dentro**, e o risco é este:
 

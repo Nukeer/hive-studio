@@ -88,9 +88,7 @@ const script = `<script>
   function editor() { return document.querySelector('textarea[placeholder="⬡"]'); }
   function byPlaceholder(p) {
     if (!p) { return null; }
-    var all = document.querySelectorAll("input,textarea");
-    for (var i = 0; i < all.length; i++) { if (all[i].placeholder === p) { return all[i]; } }
-    return null;
+    return document.querySelector('input[placeholder="' + CSS.escape(p) + '"],textarea[placeholder="' + CSS.escape(p) + '"]');
   }
 
   // Um evento no formato da página própria, entregue pelo campo escondido.
@@ -130,6 +128,8 @@ const script = `<script>
     ta.value = text;
     allow = false;
     sent = text;
+    paintedFresh = false;
+    if (typeof schedulePaint === "function") { schedulePaint(); }
   }
 
   function lineHeight(ta) { return parseFloat(getComputedStyle(ta).lineHeight) || 20; }
@@ -156,8 +156,8 @@ const script = `<script>
     var box = byPlaceholder("hive-state");
     var ta = editor();
     if (ta) { guard(ta); }
-    var hlChanged = readHl();
-    if (!box || box.value === raw) { if (hlChanged || (ta && hl.painted.join("\n") !== ta.value)) { paint(); } return; }
+    if (readHl()) { schedulePaint(); }
+    if (!box || box.value === raw) { return; }
     raw = box.value;
     try { state = JSON.parse(raw); } catch (err) { return; }
     syntaxColors();
@@ -219,7 +219,7 @@ const script = `<script>
       }
     }
     syncAgents();
-    paint();
+    schedulePaint();
     if (state.clipSerial !== copied) {
       if (copied >= 0 && state.clip && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(state.clip).catch(function () {});
@@ -228,15 +228,36 @@ const script = `<script>
     }
   }
 
+  // Onde a próxima edição acontece, segundo o navegador (o "beforeinput"):
+  // com isso a diferença não precisa varrer o texto inteiro. Colar, arrastar e
+  // desfazer podem mexer em outro lugar e varrem tudo.
+  var editRange = null;
+  var local = ["insertText", "insertLineBreak", "insertParagraph", "deleteContentBackward", "deleteContentForward",
+    "deleteWordBackward", "deleteWordForward", "insertCompositionText", "insertReplacementText"];
+  document.addEventListener("beforeinput", function (e) {
+    var ta = editor();
+    if (!ta || e.target !== ta) { return; }
+    editRange = local.indexOf(e.inputType) >= 0 ? { start: ta.selectionStart, end: ta.selectionEnd } : null;
+  }, true);
+
   // A edição mandada como diferença do que o programa já tem.
   function sendEdit(ta) {
     var text = ta.value, caret = ta.selectionStart, p = 0, s = 0;
     if (sent === null) { sent = text; }
     var limit = Math.min(text.length, sent.length);
+    if (editRange) {
+      // Antes do começo e depois do fim do trecho o texto não mudou (uma
+      // folga para apagar com Backspace/Delete, palavras inteiras incluídas).
+      p = Math.max(0, Math.min(editRange.start, caret) - 64);
+      s = Math.max(0, Math.min(sent.length - editRange.end, text.length - caret) - 64);
+      if (p + s > limit) { p = 0; s = 0; }
+      editRange = null;
+    }
     while (p < limit && text.charCodeAt(p) === sent.charCodeAt(p)) { p++; }
     while (s < limit - p && text.charCodeAt(text.length - 1 - s) === sent.charCodeAt(sent.length - 1 - s)) { s++; }
     // Índices do JavaScript contam metades de caractere; com emoji e afins
     // antes da mudança, vai o texto inteiro.
+    patchPainted(sent, text, p, s);
     if (/[\uD800-\uDFFF]/.test(text.slice(0, p + 1)) || /[\uD800-\uDFFF]/.test(sent.slice(p, sent.length - s))) {
       post({ kind: "edit", text: text, caret: caret });
     } else {
@@ -258,7 +279,7 @@ const script = `<script>
   }
 
   // ── o editor colorido ──
-  var hl = { html: [], src: [], version: -1, raw: null, shown: [], lines: -1, painted: [], waiting: false };
+  var hl = { html: [], src: [], version: -1, raw: null, lines: -1, painted: [], waiting: false, p: 0, s: 0, n: 0, m: 0 };
   var hlLayer = document.createElement("div");
   hlLayer.id = "hive-hl";
   hlLayer.innerHTML = '<pre class="g"></pre><pre class="c"><div class="l"></div><div class="pad"></div></pre><div class="lens"></div>';
@@ -305,40 +326,81 @@ const script = `<script>
     if (css !== synRaw) { synRaw = css; synStyle.textContent = css; }
   }
 
+  // Quantas quebras de linha há em text[from:to].
+  function newlines(text, from, to) {
+    var n = 0, at = text.indexOf("\n", from);
+    while (at >= 0 && at < to) { n++; at = text.indexOf("\n", at + 1); }
+    return n;
+  }
+
+  // As linhas pintadas acompanham uma edição só no trecho dela (o que mudou
+  // entre o caractere p e o fim menos s): um arquivo grande não é partido em
+  // linhas de novo a cada tecla.
+  var paintedFresh = false;
+  function patchPainted(before, after, p, s) {
+    if (!hl.painted.length || hl.painted.join === undefined) { paintedFresh = false; return; }
+    var first = newlines(before, 0, p);
+    var last = first + newlines(before, p, before.length - s);
+    var from = after.lastIndexOf("\n", p - 1) + 1;
+    var to = after.indexOf("\n", after.length - s);
+    if (to < 0) { to = after.length; }
+    var lines = after.slice(from, to).split("\n");
+    var args = [first, last - first + 1];
+    for (var i = 0; i < lines.length; i++) { args.push(lines[i]); }
+    hl.painted.splice.apply(hl.painted, args);
+    paintedFresh = true;
+  }
+
+  // A pintura espera o próximo quadro: a tecla vai ao programa antes, e várias
+  // mudanças no mesmo quadro (a edição, o realce que voltou) pintam uma vez só.
+  var paintQueued = false;
+  function schedulePaint() {
+    if (paintQueued) { return; }
+    paintQueued = true;
+    requestAnimationFrame(function () { paintQueued = false; paint(); });
+  }
+
   // As linhas iguais ao que o programa coloriu vêm coloridas; as outras
-  // (acabaram de ser digitadas) vêm puras até o realce delas chegar. Só as
-  // linhas que mudaram desde o último desenho são trocadas.
+  // (acabaram de ser digitadas) vêm puras até o realce delas chegar.
   function paint() {
     var ta = editor();
     if (!ta) { return; }
-    var lines = ta.value.split("\n"), n = lines.length, m = hl.src.length, p = 0, s = 0, i;
+    var lines = paintedFresh ? hl.painted : ta.value.split("\n"), n = lines.length, m = hl.src.length, p = 0, s = 0, i;
+    paintedFresh = false;
     hl.painted = lines;
     while (p < n && p < m && lines[p] === hl.src[p]) { p++; }
     while (s < n - p && s < m - p && lines[n - 1 - s] === hl.src[m - 1 - s]) { s++; }
-    var target = new Array(n);
-    for (i = 0; i < p; i++) { target[i] = hl.html[i]; }
-    for (i = p; i < n - s; i++) { target[i] = escapeHtml(lines[i]); }
-    for (i = n - s; i < n; i++) { target[i] = hl.html[m - (n - i)]; }
-    var k = hl.shown.length, a = 0, b = 0;
-    while (a < n && a < k && target[a] === hl.shown[a]) { a++; }
-    while (b < n - a && b < k - a && target[n - 1 - b] === hl.shown[k - 1 - b]) { b++; }
-    if (a < k - b || a < n - b) {
-      var nodes = lineBox.children, after = nodes[k - b] || null;
-      for (i = k - b - 1; i >= a; i--) { lineBox.removeChild(nodes[i]); }
-      var holder = document.createElement("div"), html = "";
-      for (i = a; i < n - b; i++) { html += "<div>" + target[i] + "</div>"; }
-      holder.innerHTML = html;
-      var bundle = document.createDocumentFragment();
-      while (holder.firstChild) { bundle.appendChild(holder.firstChild); }
-      lineBox.insertBefore(bundle, after);
-    }
-    hl.shown = target;
+    hl.p = p; hl.s = s; hl.n = n; hl.m = m;
     if (n !== hl.lines) {
       hl.lines = n;
       var numbers = [];
       for (i = 1; i <= n; i++) { numbers.push(i); }
       gutterBox.textContent = numbers.join("\n") + "\n\n\n";
     }
+    drawWindow(ta, true);
+  }
+
+  function htmlAt(i) {
+    if (i < hl.p) { return hl.html[i]; }
+    if (i >= hl.n - hl.s) { return hl.html[hl.m - (hl.n - i)]; }
+    return escapeHtml(hl.painted[i]);
+  }
+
+  // Só as linhas à vista (e uma folga) vão para a página: um arquivo de
+  // milhares de linhas não pesa no layout a cada tecla. Em cima e embaixo, o
+  // espaço das que faltam, para a rolagem continuar a mesma do editor.
+  var windowed = { first: -1, last: -1, html: "" };
+  function drawWindow(ta, force) {
+    if (!hl.n) { return; }
+    var lh = lineHeight(ta), rows = Math.ceil(ta.clientHeight / lh) + 1;
+    var top = Math.floor(ta.scrollTop / lh);
+    if (!force && windowed.first >= 0 && top >= windowed.first && top + rows <= windowed.last + 1) { return; }
+    var first = Math.max(0, top - 80), last = Math.min(hl.n - 1, top + rows + 80), html = "";
+    for (var i = first; i <= last; i++) { html += "<div>" + htmlAt(i) + "</div>"; }
+    if (html !== windowed.html) { lineBox.innerHTML = html; windowed.html = html; }
+    lineBox.style.paddingTop = (first * lh) + "px";
+    lineBox.style.paddingBottom = ((hl.n - 1 - last) * lh) + "px";
+    windowed.first = first; windowed.last = last;
   }
 
   // Onde a marca do Error Lens está agora: a linha dela, se ainda tem o mesmo
@@ -400,6 +462,7 @@ const script = `<script>
     hlLayer.style.tabSize = st.tabSize;
     var padTop = parseFloat(st.paddingTop) + parseFloat(st.borderTopWidth), padLeft = parseFloat(st.paddingLeft) + parseFloat(st.borderLeftWidth);
     codeBox.style.padding = padTop + "px " + st.paddingRight + " " + st.paddingBottom + " " + padLeft + "px";
+    drawWindow(ta, false);
     codeBox.scrollTop = ta.scrollTop; codeBox.scrollLeft = ta.scrollLeft;
     var numbers = state.numbers !== false;
     gutterBox.style.display = numbers ? "block" : "none";
@@ -538,6 +601,7 @@ const script = `<script>
 
   function insert(ta, text) {
     ta.focus();
+    editRange = { start: ta.selectionStart, end: ta.selectionEnd };
     document.execCommand("insertText", false, text);
   }
 
@@ -704,7 +768,11 @@ const script = `<script>
 
   document.addEventListener("input", function (e) {
     var ta = editor();
-    if (ta && e.target === ta && !composing) { guard(ta); sendEdit(ta); paint(); }
+    if (!ta || e.target !== ta) { return; }
+    // O editor tem data-h (para o hive.ui lhe devolver o foco): sem isto, o
+    // ouvinte do próprio hive.ui mandaria o texto inteiro a cada tecla.
+    e.stopPropagation();
+    if (!composing) { guard(ta); sendEdit(ta); schedulePaint(); }
   }, true);
 
   ["keyup", "mouseup", "select"].forEach(function (name) {
