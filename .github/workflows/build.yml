@@ -88,9 +88,10 @@ jobs:
       - name: Testes
         run: hivec test test/suite.hive
 
-      # A janela do hive.ui de verdade, num Chrome headless: pega um hivec que
-      # quebre a ponte (lib/bridge.go) sem quebrar o build. O Node 22 traz o
-      # WebSocket que o tools/e2e usa para falar com o DevTools do Chrome.
+      # A janela do hive.ui de verdade, servida como página (HIVE_WINDOW=print)
+      # num Chrome headless: pega um hivec que quebre o editor, o teclado ou o
+      # mouse sem quebrar o build. O Node 22 traz o WebSocket que o tools/e2e
+      # usa para falar com o DevTools do Chrome.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

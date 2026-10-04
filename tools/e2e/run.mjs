@@ -8,9 +8,9 @@
 // FAIL; o processo termina com 1 se algum falhou. O navegador é o de
 // BROWSER, ou o primeiro Chromium que aparecer (Edge, Chrome, Chromium).
 //
-// É o que pega uma mudança no hivec que quebre a ponte (lib/bridge.go) sem
-// quebrar o build: o script dela não entrar na página, o protocolo dos campos
-// escondidos mudar, o foco ou o texto do editor se perderem.
+// A janela é a do hive.ui servida como página (HIVE_WINDOW=print), o mesmo
+// programa que a janela nativa desenha: pega um hivec que quebre o editor, o
+// teclado, o mouse ou o terminal dos agentes sem quebrar o build.
 
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
@@ -84,9 +84,10 @@ async function connect(port) {
       }
       return false;
     },
-    // Um evento no formato da página própria, pelo campo da ponte.
+    // Um evento no formato da página própria, pelo campo que o Hive Studio
+    // põe com HIVE_E2E=1.
     post(ev) {
-      return page.eval(`(function(){var b=document.querySelector('input[placeholder="hive-bridge"]');b.value=${JSON.stringify(JSON.stringify(ev))};b.dispatchEvent(new Event("input",{bubbles:true}));return true})()`);
+      return page.eval(`(function(){var b=document.querySelector('input[placeholder="hive-event"]');b.value=${JSON.stringify(JSON.stringify(ev))};b.dispatchEvent(new Event("input",{bubbles:true}));return true})()`);
     },
     async press(key, modifiers = 0) {
       const codes = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8 };
@@ -114,7 +115,7 @@ async function runScenario(exe, browser, scenario, port) {
   mkdirSync(join(appdata, "HiveStudio"), { recursive: true });
   for (const [name, text] of Object.entries(scenario.files || {})) writeFileSync(join(project, name), text);
   writeFileSync(join(appdata, "HiveStudio", "settings.json"), JSON.stringify(scenario.settings || {}));
-  const env = { ...process.env, APPDATA: appdata, HIVE_WINDOW: "print" };
+  const env = { ...process.env, APPDATA: appdata, HIVE_WINDOW: "print", HIVE_E2E: "1" };
   const app = spawn(exe, [project], { env, detached: !windows, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   app.stdout.on("data", (d) => (out += d));
@@ -134,8 +135,8 @@ async function runScenario(exe, browser, scenario, port) {
       `--user-data-dir=${join(root, "browser")}`, `--remote-debugging-port=${port}`, "--window-size=1400,900", url],
       { detached: !windows, stdio: "ignore" });
     const page = await connect(port);
-    const ready = await page.waitFor(`typeof sock !== "undefined" && sock.readyState === 1 && !!document.querySelector('input[placeholder="hive-bridge"]')`, 15000);
-    checks.push(["a ponte entrou na página", !!ready]);
+    const ready = await page.waitFor(`typeof sock !== "undefined" && sock.readyState === 1 && !!document.querySelector('input[placeholder="hive-event"]')`, 15000);
+    checks.push(["a janela abriu", !!ready]);
     if (ready) {
       const check = (name, ok) => checks.push([name, !!ok]);
       await scenario.run(page, { project, check, read: (name) => readFileSync(join(project, name), "utf8") });

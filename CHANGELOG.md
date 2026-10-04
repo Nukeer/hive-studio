@@ -1,5 +1,28 @@
 # Changelog
 
+## Próxima
+
+### Janela nativa do `hive.ui`
+
+* **`studioui.hive` abre na janela nativa do `hive.ui`** (Windows e Linux, sem
+  navegador), com tudo o que a janela própria tem: o editor colorido e
+  digitável (`ui.code`), os atalhos, o modo Vim, o explorador pelo teclado, o
+  menu do botão direito onde o mouse está, as sugestões junto do cursor,
+  Ctrl+clique para a definição, o puxador do painel, o botão do meio fechando
+  a aba, o preview do Markdown, o JSON e a aba de commit desenhados com
+  widgets, e os terminais dos agentes, emulados em Go (vt10x) e desenhados na
+  janela.
+* **Sai a ponte** (`lib/bridge.go`): o que ela fazia com JavaScript na página o
+  `hive.ui` faz agora para a janela nativa e para a página.
+* Os testes de ponta a ponta (`tools/e2e`) abrem a mesma janela servida como
+  página (`HIVE_WINDOW=print`).
+
+### Precisa de
+
+* Um **`hivec`** com o `hive.ui` novo (`ui.code`, `ui.keys`, `ui.focus`,
+  `ui.clip`, `ui.perform`, `anchor`, `onDrag`…). O CI continua fixado na
+  v0.2.11 até sair a versão que os traz.
+
 ## v0.1.3
 
 ### Editor

@@ -2196,6 +2196,10 @@ proc update(state: mut model.State, message: model.Msg, from: Address): void {
 			if side is model.SideView.TodoSide {
 				scanTodos(state, from)
 			}
+			// Abrir o explorador (Ctrl+Shift+E, o ícone) dá o teclado a ele.
+			if side is model.SideView.ExplorerSide {
+				withFocus(state, "explorer")
+			}
 		}
 	} else if message is model.Msg.ViewReady(path, version, view, problem) {
 		state.viewPending = ""

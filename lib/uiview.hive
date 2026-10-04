@@ -22,6 +22,9 @@ import ./complete
 import ./settings
 import ./version
 import ./vim
+import ./native.go
+import ./jsonview
+import ./pty.go
 
 // O que só a janela do hive.ui lembra, fora do estado do Hive Studio: o menu
 // aberto na barra de título e o resto, abaixo.
@@ -29,42 +32,50 @@ import ./vim
 // `top` é a primeira linha da vista realçada quando as setas ▲ ▼ a movem (0:
 // seguir o cursor); `caret`, `path` e `findSerial` são o que a vista seguia,
 // para voltar a seguir o cursor quando ele (ou o documento, ou a busca) muda.
-// `ptyPort` e `ptyToken` são o servidor dos terminais dos agentes (o xterm.js
-// e o `/pty`), que studioui.hive abre. `hl` é o realce do editor que a página
-// ainda não tem (`model.HlUpdate` em JSON: tudo, só as linhas que mudaram, ou
-// nada), e `hlPath`/`hlVersion` o documento e a versão a que ele leva.
-// `hoverCaret`/`hoverOk` respondem ao Ctrl+passar o mouse (há para onde ir
-// do nome naquela posição?), e `client`/`clientSerial` são o comando de menu
-// que só a página sabe fazer (desfazer, copiar, colar…).
-// `pane`/`paneKey` são o HTML do preview (Markdown, a árvore do JSON) ou da
-// aba de commit — o mesmo da página própria —, que vai à página uma vez,
-// quando muda (`paneKey` diz qual é).
-// `showText` diz se o editor leva o texto neste turno: só quando o serial do
-// texto muda (`textSerial` é o último que foi), porque a digitação a página já
-// tem — e um texto grande em todo turno pesa no diff do hive.ui.
+// `client`/`clientSerial` são o comando do menu Editar que o editor faz
+// (desfazer, copiar, colar…), uma vez por serial.
 type Chrome {
 	menu:       Str
 	top:        Int
 	caret:      Int
 	path:       Str
 	findSerial: Int
-	ptyPort:    Int
-	ptyToken:   Str
-	hl:         Str
-	hlPath:     Str
-	hlVersion:  Int
-	textSerial: Int
-	showText:   Bool
-	hoverCaret: Int
-	hoverOk:    Bool
 	client:     Str
 	clientSerial: Int
-	pane:       Str
-	paneKey:    Str
+	// Ctrl+mouse sobre um nome que tem definição: o trecho dele (-1: nenhum).
+	probeFrom:  Int
+	probeTo:    Int
+	// As seções do controle de código que estão recolhidas.
+	hideStaged:  Bool
+	hideChanges: Bool
+	hideLog:     Bool
+	// O editor: as linhas à vista (`first`, `last`), a âncora da seleção, e o
+	// pedido de pôr o cursor (`selA`, `selH`), renovado (`selSerial`) quando o
+	// texto, o Vim ou a busca o movem — os seriais que o pedido já viu são
+	// `seenText`, `seenVim` e `seenFind`.
+	first:      Int
+	last:       Int
+	anchor:     Int
+	selA:       Int
+	selH:       Int
+	selSerial:  Int
+	seenText:   Int
+	seenVim:    Int
+	seenFind:   Int
+	// O puxador do painel: a altura de quando o arraste começou (-1: parado)
+	// e a de agora.
+	dragBase:   Int
+	dragHeight: Int
+	// O commit da aba de commit, lido do git quando a aba muda.
+	commit:     git.Commit
+	// Com HIVE_E2E=1 (tools/e2e): um campo escondido por onde o teste manda
+	// eventos (`model.Event`) direto à janela.
+	e2e:        Bool
 }
 
 func emptyChrome(): Chrome {
-	return Chrome("", 0, 0, "", 0, 0, "", "", "", -1, -1, false, -1, false, "", 0, "", "")
+	return Chrome("", 0, 0, "", 0, "", 0, -1, -1, false, false, false,
+		0, 60, 0, 0, 0, 0, -1, -1, -1, -1, 0, noCommit(), false)
 }
 
 // ── eventos: os mesmos que a página própria manda ────────────────────────
@@ -109,6 +120,343 @@ func chrome(what: Str, arg: Str): model.Cmd {
 	return event("chrome", what, arg, "", 0)
 }
 
+// ── o teclado, o editor e o mouse ────────────────────────────────────────
+
+// Uma tecla que a janela tomou para si (`ui.keys`): o Esc é o escape da IDE,
+// o resto um atalho, que leva o cursor e o texto selecionado (o Ctrl+F busca ele).
+func keyCmd(selected: Str, caret: Int, combo: Str): model.Cmd {
+	if combo == "Escape" {
+		return act("escape", "")
+	}
+	return event("key", "", selected, combo, caret)
+}
+
+// As teclas da janela inteira: os atalhos do mapa e o Esc. Gravando um atalho
+// nas Configurações, todas.
+func windowKeys(state: model.State): Str[dyn] {
+	if state.recording != "" {
+		return ["Any"]
+	}
+	mut all := keys.combos(state.settings.keymap)
+	append(all, "Escape")
+	return all
+}
+
+// Uma edição do editor: o trecho de `from` a `to` virou `text`, sobre o texto
+// do serial `serial`.
+func editCmd(serial: Int, from: Int, to: Int, text: Str): model.Cmd {
+	return model.Cmd.Ui(encode(model.Event("edit", "", text, "", from + len(text), from, to - from, serial), hive.json.codec()))
+}
+
+func caretCmd(anchor: Int, head: Int): model.Cmd {
+	return event("caret", "", "{anchor}", "", head)
+}
+
+func viewCmd(first: Int, last: Int): model.Cmd {
+	return chrome("view", "{first},{last}")
+}
+
+// Ctrl+clique num nome: ir para a definição.
+func jumpCmd(at: Int): model.Cmd {
+	return actCaret("definition", at)
+}
+
+func probeCmd(at: Int): model.Cmd {
+	return chrome("probe", "{at}")
+}
+
+// O pedido de foco do programa (`state.focus`), no campo `name`.
+func focusOn(state: model.State, name: Str): hive.ui.Attr[dyn] {
+	mut hive.ui.Attr[dyn] out = []
+	if state.focus == name {
+		append(out, ui.focus(state.focusSerial))
+	}
+	return out
+}
+
+func plus(a: hive.ui.Attr[], b: hive.ui.Attr[]): hive.ui.Attr[dyn] {
+	mut hive.ui.Attr[dyn] out = []
+	for each x in a {
+		append(out, x)
+	}
+	for each x in b {
+		append(out, x)
+	}
+	return out
+}
+
+// As teclas que cada campo toma para si, e o que cada uma faz nele.
+func fieldKeys(kind: Str, empty: Bool): Str[dyn] {
+	if kind == "find" {
+		return ["Shift+Enter"]
+	} else if kind == "palette" {
+		return ["ArrowUp", "ArrowDown"]
+	} else if kind == "term" {
+		return ["ArrowUp", "ArrowDown", "Ctrl+C"]
+	} else if kind == "commit" {
+		return ["Ctrl+Enter"]
+	} else if kind == "vim" {
+		mut Str[dyn] taken = ["ArrowUp", "ArrowDown", "Tab", "Escape", "Ctrl+[", "Ctrl+C"]
+		if empty {
+			append(taken, "Backspace")
+		}
+		return taken
+	}
+	Str[dyn] none = []
+	return none
+}
+
+func fieldKeyCmd(kind: Str, combo: Str): model.Cmd {
+	mut step := "1"
+	if combo == "ArrowUp" {
+		step = "-1"
+	}
+	if kind == "find" {
+		return act("findPrev", "")
+	} else if kind == "palette" {
+		return act("paletteMove", step)
+	} else if kind == "term" {
+		if combo == "Ctrl+C" {
+			return act("termRestart", "")
+		}
+		return act("termHistory", step)
+	} else if kind == "commit" {
+		return act("gitCommit", "")
+	} else if kind == "vim" {
+		if combo == "ArrowUp" || combo == "ArrowDown" {
+			return act("vimHistory", step)
+		} else if combo == "Tab" {
+			return chrome("keep", "")
+		}
+		return act("vimCancel", "")
+	}
+	return chrome("keep", "")
+}
+
+func keyed(kind: Str, empty: Bool): hive.ui.Attr[dyn] {
+	return [ui.keys(fieldKeys(kind, empty)), ui.onKey(fieldKeyCmd(kind, _))]
+}
+
+// O explorador com o teclado: as setas, o Enter, o F2, o Delete e, no Vim,
+// as letras (j, k, gg…) andam pela árvore.
+func treeKeys(state: model.State): Str[dyn] {
+	mut Str[dyn] taken = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Delete", "F2", "Escape", "Space",
+		"Home", "End", "PageUp", "PageDown"]
+	if state.settings.vim {
+		for each c in split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$^", "") {
+			append(taken, c)
+		}
+	}
+	return taken
+}
+
+func treeCmd(combo: Str): model.Cmd {
+	return event("tree", "", "", vimName(combo), 0)
+}
+
+// A tecla no jeito do Vim: j, $, <Esc>, <C-r>… ("" quando não é do Vim).
+func vimName(combo: Str): Str {
+	if combo == "Escape" || combo == "Ctrl+[" {
+		return "<Esc>"
+	}
+	named := [["Enter", "<CR>"], ["Backspace", "<BS>"], ["Delete", "<Del>"], ["Tab", "<Tab>"],
+		["ArrowLeft", "<Left>"], ["ArrowRight", "<Right>"], ["ArrowUp", "<Up>"], ["ArrowDown", "<Down>"],
+		["Home", "<Home>"], ["End", "<End>"], ["PageUp", "<PageUp>"], ["PageDown", "<PageDown>"], ["F2", "<F2>"],
+		["Space", "<Space>"]]
+	for each pair in named {
+		if pair[0] == combo {
+			return pair[1]
+		}
+	}
+	if combo is "Ctrl+{key}" {
+		if len(key) == 1 {
+			return "<C-" + native.lower(key) + ">"
+		}
+		return ""
+	}
+	if len(combo) == 1 {
+		return combo
+	}
+	return ""
+}
+
+// O que o editor faz com uma tecla que tomou: as setas e o Enter da lista de
+// sugestões, e no Vim o resto (no modo de inserção, ele só toma o Esc) — menos
+// os atalhos da IDE com Ctrl, Alt ou F.
+func editorKeyCmd(selected: Str, caret: Int, popup: Bool, vimOn: Bool, keymap: Str, combo: Str): model.Cmd {
+	if popup && (combo == "ArrowUp" || combo == "ArrowDown" || combo == "Enter" || combo == "Tab" || combo == "Escape") {
+		return event("popup", "", "", combo, caret)
+	}
+	if combo == "Ctrl+X" && selected == "" && !vimOn {
+		return chrome("cutLine", "")
+	}
+	if vimOn {
+		name := vimName(combo)
+		ide := keys.actionFor(keymap, combo) is Result.Ok(_)
+		modified := combo is "Ctrl+{rest}" || combo is "Alt+{rest}" || combo is "F{n}"
+		mut vimCtrl := true
+		if name is "<C-{k}>" {
+			vimCtrl = indexOf(["r", "d", "u", "e", "y", "f", "b", "a", "x", "["], k) is Result.Ok(_)
+		}
+		if name != "" && vimCtrl && !(ide && modified) {
+			return event("vim", "", "", name, caret)
+		}
+	}
+	return keyCmd(selected, caret, combo)
+}
+
+// As teclas que o editor toma: as da lista de sugestões, aberta; no Vim, fora
+// do modo de inserção, todas — e nele, só o Esc.
+func editorKeys(state: model.State, selecting: Bool): Str[dyn] {
+	mut Str[dyn] taken = []
+	if len(state.suggestions) > 0 {
+		taken = ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"]
+	}
+	// Ctrl+X sem seleção recorta a linha inteira (a janela sabe se há seleção:
+	// ela só toma a tecla quando não há).
+	if !state.settings.vim && !selecting {
+		append(taken, "Ctrl+X")
+	}
+	if state.settings.vim && editorShown(state) {
+		if state.vim.mode == model.VimMode.InsertMode() {
+			append(taken, "Escape")
+			append(taken, "Ctrl+[")
+		} else {
+			taken = ["Any"]
+		}
+	}
+	return taken
+}
+
+// As cores do editor nas linhas perto das que estão à vista: o realce, as
+// ocorrências da busca e o Error Lens (sublinhado e marca na margem).
+func editorRuns(state: model.State, t: theme.Theme, doc: model.Doc, first: Int, last: Int): hive.ui.Run[dyn] {
+	mut hive.ui.Run[dyn] runs = []
+	// Só as linhas perto das que estão à vista: o resto do arquivo nem é partido.
+	low := maxInt(0, first - 40)
+	window := native.lines(doc.text, low, last + 40)
+	mut start := 0
+	if window bounds 0 {
+		start = numberOr(window[0], 0)
+	}
+	mut at := start
+	for k := 1; k < len(window); k++ {
+		if window bounds k {
+			for each token in tokensOf(lineHtmlOf(doc, window[k], low + k - 1)) {
+				size := len(token.text)
+				if token.cls != "" {
+					append(runs, ui.ink(at, at + size, hex(tokenColor(t, token.cls))))
+				}
+				at = at + size
+			}
+			at = at + 1
+		}
+	}
+	if state.find.open && state.find.text != "" {
+		matches := render.findMatches(doc.text, state.find)
+		size := len(state.find.text)
+		for i := 0; i < len(matches); i++ {
+			if matches bounds i {
+				if matches[i] + size >= start && matches[i] <= at {
+					mut color := t.input
+					if i == state.find.index {
+						color = t.selection
+					}
+					append(runs, ui.shade(matches[i], matches[i] + size, hex(color)))
+				}
+			}
+		}
+	}
+	for each lens in lensRuns(state, t, doc) {
+		append(runs, lens)
+	}
+	return runs
+}
+
+// O HTML realçado de uma linha (`index` a partir de 0) do documento.
+func lineHtmlOf(doc: model.Doc, line: Str, index: Int): Str {
+	lang := model.language(doc.path)
+	if lang == "hive" {
+		return highlight.highlightLine(line, highlight.carryAt(doc.hl, index - 1)).html
+	}
+	return highlight.plainLine(line, lang)
+}
+
+// O Error Lens: a linha de cada erro (ou aviso) com o fundo tingido, a
+// mensagem depois do fim dela e a marca na margem. A marca segue a linha pelo
+// texto que ela tinha no check (linhas entraram ou saíram antes dela), e some
+// se a linha foi editada — até o próximo check.
+func lensRuns(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.Run[dyn] {
+	mut hive.ui.Run[dyn] runs = []
+	marks := render.lensMarks(state)
+	if len(marks) == 0 {
+		return runs
+	}
+	mut Int[dyn] rows = []
+	mut Str[dyn] sources = []
+	for each mark in marks {
+		append(rows, mark.line - 1)
+		append(sources, mark.source)
+	}
+	placed := native.relocate(doc.text, rows, sources, 300)
+	mut Int[dyn] shown = []
+	for i := 0; i < len(marks); i++ {
+		if placed bounds i && marks bounds i {
+			row := placed[i]
+			if row >= 0 && indexOf(shown, row) is Result.Error(_) {
+				append(shown, row)
+				// Todas as mensagens da linha juntas; um erro vence um aviso.
+				mut error := false
+				mut Str[dyn] messages = []
+				for j := 0; j < len(marks); j++ {
+					if placed bounds j && marks bounds j {
+						if placed[j] == row {
+							append(messages, marks[j].message)
+							error = error || marks[j].severity == "error"
+						}
+					}
+				}
+				mut color := t.warn
+				mut tint := "1a"
+				if error {
+					color = t.danger
+					tint = "24"
+				}
+				mut text := join(messages, "  ·  ")
+				if len(text) > 240 {
+					text = complete.take(text, 240) + "…"
+				}
+				append(runs, ui.band(row, hex(color + tint)))
+				append(runs, ui.note(row, text, hex(color)))
+				append(runs, ui.marker(row, hex(color)))
+			}
+		}
+	}
+	return runs
+}
+
+// O editor: o texto do documento, colorido, com o cursor que o programa pediu.
+func codeEditor(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome): hive.ui.View {
+	selected := native.slice(doc.text, minInt(extra.anchor, state.caret), maxInt(extra.anchor, state.caret) - minInt(extra.anchor, state.caret))
+	popup := len(state.suggestions) > 0
+	vimOn := state.settings.vim
+	mut attrs := plus(paneLook(), [ui.grow(1), fill(t.editor), tone(t.text),
+		ui.numbers(state.settings.lineNumbers), ui.tabSize(state.settings.tabSize), ui.fontSize(state.settings.fontSize),
+		ui.caret(extra.selA, extra.selH, extra.selSerial), ui.perform(extra.client, extra.clientSerial),
+		ui.onEdit(editCmd(state.textSerial, _, _, _)), ui.onCaret(caretCmd(_, _)), ui.onView(viewCmd(_, _)),
+		ui.onJump(jumpCmd(_)), ui.onProbe(probeCmd(_)),
+		ui.keys(editorKeys(state, extra.anchor != state.caret)), ui.onKey(editorKeyCmd(selected, state.caret, popup, vimOn, state.settings.keymap, _))])
+	if state.focus == "editor" {
+		append(attrs, ui.focus(state.focusSerial))
+	}
+	mut runs := editorRuns(state, t, doc, extra.first, extra.last)
+	if extra.probeFrom >= 0 && extra.probeTo > extra.probeFrom {
+		append(runs, ui.ink(extra.probeFrom, extra.probeTo, hex(t.accent)))
+		append(runs, ui.underline(extra.probeFrom, extra.probeTo, hex(t.accent)))
+	}
+	return ui.code(attrs, doc.text, runs)
+}
+
 // ── cores e peças ────────────────────────────────────────────────────────
 
 func tx(state: model.State, text: Str): Str {
@@ -140,25 +488,210 @@ func strong(color: Str, content: Str): hive.ui.View {
 }
 
 // Um texto clicável na cor dada (o link do hive.ui vem na cor de destaque).
+// O fundo de tudo o que se clica, sob o mouse: um cinza meio transparente,
+// que aparece igual nos temas claros e escuros.
+func hoverTone(): hive.ui.Tone {
+	return hex("#80808030")
+}
+
+func lit(): hive.ui.Attr[dyn] {
+	return [ui.hover(hoverTone()), ui.radius(4)]
+}
+
 func clickable(color: Str, content: Str, message: model.Cmd, tip: Str): hive.ui.View {
+	return ui.link([ui.on(message), tone(color), ui.hint(tip), ui.hover(hoverTone()), ui.radius(4)], "#", content)
+}
+
+// Um link dentro de uma linha que acende inteira (do explorador, de um menu,
+// uma aba): ele não acende sozinho.
+func plainLink(color: Str, content: Str, message: model.Cmd, tip: Str): hive.ui.View {
 	return ui.link([ui.on(message), tone(color), ui.hint(tip)], "#", content)
 }
 
+// Os botões e os campos no jeito da janela própria: cantos pequenos, sem o
+// anel de foco do hive.ui; um campo com a borda fina do tema, e um botão
+// sem borda (ele já tem a cor dele).
+func buttonLook(): hive.ui.Attr[dyn] {
+	return [ui.radius(4), ui.ring(false)]
+}
+
+func fieldLook(t: theme.Theme): hive.ui.Attr[dyn] {
+	return [ui.radius(4), ui.ring(false), ui.border(1), ui.borderTone(hex(t.border))]
+}
+
+// Um editor, um terminal ou a Saída: rente à caixa, sem borda nem anel.
+func paneLook(): hive.ui.Attr[dyn] {
+	return [ui.radius(0), ui.ring(false), ui.border(0)]
+}
+
 func button(t: theme.Theme, content: Str, message: model.Cmd, enabled: Bool): hive.ui.View {
-	return ui.button([ui.on(message), ui.disabled(!enabled), fill(t.button), tone(t.buttonText)], content)
+	return ui.button(plus(buttonLook(), [ui.on(message), ui.disabled(!enabled), fill(t.button), tone(t.buttonText)]), content)
 }
 
 func primary(t: theme.Theme, content: Str, message: model.Cmd, enabled: Bool): hive.ui.View {
-	return ui.button([ui.on(message), ui.disabled(!enabled), fill(t.accent), tone(t.statusFg)], content)
+	return ui.button(plus(buttonLook(), [ui.on(message), ui.disabled(!enabled), fill(t.accent), tone(t.statusFg)]), content)
 }
 
 func danger(t: theme.Theme, content: Str, message: model.Cmd): hive.ui.View {
-	return ui.button([ui.on(message), fill(t.danger), tone("#ffffff")], content)
+	return ui.button(plus(buttonLook(), [ui.on(message), fill(t.danger), tone("#ffffff")]), content)
 }
 
 // Uma ação pequena de cabeçalho (＋, ⟳, ✕…), com a dica ao passar o mouse.
 func headerAction(t: theme.Theme, glyph: Str, tip: Str, message: model.Cmd): hive.ui.View {
-	return clickable(t.muted, glyph, message, tip)
+	return iconButton(t, actionIcon(glyph, tip), glyph, tip, message, 26, 16)
+}
+
+// A mesma ação dentro de uma linha (do controle de código, do explorador):
+// menor, para a linha não crescer.
+func rowAction(t: theme.Theme, glyph: Str, tip: Str, message: model.Cmd): hive.ui.View {
+	return iconButton(t, actionIcon(glyph, tip), glyph, tip, message, 22, 14)
+}
+
+// O ícone desenhado de uma ação pequena, pelo símbolo que ela sempre teve —
+// e, quando o mesmo símbolo serve a duas (↑ é Push e é a pasta acima), pela dica.
+func actionIcon(glyph: Str, tip: Str): Str {
+	if glyph == "⟳" || glyph == "↻" {
+		return "refresh"
+	} else if glyph == "↓" && tip == "Pull" {
+		return "pull"
+	} else if glyph == "↑" && tip == "Push" {
+		return "push"
+	} else if glyph == "↑" && indexOf(tip, "Pasta acima") is Result.Ok(_) {
+		return "parent"
+	} else if glyph == "↑" {
+		return "up"
+	} else if glyph == "↓" {
+		return "down"
+	} else if glyph == "＋" {
+		return "newFile"
+	} else if glyph == "⊞" {
+		return "newFolder"
+	} else if glyph == "🗑" {
+		return "trash"
+	} else if glyph == "⊟" {
+		return "collapse"
+	} else if glyph == "…" {
+		return "openFolder"
+	} else if glyph == "✕" || glyph == "×" {
+		return "close"
+	} else if glyph == "✓" {
+		return "check"
+	} else if glyph == "⋯" {
+		return "more"
+	} else if glyph == "⌫" {
+		return "clear"
+	} else if glyph == "■" {
+		return "stop"
+	} else if glyph == "⤢" {
+		return "maximize"
+	} else if glyph == "⤡" {
+		return "restore"
+	} else if glyph == "−" {
+		return "minus"
+	} else if glyph == "+" {
+		return "plus"
+	} else if glyph == "±" {
+		return "diff"
+	} else if glyph == "↺" {
+		return "discard"
+	} else if glyph == "⧉" {
+		return "external"
+	} else if glyph == "↵" {
+		return "enter"
+	}
+	return ""
+}
+
+// Um botão quadrado com o ícone no meio, que acende sob o mouse. Sem ícone
+// desenhado para o símbolo, o símbolo mesmo, centrado.
+func iconButton(t: theme.Theme, name: Str, glyph: Str, tip: Str, message: model.Cmd, box: Int, size: Int): hive.ui.View {
+	mut inside := label(t.muted, glyph)
+	if name != "" {
+		inside = ui.canvas([ui.region(0.0, 0.0, 24.0, 24.0), ui.width(size), ui.height(size)], actionMarks(name, t.muted))
+	}
+	return ui.row([ui.width(box), ui.height(box), ui.align(ui.Align.Center()), ui.justify(ui.Justify.Center()),
+		ui.on(message), ui.hover(hoverTone()), ui.radius(4), ui.hint(tip)], [inside])
+}
+
+func line(color: Str, points: Float[]): hive.ui.Mark {
+	return ui.path([ui.paint(hex(color)), ui.thick(2.0)], points)
+}
+
+// Uma volta de r em torno de (cx, cy), de um ângulo ao outro, com a ponta de
+// seta no fim (o sentido em que ela anda).
+func arrowArc(color: Str, cx: Float, cy: Float, r: Float, from: Float, to: Float): hive.ui.Mark[dyn] {
+	ex := cx + r * hive.math.cos(to)
+	ey := cy + r * hive.math.sin(to)
+	mut dx := 0.0 - hive.math.sin(to)
+	mut dy := hive.math.cos(to)
+	if to < from {
+		dx = 0.0 - dx
+		dy = 0.0 - dy
+	}
+	nx := hive.math.cos(to)
+	ny := hive.math.sin(to)
+	return [
+		line(color, circle(cx, cy, r, from, to)),
+		line(color, [ex - 3.6 * dx + 2.8 * nx, ey - 3.6 * dy + 2.8 * ny, ex, ey, ex - 3.6 * dx - 2.8 * nx, ey - 3.6 * dy - 2.8 * ny])
+	]
+}
+
+func actionMarks(name: Str, c: Str): hive.ui.Mark[dyn] {
+	folder := [3.0, 5.0, 9.0, 5.0, 11.0, 7.5, 21.0, 7.5, 21.0, 19.0, 3.0, 19.0, 3.0, 5.0]
+	if name == "refresh" {
+		return arrowArc(c, 12.0, 12.0, 7.5, 0.9, 5.9)
+	} else if name == "discard" {
+		return arrowArc(c, 12.0, 12.0, 7.5, 6.9, 2.2)
+	} else if name == "pull" {
+		return [line(c, [12.0, 4.0, 12.0, 15.0]), line(c, [7.5, 10.5, 12.0, 15.0, 16.5, 10.5]), line(c, [5.0, 20.0, 19.0, 20.0])]
+	} else if name == "push" {
+		return [line(c, [12.0, 20.0, 12.0, 9.0]), line(c, [7.5, 13.5, 12.0, 9.0, 16.5, 13.5]), line(c, [5.0, 4.0, 19.0, 4.0])]
+	} else if name == "up" || name == "parent" {
+		return [line(c, [12.0, 19.0, 12.0, 6.0]), line(c, [7.0, 11.0, 12.0, 6.0, 17.0, 11.0])]
+	} else if name == "down" {
+		return [line(c, [12.0, 5.0, 12.0, 18.0]), line(c, [7.0, 13.0, 12.0, 18.0, 17.0, 13.0])]
+	} else if name == "newFile" {
+		return [line(c, [5.0, 3.0, 13.0, 3.0, 18.0, 8.0, 18.0, 21.0, 5.0, 21.0, 5.0, 3.0]), line(c, [13.0, 3.0, 13.0, 8.0, 18.0, 8.0]),
+			line(c, [8.5, 15.0, 14.5, 15.0]), line(c, [11.5, 12.0, 11.5, 18.0])]
+	} else if name == "newFolder" {
+		return [line(c, folder), line(c, [9.0, 13.5, 15.0, 13.5]), line(c, [12.0, 10.5, 12.0, 16.5])]
+	} else if name == "openFolder" {
+		return [line(c, folder), line(c, [3.0, 11.0, 21.0, 11.0])]
+	} else if name == "trash" {
+		return [line(c, [4.0, 6.5, 20.0, 6.5]), line(c, [9.0, 6.5, 9.0, 4.0, 15.0, 4.0, 15.0, 6.5]),
+			line(c, [6.0, 6.5, 7.0, 20.0, 17.0, 20.0, 18.0, 6.5]), line(c, [10.0, 10.0, 10.0, 16.5]), line(c, [14.0, 10.0, 14.0, 16.5])]
+	} else if name == "collapse" {
+		return [line(c, [4.0, 4.0, 20.0, 4.0, 20.0, 20.0, 4.0, 20.0, 4.0, 4.0]), line(c, [8.0, 12.0, 16.0, 12.0])]
+	} else if name == "close" {
+		return [line(c, [6.5, 6.5, 17.5, 17.5]), line(c, [17.5, 6.5, 6.5, 17.5])]
+	} else if name == "check" {
+		return [line(c, [5.0, 12.5, 10.0, 17.5, 19.0, 7.0])]
+	} else if name == "more" {
+		return [ui.dot([ui.paint(hex(c))], 6.0, 12.0, 1.7), ui.dot([ui.paint(hex(c))], 12.0, 12.0, 1.7), ui.dot([ui.paint(hex(c))], 18.0, 12.0, 1.7)]
+	} else if name == "clear" {
+		return [line(c, [4.0, 7.0, 20.0, 7.0]), line(c, [4.0, 12.0, 13.0, 12.0]), line(c, [4.0, 17.0, 10.0, 17.0]),
+			line(c, [15.0, 14.0, 20.0, 19.0]), line(c, [20.0, 14.0, 15.0, 19.0])]
+	} else if name == "stop" {
+		return [ui.patch([ui.paint(hex(c))], [7.0, 7.0, 17.0, 7.0, 17.0, 17.0, 7.0, 17.0])]
+	} else if name == "maximize" {
+		return [line(c, [4.0, 9.0, 4.0, 4.0, 9.0, 4.0]), line(c, [15.0, 4.0, 20.0, 4.0, 20.0, 9.0]),
+			line(c, [20.0, 15.0, 20.0, 20.0, 15.0, 20.0]), line(c, [9.0, 20.0, 4.0, 20.0, 4.0, 15.0])]
+	} else if name == "restore" {
+		return [line(c, [9.0, 4.0, 9.0, 9.0, 4.0, 9.0]), line(c, [20.0, 9.0, 15.0, 9.0, 15.0, 4.0]),
+			line(c, [15.0, 20.0, 15.0, 15.0, 20.0, 15.0]), line(c, [4.0, 15.0, 9.0, 15.0, 9.0, 20.0])]
+	} else if name == "minus" {
+		return [line(c, [6.0, 12.0, 18.0, 12.0])]
+	} else if name == "plus" {
+		return [line(c, [6.0, 12.0, 18.0, 12.0]), line(c, [12.0, 6.0, 12.0, 18.0])]
+	} else if name == "diff" {
+		return [line(c, [12.0, 4.0, 12.0, 12.0]), line(c, [8.0, 8.0, 16.0, 8.0]), line(c, [8.0, 17.0, 16.0, 17.0])]
+	} else if name == "external" {
+		return [line(c, [8.0, 4.0, 20.0, 4.0, 20.0, 16.0, 8.0, 16.0, 8.0, 4.0]), line(c, [4.0, 8.0, 4.0, 20.0, 16.0, 20.0])]
+	} else if name == "enter" {
+		return [line(c, [19.0, 5.0, 19.0, 13.0, 6.0, 13.0]), line(c, [10.0, 9.0, 6.0, 13.0, 10.0, 17.0])]
+	}
+	hive.ui.Mark[dyn] none = []
+	return none
 }
 
 func header(t: theme.Theme, title: Str, actions: hive.ui.View[]): hive.ui.View {
@@ -166,7 +699,7 @@ func header(t: theme.Theme, title: Str, actions: hive.ui.View[]): hive.ui.View {
 	for each a in actions {
 		append(items, a)
 	}
-	return ui.row([ui.gap(8), ui.pad(8), ui.align(ui.Align.Center())], items)
+	return ui.row([ui.gap(2), ui.pad(6), ui.align(ui.Align.Center())], items)
 }
 
 func empty(t: theme.Theme, content: Str): hive.ui.View {
@@ -182,7 +715,7 @@ func rule(t: theme.Theme): hive.ui.View {
 }
 
 func inputField(t: theme.Theme, attrs: hive.ui.Attr[], value: Str): hive.ui.View {
-	mut hive.ui.Attr[dyn] all = [fill(t.input), tone(t.text)]
+	mut all := plus(fieldLook(t), [fill(t.input), tone(t.text)])
 	for each a in attrs {
 		append(all, a)
 	}
@@ -354,10 +887,12 @@ func menuRow(t: theme.Theme, entry: Entry): hive.ui.View {
 		color = t.muted
 	}
 	mut name := label(color, entry.label)
+	mut hive.ui.Attr[dyn] box = [ui.gap(24), ui.pad(4), ui.align(ui.Align.Center())]
 	if entry.enabled {
-		name = clickable(color, entry.label, entry.message, "")
+		name = plainLink(color, entry.label, entry.message, "")
+		box = plus(box, plus(lit(), [ui.on(entry.message)]))
 	}
-	return ui.row([ui.gap(24), ui.pad(4), ui.align(ui.Align.Center())], [name, ui.spacer(), small(t.muted, entry.keys)])
+	return ui.row(box, [name, ui.spacer(), small(t.muted, entry.keys)])
 }
 
 // O menu aberto, preso no canto de cima, abaixo da barra de título.
@@ -393,8 +928,8 @@ func menuOffset(state: model.State, open: Str): Int {
 }
 
 func toolButton(state: model.State, t: theme.Theme, text: Str, command: Str, ready: Bool): hive.ui.View {
-	return ui.button([ui.on(act("invoke", command)), ui.disabled(!ready), fill(t.button), tone(t.buttonText),
-		ui.hint(tx(state, command) + render.keyHint(state, command))], text)
+	return ui.button(plus(buttonLook(), [ui.on(act("invoke", command)), ui.disabled(!ready), fill(t.button), tone(t.buttonText),
+		ui.hint(tx(state, command) + render.keyHint(state, command))]), text)
 }
 
 func titleBar(state: model.State, t: theme.Theme, open: Str): hive.ui.View {
@@ -431,35 +966,112 @@ func titleBar(state: model.State, t: theme.Theme, open: Str): hive.ui.View {
 
 // ── barra de atividades ──────────────────────────────────────────────────
 
-func activityItem(state: model.State, t: theme.Theme, glyph: Str, tip: Str, side: model.SideView, arg: Str, name: Str, count: Int): hive.ui.View {
+// ── os ícones ────────────────────────────────────────────────────────────
+//
+// Desenhados num quadro de 24 × 24 com traços de 1,6, como os da janela
+// própria: todos do mesmo tamanho, na cor que o estado dá a eles.
+
+func circle(cx: Float, cy: Float, r: Float, from: Float, to: Float): Float[dyn] {
+	mut Float[dyn] points = []
+	steps := 28
+	for i := 0; i <= steps; i++ {
+		angle := from + (to - from) * hive.conv.itf(i) / hive.conv.itf(steps)
+		append(points, cx + r * hive.math.cos(angle))
+		append(points, cy + r * hive.math.sin(angle))
+	}
+	return points
+}
+
+func stroke(color: Str, points: Float[]): hive.ui.Mark {
+	return ui.path([ui.paint(hex(color)), ui.thick(1.6)], points)
+}
+
+func iconMarks(name: Str, color: Str): hive.ui.Mark[dyn] {
+	full := 6.2832
+	if name == "explorer" {
+		return [
+			stroke(color, [9.0, 3.0, 15.0, 3.0, 20.0, 8.0, 20.0, 18.0, 9.0, 18.0, 9.0, 3.0]),
+			stroke(color, [15.0, 3.0, 15.0, 8.0, 20.0, 8.0]),
+			stroke(color, [5.0, 7.0, 5.0, 22.0, 16.0, 22.0])
+		]
+	} else if name == "search" {
+		return [stroke(color, circle(10.5, 10.5, 6.5, 0.0, full)), stroke(color, [15.3, 15.3, 21.0, 21.0])]
+	} else if name == "git" {
+		return [
+			stroke(color, circle(6.0, 5.0, 2.3, 0.0, full)),
+			stroke(color, circle(6.0, 19.0, 2.3, 0.0, full)),
+			stroke(color, circle(18.0, 7.0, 2.3, 0.0, full)),
+			stroke(color, [6.0, 7.3, 6.0, 16.7]),
+			stroke(color, [18.0, 9.3, 18.0, 11.0, 16.5, 13.5, 8.0, 16.2])
+		]
+	} else if name == "outline" {
+		return [
+			ui.dot([ui.paint(hex(color))], 4.5, 6.0, 1.3), stroke(color, [8.5, 6.0, 20.0, 6.0]),
+			ui.dot([ui.paint(hex(color))], 4.5, 12.0, 1.3), stroke(color, [8.5, 12.0, 20.0, 12.0]),
+			ui.dot([ui.paint(hex(color))], 4.5, 18.0, 1.3), stroke(color, [8.5, 18.0, 20.0, 18.0])
+		]
+	} else if name == "todo" {
+		return [
+			stroke(color, [4.0, 4.0, 20.0, 4.0, 20.0, 20.0, 4.0, 20.0, 4.0, 4.0]),
+			stroke(color, [8.0, 12.2, 11.0, 15.2, 16.5, 8.8])
+		]
+	}
+	// A engrenagem: oito dentes em volta de um furo.
+	mut Float[dyn] teeth = []
+	for i := 0; i <= 32; i++ {
+		angle := full * hive.conv.itf(i) / 32.0
+		mut r := 7.2
+		if (i / 2) % 2 == 0 {
+			r = 9.4
+		}
+		append(teeth, 12.0 + r * hive.math.cos(angle))
+		append(teeth, 12.0 + r * hive.math.sin(angle))
+	}
+	return [stroke(color, teeth), stroke(color, circle(12.0, 12.0, 3.0, 0.0, full))]
+}
+
+func icon(name: Str, color: Str): hive.ui.View {
+	return ui.canvas([ui.region(0.0, 0.0, 24.0, 24.0), ui.width(24), ui.height(24)], iconMarks(name, color))
+}
+
+// Um item da barra de atividades: o ícone, aceso e com a marca à esquerda
+// quando o painel dele está aberto, e a contagem (git, TODO) num selo.
+func activityItem(state: model.State, t: theme.Theme, iconName: Str, tip: Str, on: Bool, message: model.Cmd, count: Int): hive.ui.View {
 	mut color := t.muted
-	if state.sideOpen && state.side == side {
+	mut mark := t.activity
+	if on {
 		color = t.text
+		mark = t.accent
 	}
-	mut shown := glyph
+	mut hive.ui.View[dyn] inside = [icon(iconName, color)]
 	if count > 0 {
-		shown = glyph + " {count}"
+		mut shown := "{count}"
+		if count > 99 {
+			shown = "99+"
+		}
+		append(inside, ui.text([tone(t.accent), ui.size(ui.TextSize.Caption())], shown))
 	}
-	return ui.row([ui.pad(8), ui.justify(ui.Justify.Center())], [
-		ui.link([ui.on(act("side", arg)), tone(color), ui.size(ui.TextSize.Subtitle()), ui.hint(tip + render.keyHint(state, name))], "#", shown)
+	return ui.row([ui.height(44), ui.align(ui.Align.Stretch()), ui.on(message), ui.hover(hoverTone()), ui.hint(tip)], [
+		ui.column([ui.width(2), fill(mark)], []),
+		ui.column([ui.grow(1), ui.align(ui.Align.Center()), ui.justify(ui.Justify.Center()), ui.gap(0)], inside)
 	])
 }
 
 func activityBar(state: model.State, t: theme.Theme): hive.ui.View {
-	mut gear := t.muted
-	if render.showingSettings(state) {
-		gear = t.text
-	}
-	return ui.column([ui.width(52), fill(t.activity), ui.pad(4), ui.gap(6)], [
-		activityItem(state, t, "❐", tx(state, "Explorador"), model.SideView.ExplorerSide(), "explorer", "explorer", 0),
-		activityItem(state, t, "⌕", tx(state, "Buscar"), model.SideView.SearchSide(), "search", "searchProject", 0),
-		activityItem(state, t, "⑂", tx(state, "Controle de código"), model.SideView.GitSide(), "git", "git", len(state.git.files)),
-		activityItem(state, t, "☰", tx(state, "Estrutura"), model.SideView.OutlineSide(), "outline", "outline", 0),
-		activityItem(state, t, "☑", "TODO", model.SideView.TodoSide(), "todo", "todo", len(state.todos)),
+	return ui.column([ui.width(48), fill(t.activity), ui.gap(2)], [
+		activityItem(state, t, "explorer", tx(state, "Explorador") + render.keyHint(state, "explorer"),
+			state.sideOpen && state.side == model.SideView.ExplorerSide(), act("side", "explorer"), 0),
+		activityItem(state, t, "search", tx(state, "Buscar") + render.keyHint(state, "searchProject"),
+			state.sideOpen && state.side == model.SideView.SearchSide(), act("side", "search"), 0),
+		activityItem(state, t, "git", tx(state, "Controle de código") + render.keyHint(state, "git"),
+			state.sideOpen && state.side == model.SideView.GitSide(), act("side", "git"), len(state.git.files)),
+		activityItem(state, t, "outline", tx(state, "Estrutura") + render.keyHint(state, "outline"),
+			state.sideOpen && state.side == model.SideView.OutlineSide(), act("side", "outline"), 0),
+		activityItem(state, t, "todo", "TODO" + render.keyHint(state, "todo"),
+			state.sideOpen && state.side == model.SideView.TodoSide(), act("side", "todo"), len(state.todos)),
 		ui.spacer(),
-		ui.row([ui.pad(8), ui.justify(ui.Justify.Center())], [
-			ui.link([ui.on(act("settings", "")), tone(gear), ui.size(ui.TextSize.Subtitle()), ui.hint(tx(state, "Configurações") + render.keyHint(state, "settings"))], "#", "⚙")
-		])
+		activityItem(state, t, "settings", tx(state, "Configurações") + render.keyHint(state, "settings"),
+			render.showingSettings(state), act("settings", ""), 0)
 	])
 }
 
@@ -471,8 +1083,8 @@ func promptRow(state: model.State, t: theme.Theme): hive.ui.View {
 	}
 	return ui.row([ui.gap(6), ui.pad(6), ui.align(ui.Align.Center())], [
 		ui.column([ui.grow(1)], [
-			inputField(t, [ui.onInput(field("prompt", _)), ui.onSubmit(actText("promptSubmit", "", _)),
-				ui.placeholder(render.promptPlaceholder(state, state.prompt))], state.promptText)
+			inputField(t, plus(focusOn(state, "prompt"), [ui.onInput(field("prompt", _)), ui.onSubmit(actText("promptSubmit", "", _)),
+				ui.placeholder(render.promptPlaceholder(state, state.prompt))]), state.promptText)
 		]),
 		headerAction(t, "✓", tx(state, "Confirmar (Enter)"), actText("promptSubmit", "", state.promptText)),
 		headerAction(t, "✕", tx(state, "Cancelar (Esc)"), act("promptCancel", ""))
@@ -493,14 +1105,18 @@ func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.Vi
 	if entry.path == state.selected {
 		gapSize = selectedGap()
 	}
-	mut hive.ui.Attr[dyn] box = [ui.gap(gapSize), ui.align(ui.Align.Center())]
+	mut opens := act("open", entry.path)
+	if entry.folder {
+		opens = act("toggle", entry.path)
+	}
+	mut box := plus(lit(), [ui.gap(gapSize), ui.align(ui.Align.Center()), ui.on(opens), ui.onMenu(actText("context", entry.path, "0,0"))])
 	if current {
 		append(box, fill(t.selection))
 	} else if entry.path == state.selected {
 		append(box, fill(t.input))
 	}
 	indent := spaceOf(6 + row.depth * 14)
-	more := headerAction(t, "⋯", tx(state, "Mais ações"), actText("context", entry.path, "0,0"))
+	more := rowAction(t, "⋯", tx(state, "Mais ações"), actText("context", entry.path, "0,0"))
 	if entry.folder {
 		mut chevron := "›"
 		if row.open {
@@ -513,8 +1129,8 @@ func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.Vi
 		}
 		return ui.row(box, [
 			indent,
-			ui.row([ui.width(20), ui.justify(ui.Justify.Center())], [clickable(t.muted, chevron, act("toggle", entry.path), "")]),
-			clickable(gitColor(t, kind), entry.name, act("toggle", entry.path), entry.path),
+			ui.row([ui.width(20), ui.justify(ui.Justify.Center())], [plainLink(t.muted, chevron, act("toggle", entry.path), "")]),
+			plainLink(gitColor(t, kind), entry.name, act("toggle", entry.path), entry.path),
 			dot, ui.spacer(), more
 		])
 	}
@@ -532,7 +1148,7 @@ func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.Vi
 	}
 	return ui.row(box, [
 		indent, spaceOf(20), fileIcon(entry.name),
-		clickable(gitColor(t, render.gitKindOf(state, entry.path)), entry.name, act("open", entry.path), entry.path),
+		plainLink(gitColor(t, render.gitKindOf(state, entry.path)), entry.name, act("open", entry.path), entry.path),
 		marker, ui.spacer(), badge, more
 	])
 }
@@ -551,12 +1167,18 @@ func explorer(state: model.State, t: theme.Theme): hive.ui.View {
 		ui.row([ui.pad(4)], [ui.text([tone(t.text), ui.hint(state.root)], "  " + workspace.baseName(state.root))]),
 		promptRow(state, t)
 	]
+	mut hive.ui.View[dyn] tree = []
 	for each row in state.tree {
-		append(rows, treeRow(state, t, row))
+		append(tree, treeRow(state, t, row))
 	}
 	if len(state.tree) == 0 {
-		append(rows, empty(t, tx(state, "Pasta vazia.")))
+		append(tree, empty(t, tx(state, "Pasta vazia.")))
 	}
+	mut hive.ui.Attr[dyn] treeBox = [ui.gap(1), ui.keys(treeKeys(state)), ui.onKey(treeCmd(_))]
+	if state.focus == "explorer" {
+		append(treeBox, ui.focus(state.focusSerial))
+	}
+	append(rows, ui.column(treeBox, tree))
 	return ui.column([ui.gap(1)], rows)
 }
 
@@ -601,9 +1223,8 @@ func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 	for each entry in items {
 		append(rows, menuRow(t, entry))
 	}
-	// Preso no canto, sem escurecer a página; a ponte o põe onde o mouse
-	// estava (a caixa de largura 380) e o fecha num clique fora dele.
-	return ui.overlay([ui.align(ui.Align.Start()), ui.justify(ui.Justify.Start())],
+	// Onde o mouse estava, sem escurecer a página; um clique fora o fecha.
+	return ui.overlay([ui.anchor(ui.Anchor.Pointer()), ui.onDismiss(act("closeContext", ""))],
 		ui.column([ui.width(380), ui.pad(6), ui.gap(1), fill(t.side), tone(t.text)], rows))
 }
 
@@ -629,13 +1250,13 @@ func hitLine(state: model.State, t: theme.Theme, hit: model.Hit): hive.ui.View {
 	}
 	target := workspace.joinPath(state.root, hit.path)
 	open := actText("openAt", target, "{hit.line}:{hit.column}")
-	return ui.row([ui.gap(6), ui.align(ui.Align.Center())], [
+	return ui.row(plus(lit(), [ui.gap(6), ui.pad(1), ui.align(ui.Align.Center()), ui.on(open), ui.hint(hit.path)]), [
 		spaceOf(22),
 		small(t.muted, "{hit.line}"),
 		ui.row([], [
-			clickable(t.text, lead, open, hit.path),
-			ui.link([ui.on(open), tone(t.text), fill(t.selection)], "#", match),
-			clickable(t.text, after, open, hit.path)
+			label(t.text, lead),
+			ui.text([tone(t.text), fill(t.selection)], match),
+			label(t.text, after)
 		])
 	])
 }
@@ -646,8 +1267,8 @@ func searchPanel(state: model.State, t: theme.Theme): hive.ui.View {
 		header(t, tx(state, "BUSCAR"), []),
 		ui.row([ui.gap(6), ui.pad(6), ui.align(ui.Align.Center())], [
 			ui.column([ui.grow(1)], [
-				inputField(t, [ui.onInput(field("searchText", _)), ui.onSubmit(actText("searchRun", "", _)),
-					ui.placeholder(tx(state, "Buscar no projeto (Enter)"))], panel.text)
+				inputField(t, plus(focusOn(state, "searchText"), [ui.onInput(field("searchText", _)), ui.onSubmit(actText("searchRun", "", _)),
+					ui.placeholder(tx(state, "Buscar no projeto (Enter)"))]), panel.text)
 			]),
 			caseToggle(state, t, panel.caseSensitive, act("searchCase", "")),
 			headerAction(t, "↵", tx(state, "Buscar no projeto (Enter)"), act("searchRun", ""))
@@ -686,10 +1307,11 @@ func outlinePanel(state: model.State, t: theme.Theme): hive.ui.View {
 		symbols := analysis.outline(doc.text)
 		for each symbol in symbols {
 			glyph := render.symbolGlyph(symbol.kind)
-			append(rows, ui.row([ui.gap(8), ui.pad(2), ui.align(ui.Align.Center())], [
+			goes := actText("openAt", doc.path, "{symbol.line}:0")
+			append(rows, ui.row(plus(lit(), [ui.gap(8), ui.pad(2), ui.align(ui.Align.Center()), ui.on(goes)]), [
 				spaceOf(6),
 				ui.row([ui.width(16)], [label(glyph.color, glyph.glyph)]),
-				clickable(t.text, symbol.name, actText("openAt", doc.path, "{symbol.line}:0"), ""),
+				plainLink(t.text, symbol.name, goes, ""),
 				ui.spacer(),
 				small(t.muted, "{symbol.line}")
 			]))
@@ -724,16 +1346,19 @@ func todoPanel(state: model.State, t: theme.Theme): hive.ui.View {
 			file = found.file
 			append(rows, ui.row([ui.gap(6), ui.pad(2), ui.align(ui.Align.Center())], [
 				fileIcon(workspace.baseName(file)),
-				ui.text([tone(t.text), ui.hint(file)], workspace.baseName(file)),
-				small(t.muted, render.relFolder(state, file))
+				ui.column([ui.grow(1)], [ui.row([ui.gap(6), ui.align(ui.Align.Center())], [
+					ui.text([tone(t.text), ui.hint(file)], workspace.baseName(file)),
+					small(t.muted, render.relFolder(state, file))
+				])])
 			]))
 		}
-		append(rows, ui.row([ui.gap(6), ui.pad(1), ui.align(ui.Align.Center())], [
-			spaceOf(22),
-			small(tagColor(t, found.tag), found.tag),
-			clickable(t.text, found.text, actText("openAt", found.file, "{found.line}:{found.column}"), found.tag + ": " + found.text),
-			ui.spacer(),
-			small(t.muted, "{found.line}")
+		goes := actText("openAt", found.file, "{found.line}:{found.column}")
+		append(rows, ui.row(plus(lit(), [ui.gap(6), ui.pad(1), ui.align(ui.Align.Center()), ui.on(goes)]), [
+			spaceOf(16),
+			ui.row([ui.width(46)], [small(tagColor(t, found.tag), found.tag)]),
+			ui.column([ui.grow(1)], [plainLink(t.text, found.text, goes, found.tag + ": " + found.text)]),
+			ui.row([ui.width(34), ui.justify(ui.Justify.End())], [small(t.muted, "{found.line}")]),
+			spaceOf(10)
 		]))
 	}
 	if len(state.todos) == 0 {
@@ -749,22 +1374,39 @@ func gitRow(state: model.State, t: theme.Theme, file: model.GitFile, stagedList:
 	name := workspace.baseName(file.path)
 	color := gitColor(t, kind)
 	mut title := label(color, name)
+	// A linha abre o arquivo; um apagado mostra o que saiu.
+	mut goes := act("gitShowWork", file.path)
 	if kind != "deleted" {
-		title = clickable(color, name, act("open", workspace.joinPath(state.git.top, file.path)), file.path)
+		goes = act("open", workspace.joinPath(state.git.top, file.path))
+		title = plainLink(color, name, goes, file.path)
 	}
-	mut hive.ui.View[dyn] items = [spaceOf(6), fileIcon(name), title, small(t.muted, render.folderOf(file.path)), ui.spacer(),
-		headerAction(t, "±", tx(state, "Ver alterações"), act("gitShowWork", file.path))]
+	mut hive.ui.View[dyn] items = [spaceOf(6), fileIcon(name),
+		ui.column([ui.grow(1)], [ui.row([ui.gap(6), ui.align(ui.Align.Center())], [title, small(t.muted, shortFolder(render.folderOf(file.path), 19 - len(name)))])]),
+		rowAction(t, "±", tx(state, "Ver alterações"), act("gitShowWork", file.path))]
 	if stagedList {
-		append(items, headerAction(t, "−", tx(state, "Tirar da preparação (unstage)"), act("gitUnstage", file.path)))
+		append(items, rowAction(t, "−", tx(state, "Tirar da preparação (unstage)"), act("gitUnstage", file.path)))
 	} else {
-		append(items, headerAction(t, "↺", tx(state, "Descartar alterações"), act("gitAskDiscard", file.path)))
-		append(items, headerAction(t, "+", tx(state, "Preparar (stage)"), act("gitStage", file.path)))
+		append(items, rowAction(t, "↺", tx(state, "Descartar alterações"), act("gitAskDiscard", file.path)))
+		append(items, rowAction(t, "+", tx(state, "Preparar (stage)"), act("gitStage", file.path)))
 	}
-	append(items, small(color, git.badge(kind, file)))
-	return ui.row([ui.gap(6), ui.pad(2), ui.align(ui.Align.Center())], items)
+	append(items, ui.row([ui.width(14), ui.justify(ui.Justify.Center())], [small(color, git.badge(kind, file))]))
+	// A barra de rolagem da lista passa por cima da borda direita.
+	append(items, spaceOf(8))
+	return ui.row(plus(lit(), [ui.gap(6), ui.pad(2), ui.align(ui.Align.Center()), ui.on(goes)]), items)
 }
 
-func gitPanel(state: model.State, t: theme.Theme): hive.ui.View {
+// Uma pasta comprida, pelo fim dela: o nome do arquivo ao lado não quebra.
+func shortFolder(folder: Str, most: Int): Str {
+	if len(folder) <= most {
+		return folder
+	}
+	if most < 5 {
+		return ""
+	}
+	return "…" + complete.skip(folder, len(folder) - most + 1)
+}
+
+func gitPanel(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View {
 	info := state.git
 	head := header(t, tx(state, "CONTROLE DE CÓDIGO"), [
 		headerAction(t, "⟳", tx(state, "Atualizar"), act("gitRefresh", "")),
@@ -796,55 +1438,106 @@ func gitPanel(state: model.State, t: theme.Theme): hive.ui.View {
 		head,
 		ui.row([ui.pad(6)], [label(t.text, branch)]),
 		ui.column([ui.gap(6), ui.pad(6)], [
-			ui.textarea([ui.onInput(field("gitMessage", _)), fill(t.input), tone(t.text), ui.height(72),
-				ui.placeholder(tx(state, "Mensagem do commit (Ctrl+Enter)"))], info.message),
+			ui.textarea(plus(plus(fieldLook(t), keyed("commit", false)), [ui.onInput(field("gitMessage", _)), fill(t.input), tone(t.text), ui.height(72),
+				ui.placeholder(tx(state, "Mensagem do commit (Ctrl+Enter)"))]), info.message),
 			primary(t, commitLabel, act("gitCommit", ""), canCommit)
 		])
 	]
 	if stagedCount > 0 {
-		append(rows, header(t, tx(state, "PREPARADAS") + "  {stagedCount}", [headerAction(t, "−", tx(state, "Tirar tudo da preparação"), act("gitUnstageAll", ""))]))
-		for each file in info.files {
-			if git.staged(file) {
-				append(rows, gitRow(state, t, file, true))
+		append(rows, foldHeader(t, tx(state, "PREPARADAS"), stagedCount, extra.hideStaged, "staged",
+			[rowAction(t, "−", tx(state, "Tirar tudo da preparação"), act("gitUnstageAll", ""))]))
+		if !extra.hideStaged {
+			mut hive.ui.View[dyn] staged = []
+			for each file in info.files {
+				if git.staged(file) {
+					append(staged, gitRow(state, t, file, true))
+				}
 			}
+			append(rows, listBox(staged, 200))
 		}
 	}
 	if changedCount > 0 {
-		append(rows, header(t, tx(state, "ALTERAÇÕES") + "  {changedCount}", [headerAction(t, "+", tx(state, "Preparar tudo"), act("gitStageAll", ""))]))
-		for each file in info.files {
-			if git.unstaged(file) {
-				append(rows, gitRow(state, t, file, false))
+		append(rows, foldHeader(t, tx(state, "ALTERAÇÕES"), changedCount, extra.hideChanges, "changes",
+			[rowAction(t, "+", tx(state, "Preparar tudo"), act("gitStageAll", ""))]))
+		if !extra.hideChanges {
+			mut hive.ui.View[dyn] changed = []
+			for each file in info.files {
+				if git.unstaged(file) {
+					append(changed, gitRow(state, t, file, false))
+				}
+			}
+			if extra.hideLog {
+				// Com o histórico recolhido, as alterações ficam com a altura toda.
+				append(rows, ui.column([ui.grow(1), ui.gap(1), ui.scroll(ui.Axis.Vertical())], changed))
+			} else {
+				append(rows, listBox(changed, 280))
 			}
 		}
 	}
 	if len(info.files) == 0 {
 		append(rows, empty(t, tx(state, "Nada para commitar — tudo em dia.")))
 	}
-	append(rows, header(t, tx(state, "HISTÓRICO"), []))
-	for each line in info.log {
-		if line is "{hash} {subject}" {
-			mut hive.ui.Attr[dyn] box = [ui.gap(8), ui.pad(2)]
-			if state.commit.key != "" && git.startsWith(state.commit.key, hash) {
-				append(box, fill(t.selection))
-			}
-			append(rows, ui.row(box, [
-				spaceOf(6),
-				ui.row([ui.width(64)], [small(t.accent, hash)]),
-				clickable(t.text, subject, act("gitShow", hash), line + " — " + tx(state, "clique para ver as alterações"))
-			]))
-		}
+	// Recolhido, o histórico desce para o pé do painel.
+	if extra.hideLog && (changedCount == 0 || extra.hideChanges) {
+		append(rows, ui.spacer())
 	}
-	return ui.column([ui.gap(2)], rows)
+	append(rows, foldHeader(t, tx(state, "HISTÓRICO"), len(info.log), extra.hideLog, "log", []))
+	if !extra.hideLog {
+		mut hive.ui.View[dyn] log = []
+		for each line in info.log {
+			if line is "{hash} {subject}" {
+				mut box := plus(lit(), [ui.gap(8), ui.pad(2), ui.on(act("gitShow", hash)), ui.hint(line + " — " + tx(state, "clique para ver as alterações"))])
+				if state.commit.key != "" && git.startsWith(state.commit.key, hash) {
+					append(box, fill(t.selection))
+				}
+				append(log, ui.row(box, [
+					spaceOf(6),
+					ui.row([ui.width(64)], [small(t.accent, hash)]),
+					ui.column([ui.grow(1)], [label(t.text, subject)])
+				]))
+			}
+		}
+		// O histórico fica com o resto da altura, e rola dentro dela.
+		append(rows, ui.column([ui.grow(1), ui.gap(2), ui.scroll(ui.Axis.Vertical())], log))
+	}
+	return ui.column([ui.gap(2), ui.grow(1)], rows)
 }
 
-func sidePanel(state: model.State, t: theme.Theme): hive.ui.View {
+// O cabeçalho de uma seção que recolhe: um clique em qualquer parte dela abre
+// ou fecha a lista, e as ações dela ficam à direita.
+func foldHeader(t: theme.Theme, title: Str, count: Int, hidden: Bool, fold: Str, actions: hive.ui.View[]): hive.ui.View {
+	mut chevron := "⌄"
+	if hidden {
+		chevron = "›"
+	}
+	mut hive.ui.View[dyn] items = [
+		ui.row([ui.width(14), ui.justify(ui.Justify.Center())], [label(t.muted, chevron)]),
+		small(t.muted, title),
+		small(t.muted, "{count}"),
+		ui.spacer()
+	]
+	for each a in actions {
+		append(items, a)
+	}
+	return ui.row(plus(lit(), [ui.gap(6), ui.pad(4), ui.align(ui.Align.Center()), ui.on(chrome("gitFold", fold))]), items)
+}
+
+// Uma lista que rola sozinha, até `most` de altura: com poucas linhas, só a
+// altura delas.
+func listBox(rows: hive.ui.View[], most: Int): hive.ui.View {
+	tall := minInt(len(rows) * 27 + 4, most)
+	return ui.column([ui.height(tall), ui.gap(1), ui.scroll(ui.Axis.Vertical())], rows)
+}
+
+func sidePanel(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View {
 	mut body := explorer(state, t)
 	if state.side is model.SideView.OutlineSide {
 		body = outlinePanel(state, t)
 	} else if state.side is model.SideView.TodoSide {
 		body = todoPanel(state, t)
 	} else if state.side is model.SideView.GitSide {
-		body = gitPanel(state, t)
+		// O controle de código rola por seção (alterações, histórico), não inteiro.
+		return ui.column([ui.width(300), fill(t.side)], [gitPanel(state, t, extra)])
 	} else if state.side is model.SideView.SearchSide {
 		body = searchPanel(state, t)
 	}
@@ -874,11 +1567,12 @@ func tab(state: model.State, t: theme.Theme, index: Int, doc: model.Doc): hive.u
 	if !on && color == t.text {
 		color = t.muted
 	}
-	mut closer := headerAction(t, "×", tx(state, "Fechar") + render.keyHint(state, "closeTab"), act("close", "{index}"))
+	mut closer := iconButton(t, "close", "×", tx(state, "Fechar") + render.keyHint(state, "closeTab"), act("close", "{index}"), 20, 12)
 	if model.dirty(doc) {
 		closer = clickable(t.text, "●", act("close", "{index}"), tx(state, "Não salvo — fechar"))
 	}
-	return ui.row(tabBox(t, on), [fileIcon(doc.name), clickable(color, doc.name, act("focus", "{index}"), tip), closer])
+	mut box := plus(tabBox(t, on), [ui.onMiddle(act("close", "{index}")), ui.hover(hoverTone())])
+	return ui.row(box, [fileIcon(doc.name), plainLink(color, doc.name, act("focus", "{index}"), tip), closer])
 }
 
 func tabStrip(state: model.State, t: theme.Theme): hive.ui.View {
@@ -889,12 +1583,12 @@ func tabStrip(state: model.State, t: theme.Theme): hive.ui.View {
 	if state.settingsOpen {
 		on := render.showingSettings(state)
 		append(items, ui.row(tabBox(t, on), [label(t.muted, "⚙"), clickable(t.text, tx(state, "Configurações"), act("settings", ""), ""),
-			headerAction(t, "×", tx(state, "Fechar"), act("closeSettings", ""))]))
+			iconButton(t, "close", "×", tx(state, "Fechar"), act("closeSettings", ""), 20, 12)]))
 	}
 	if state.commit.key != "" {
 		on := render.showingCommit(state)
 		append(items, ui.row(tabBox(t, on), [label(t.accent, "⑂"), clickable(t.text, state.commit.title, act("focusCommit", ""), state.commit.title),
-			headerAction(t, "×", tx(state, "Fechar"), act("closeCommit", ""))]))
+			iconButton(t, "close", "×", tx(state, "Fechar"), act("closeCommit", ""), 20, 12)]))
 	}
 	return ui.row([ui.gap(1), fill(t.tabStrip), ui.scroll(ui.Axis.Horizontal())], items)
 }
@@ -936,7 +1630,9 @@ func breadcrumb(state: model.State, t: theme.Theme): hive.ui.View {
 			append(items, small(t.muted, "📌 " + tx(state, "entrada")))
 		}
 		append(items, ui.spacer())
-		append(items, modeSwitch(state, t, doc))
+		if model.hasPreview(doc.path) {
+			append(items, modeSwitch(state, t, doc))
+		}
 		return ui.row([ui.gap(12), ui.pad(6), ui.align(ui.Align.Center()), fill(t.editor)], items)
 	}
 	return ui.none()
@@ -1239,42 +1935,285 @@ func codePad(): Int {
 	return 9
 }
 
-// ── Markdown, JSON e commit: o HTML da página própria ────────────────────
+// ── Markdown, JSON e commit em widgets ───────────────────────────────────
+
+func noCommit(): git.Commit {
+	git.DiffFile[dyn] none = []
+	return git.Commit("", "", "", "", "", "", none, false)
+}
+
+// O texto de um trecho de HTML, sem as marcas.
+func stripTags(html: Str): Str {
+	mut Str[dyn] out = []
+	parts := split(html, "<")
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		if i == 0 {
+			append(out, part)
+		} else if part is "{tag}>{text}" {
+			if tag is "input{rest}" {
+				if rest is "{a}checked{b}" {
+					append(out, "☑ ")
+				} else {
+					append(out, "☐ ")
+				}
+			}
+			append(out, text)
+		} else {
+			append(out, "<" + part)
+		}
+	}
+	return unescape(join(out, ""))
+}
+
+// Um parágrafo: o texto corrido (um link fica no texto), ou — com imagens — os
+// pedaços lado a lado.
+func mdInline(t: theme.Theme, html: Str, attrs: hive.ui.Attr[]): hive.ui.View {
+	if indexOf(html, "<img ") is Result.Error(_) {
+		return ui.text(attrs, stripTags(html))
+	}
+	mut hive.ui.View[dyn] pieces = []
+	mut rest := html
+	for ;; {
+		if rest is "{before}<img src=\"{src}\" alt=\"{alt}\">{after}" {
+			if before != "" {
+				append(pieces, ui.text(attrs, stripTags(before)))
+			}
+			append(pieces, ui.image([], src, unescape(alt)))
+			rest = after
+		} else {
+			break
+		}
+	}
+	if rest != "" {
+		append(pieces, ui.text(attrs, stripTags(rest)))
+	}
+	return ui.row([ui.gap(4), ui.align(ui.Align.Center())], pieces)
+}
+
+// Um bloco de código: o texto colorido como no editor, só para ler.
+func codeBlock(t: theme.Theme, html: Str): hive.ui.View {
+	mut hive.ui.Run[dyn] runs = []
+	mut Str[dyn] text = []
+	mut at := 0
+	for each token in tokensOf(html) {
+		size := len(token.text)
+		if token.cls != "" {
+			append(runs, ui.ink(at, at + size, hex(tokenColor(t, token.cls))))
+		}
+		append(text, token.text)
+		at = at + size
+	}
+	body := join(text, "")
+	lines := len(split(body, "\n"))
+	return ui.code([ui.readOnly(true), ui.radius(6), ui.ring(false), ui.border(0), fill(t.input), tone(t.text), ui.height(minInt(lines, 30) * 20 + 20)], body, runs)
+}
+
+// O preview do Markdown, bloco a bloco, a partir do HTML de lib/markdown.
+func markdownView(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.View {
+	mut hive.ui.View[dyn] blocks = []
+	mut Str[dyn] pre = []
+	mut inPre := false
+	mut ordered := false
+	mut number := 0
+	mut html := doc.view
+	if html is "<div class=\"md\">{inner}</div>" {
+		html = inner
+	}
+	for each line in split(html, "\n") {
+		if inPre {
+			if line is "{last}</code></pre>" {
+				append(pre, last)
+				append(blocks, codeBlock(t, join(pre, "\n")))
+				inPre = false
+			} else {
+				append(pre, line)
+			}
+			continue
+		}
+		if line is "<pre class=\"md-code\"><code>{first}" {
+			if first is "{only}</code></pre>" {
+				append(blocks, codeBlock(t, only))
+			} else {
+				pre = [first]
+				inPre = true
+			}
+		} else if line is "<h{n}>{text}</h{m}>" {
+			size := numberOr(n, 2)
+			append(blocks, ui.text([ui.heading(size), tone(t.text)], stripTags(text)))
+		} else if line is "<p>{text}</p>" {
+			append(blocks, mdInline(t, text, [tone(t.text)]))
+		} else if line == "<ul>" {
+			ordered = false
+		} else if line == "<ol>" {
+			ordered = true
+			number = 0
+		} else if line is "<li>{text}</li>" {
+			number = number + 1
+			mut mark := "•"
+			if ordered {
+				mark = "{number}."
+			}
+			append(blocks, ui.row([ui.gap(8)], [ui.row([ui.width(24), ui.justify(ui.Justify.End())], [label(t.muted, mark)]), mdInline(t, text, [tone(t.text)])]))
+		} else if line is "<blockquote>{text}</blockquote>" {
+			append(blocks, ui.row([ui.gap(10)], [ui.column([ui.width(4), fill(t.accent)], []), mdInline(t, text, [tone(t.muted)])]))
+		} else if line == "<hr>" {
+			append(blocks, rule(t))
+		} else if line is "<table>{rows}</table>" {
+			append(blocks, mdTable(t, rows))
+		}
+	}
+	return ui.column([ui.grow(1), ui.gap(12), ui.pad(28), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
+		ui.column([ui.gap(12)], blocks)
+	])
+}
+
+func mdTable(t: theme.Theme, html: Str): hive.ui.View {
+	mut hive.ui.View[dyn] rows = []
+	for each row in split(replaceAll(replaceAll(html, "<thead>", ""), "</tbody>", ""), "<tr>") {
+		mut hive.ui.View[dyn] cells = []
+		for each cell in split(row, "</t") {
+			if cell is "{lead}<th>{text}" {
+				append(cells, ui.row([ui.width(180), ui.pad(6)], [strong(t.text, stripTags(text))]))
+			} else if cell is "{lead}<td>{text}" {
+				append(cells, ui.row([ui.width(180), ui.pad(6)], [label(t.text, stripTags(text))]))
+			}
+		}
+		if len(cells) > 0 {
+			append(rows, ui.row([ui.gap(1), fill(t.border)], cells))
+		}
+	}
+	return ui.column([ui.gap(1)], rows)
+}
+
+// O JSON: o texto colorido, só para ler, com o erro (se houver) marcado na linha.
+func jsonView(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome): hive.ui.View {
+	mut runs := editorRuns(state, t, doc, extra.first, extra.last)
+	mut hive.ui.View[dyn] items = []
+	if jsonview.problem(doc.text) is Result.Ok(problem) {
+		lines := split(doc.text, "\n")
+		starts := lineStarts(lines)
+		line := problem.line - 1
+		if starts bounds line && lines bounds line {
+			append(runs, ui.squiggle(starts[line], starts[line] + len(lines[line]), hex(t.danger)))
+			append(runs, ui.marker(line, hex(t.danger)))
+		}
+		append(items, ui.row([ui.pad(8), fill(t.panel)], [label(t.danger, tx(state, "JSON inválido") + " — " + tx(state, "linha") + " {problem.line}, " + tx(state, "coluna") + " {problem.column}: " + problem.message)]))
+	}
+	append(items, ui.code(plus(paneLook(), [ui.grow(1), ui.readOnly(true), ui.numbers(true), fill(t.editor), tone(t.text), ui.onView(viewCmd(_, _))]), doc.text, runs))
+	return ui.column([ui.grow(1)], items)
+}
+
+// A aba de commit: o assunto, quem e quando, os arquivos e o diff de cada um.
+func commitView(state: model.State, t: theme.Theme, c: git.Commit): hive.ui.View {
+	mut added := 0
+	mut removed := 0
+	for each file in c.files {
+		added = added + file.added
+		removed = removed + file.removed
+	}
+	mut hive.ui.View[dyn] rows = [ui.text([ui.size(ui.TextSize.Subtitle()), tone(t.text)], tx(state, c.subject))]
+	if c.short != "" {
+		append(rows, ui.row([ui.gap(6)], [label(t.accent, c.short), small(t.muted, "· " + c.author + " · " + c.date)]))
+	}
+	if c.body != "" {
+		append(rows, label(t.text, c.body))
+	}
+	append(rows, ui.row([ui.gap(8)], [small(t.muted, "{len(c.files)} " + tx(state, "arquivo(s)")), label(t.gitNew, "+{added}"), label(t.danger, "−{removed}")]))
+	for each file in c.files {
+		mut shown := file.path
+		if file.status == "R" {
+			shown = file.oldPath + " → " + file.path
+		}
+		append(rows, ui.row([ui.gap(8), ui.pad(6), ui.align(ui.Align.Center()), fill(t.side)], [
+			fileIcon(workspace.baseName(file.path)), label(statusColor(t, file.status), shown), ui.spacer(),
+			label(t.gitNew, "+{file.added}"), label(t.danger, "−{file.removed}")
+		]))
+		if file.status == "B" {
+			append(rows, empty(t, tx(state, "Arquivo binário — sem diff de texto.")))
+		} else if len(file.lines) == 0 {
+			append(rows, empty(t, tx(state, "Sem alterações de conteúdo.")))
+		} else {
+			append(rows, diffCode(t, file))
+		}
+	}
+	if c.truncated {
+		append(rows, empty(t, tx(state, "O diff é grande demais e foi cortado; use o terminal para vê-lo inteiro.")))
+	}
+	return ui.column([ui.grow(1), ui.gap(10), ui.pad(24), fill(t.editor), ui.scroll(ui.Axis.Vertical())], rows)
+}
+
+func statusColor(t: theme.Theme, status: Str): Str {
+	if status == "A" {
+		return t.gitNew
+	} else if status == "M" || status == "R" {
+		return t.gitMod
+	} else if status == "D" {
+		return t.danger
+	}
+	return t.text
+}
+
+// O diff de um arquivo: as linhas com o sinal, e o fundo verde ou vermelho.
+func diffCode(t: theme.Theme, file: git.DiffFile): hive.ui.View {
+	mut Str[dyn] text = []
+	mut hive.ui.Run[dyn] runs = []
+	mut at := 0
+	for each line in file.lines {
+		mut sign := "  "
+		mut shade := ""
+		mut ink := ""
+		if line.kind == "add" {
+			sign = "+ "
+			shade = t.gitNew + "22"
+			ink = t.gitNew
+		} else if line.kind == "del" {
+			sign = "- "
+			shade = t.danger + "22"
+			ink = t.danger
+		} else if line.kind == "hunk" {
+			sign = ""
+			ink = t.accent
+		} else if line.kind == "note" {
+			sign = ""
+			ink = t.muted
+		}
+		shown := sign + line.text
+		if shade != "" {
+			append(runs, ui.shade(at, at + len(shown), hex(shade)))
+		}
+		if ink != "" {
+			append(runs, ui.ink(at, at + len(sign), hex(ink)))
+			if line.kind == "hunk" || line.kind == "note" {
+				append(runs, ui.ink(at, at + len(shown), hex(ink)))
+			}
+		}
+		append(text, shown)
+		at = at + len(shown) + 1
+	}
+	return ui.code([ui.readOnly(true), ui.radius(6), ui.ring(false), ui.border(1), ui.borderTone(hex(t.border)), fill(t.editor), tone(t.text), ui.height(minInt(len(file.lines), 40) * 20 + 20)], join(text, "\n"), runs)
+}
+
+// ── (antes) Markdown, JSON e commit: o HTML da página própria ────────────
 //
 // O preview do Markdown, a árvore do JSON e a aba de commit são o mesmo HTML
 // que o Hive Studio monta para a página própria (`doc.view`, `commit.html`).
 // Aqui fica só a caixa (de recuo 15) sobre a qual a ponte o mostra.
 
-func paneSlot(t: theme.Theme): hive.ui.View {
-	return ui.column([ui.grow(1), ui.pad(15), fill(t.editor)], [])
+func numberOr(text: Str, fallback: Int): Int {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		return n
+	}
+	return fallback
 }
 
-// O HTML que a caixa mostra agora, e a chave dele ("" quando não há caixa).
-type Pane {
-	key:   Str
-	html:  Str
-	fresh: Bool
-}
-
-func paneOf(state: model.State): Pane {
-	if render.showingCommit(state) {
-		return Pane("commit:" + state.commit.key, state.commit.html, true)
+func previewOf(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome): hive.ui.View {
+	if model.isMarkdown(doc.path) {
+		return markdownView(state, t, doc)
+	} else if model.isJson(doc.path) {
+		return jsonView(state, t, doc, extra)
 	}
-	if render.showsDoc(state) {
-		if render.activeDoc(state) is Result.Ok(doc) {
-			if model.hasPreview(doc.path) && doc.mode != "edit" {
-				return Pane(render.previewKey(state), doc.view, true)
-			}
-		}
-	}
-	return Pane("", "", true)
-}
-
-func previewOf(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int): hive.ui.View {
-	if model.hasPreview(doc.path) {
-		return paneSlot(t)
-	}
-	return codeView(state, t, doc, asked)
+	return codeView(state, t, doc, extra.top)
 }
 
 // ── editor ───────────────────────────────────────────────────────────────
@@ -1293,7 +2232,7 @@ func findBox(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.row([ui.gap(8), ui.pad(6), ui.align(ui.Align.Center()), fill(t.panel)], [
 		ui.spacer(),
 		ui.column([ui.width(260)], [
-			inputField(t, [ui.onInput(field("find", _)), ui.onSubmit(actText("findNext", "", _)), ui.placeholder(tx(state, "Buscar"))], state.find.text)
+			inputField(t, plus(plus(focusOn(state, "find"), keyed("find", false)), [ui.onInput(field("find", _)), ui.onSubmit(actText("findNext", "", _)), ui.placeholder(tx(state, "Buscar"))]), state.find.text)
 		]),
 		caseToggle(state, t, state.find.caseSensitive, act("findCase", "")),
 		small(t.muted, count),
@@ -1303,13 +2242,7 @@ func findBox(state: model.State, t: theme.Theme): hive.ui.View {
 	])
 }
 
-// O recuo da caixa de sugestões: a ponte (lib/bridge.go) a acha por ele e a
-// põe junto do cursor.
-func popupPad(): Int {
-	return 13
-}
-
-// As sugestões do autocomplete, que a ponte põe junto do cursor.
+// As sugestões do autocomplete, junto do cursor.
 func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 	if len(state.suggestions) == 0 {
 		return ui.none()
@@ -1324,40 +2257,25 @@ func suggestions(state: model.State, t: theme.Theme): hive.ui.View {
 		}
 		append(items, ui.row(box, [ui.row([ui.width(18)], [label(glyph.color, glyph.glyph)]), clickable(t.text, s.word, act("accept", "{i}"), s.detail), ui.spacer(), small(t.muted, s.detail)]))
 	}
-	return ui.column([ui.width(440), ui.gap(0), ui.pad(popupPad()), fill(t.side), tone(t.text), ui.scroll(ui.Axis.Vertical())], items)
+	return ui.overlay([ui.anchor(ui.Anchor.Caret()), ui.onDismiss(act("closeSuggest", ""))],
+		ui.column([ui.width(440), ui.gap(0), ui.pad(4), fill(t.side), tone(t.text), ui.scroll(ui.Axis.Vertical())], items))
 }
 
-// O editor. Quem manda cada edição, com o cursor, é a ponte (lib/bridge.go),
-// que o acha pelo `⬡` do placeholder. O `onSubmit` nunca dispara (o hive.ui
-// não manda submit de um textarea): ele só dá ao editor o `data-h` com que o
-// hive.ui devolve o foco a um campo que ele trocou na página.
-func textEditor(t: theme.Theme, doc: model.Doc, showText: Bool): hive.ui.View {
-	mut text := ""
-	if showText {
-		text = doc.text
+func docBody(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome): hive.ui.View {
+	// Código não tem preview: é sempre o editor.
+	if !model.hasPreview(doc.path) {
+		return ui.column([ui.grow(1)], [codeEditor(state, t, doc, extra)])
 	}
-	return ui.textarea([ui.grow(1), ui.placeholder(editorMark()), ui.pad(12), fill(t.editor), tone(t.text), ui.onSubmit(kept(_))], text)
-}
-
-func kept(text: Str): model.Cmd {
-	return chrome("keep", "")
-}
-
-func editorMark(): Str {
-	return "⬡"
-}
-
-func docBody(state: model.State, t: theme.Theme, doc: model.Doc, asked: Int, showText: Bool): hive.ui.View {
 	mode := modeOf(doc)
 	if mode == "preview" {
-		return previewOf(state, t, doc, asked)
+		return previewOf(state, t, doc, extra)
 	} else if mode == "split" {
-		return ui.row([ui.grow(1), ui.gap(1), fill(t.border), ui.scroll(ui.Axis.Both())], [
-			ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc, showText)]),
-			ui.column([ui.grow(1), ui.scroll(ui.Axis.Both())], [previewOf(state, t, doc, asked)])
+		return ui.row([ui.grow(1), ui.gap(1), fill(t.border)], [
+			ui.column([ui.grow(1)], [codeEditor(state, t, doc, extra)]),
+			ui.column([ui.grow(1)], [previewOf(state, t, doc, extra)])
 		])
 	}
-	return ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], [textEditor(t, doc, showText)])
+	return ui.column([ui.grow(1)], [codeEditor(state, t, doc, extra)])
 }
 
 func welcome(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1474,12 +2392,12 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Idioma"), tx(state, "Idioma da interface. Muda na hora."), ui.row([ui.gap(16)], languages)),
 		setting(t, tx(state, "Tema de cor"), tx(state, "Muda a janela inteira: painéis, barras de rolagem e cores do código."),
 			ui.column([ui.gap(8)], [
-				ui.select([ui.onChoose(field("theme", _)), fill(t.input), tone(t.text)], theme.names(), prefs.theme),
+				ui.select(plus(fieldLook(t), [ui.onChoose(field("theme", _)), fill(t.input), tone(t.text)]), theme.names(), prefs.theme),
 				ui.row([ui.gap(10)], cards),
 				ui.row([ui.gap(10)], moreCards)
 			])),
 		setting(t, tx(state, "Tamanho da fonte"), tx(state, "Do editor, em pixels."),
-			ui.select([ui.onChoose(field("fontSize", _)), fill(t.input), tone(t.text)], ["11", "12", "13", "14", "15", "16", "18", "20", "22"], "{prefs.fontSize}")),
+			ui.select(plus(fieldLook(t), [ui.onChoose(field("fontSize", _)), fill(t.input), tone(t.text)]), ["11", "12", "13", "14", "15", "16", "18", "20", "22"], "{prefs.fontSize}")),
 		section(t, tx(state, "Editor")),
 		setting(t, tx(state, "Números de linha"), "", check(state, t, "lineNumbers", "Mostrar números de linha", prefs.lineNumbers)),
 		setting(t, tx(state, "Autocomplete"), tx(state, "Sugere palavras-chave, builtins, módulos hive.* e nomes do arquivo enquanto você digita."),
@@ -1487,7 +2405,7 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Error Lens"), tx(state, "Confere o código pouco depois de você parar de digitar (e a cada Check, Run, Test e Build) e mostra o erro na própria linha, em vermelho; as funções caras do último Analyze aparecem em amarelo."),
 			check(state, t, "errorLens", "Mostrar erros e avisos na linha", prefs.errorLens)),
 		setting(t, tx(state, "Largura do tab"), tx(state, "Quantos espaços um tab ocupa na tela."),
-			ui.select([ui.onChoose(field("tabSize", _)), fill(t.input), tone(t.text)], ["2", "4", "8"], "{prefs.tabSize}")),
+			ui.select(plus(fieldLook(t), [ui.onChoose(field("tabSize", _)), fill(t.input), tone(t.text)]), ["2", "4", "8"], "{prefs.tabSize}")),
 		setting(t, tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
 			check(state, t, "vim", "Usar as teclas do Vim no editor", prefs.vim)),
 		section(t, tx(state, "Explorador")),
@@ -1529,8 +2447,8 @@ func vimBar(state: model.State, t: theme.Theme): hive.ui.View {
 		return ui.row([ui.gap(4), ui.pad(4), ui.align(ui.Align.Center()), fill(t.editor)], [
 			ui.text([tone(t.accent), ui.size(ui.TextSize.Subtitle())], v.prompt),
 			ui.column([ui.grow(1)], [
-				ui.input([ui.onInput(field("vimCommand", _)), ui.onSubmit(actText("vimSubmit", "", _)), ui.placeholder(vimMark()),
-					fill(t.editor), tone(t.text)], v.command)
+				ui.input(plus(plus(focusOn(state, "vimCommand"), keyed("vim", v.command == "")), [ui.onInput(field("vimCommand", _)), ui.onSubmit(actText("vimSubmit", "", _)), ui.placeholder(vimMark()),
+					fill(t.editor), tone(t.text)]), v.command)
 			])
 		])
 	}
@@ -1560,9 +2478,9 @@ func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View
 	if layout == "settings" {
 		body = settingsPage(state, t)
 	} else if layout == "commit" {
-		body = paneSlot(t)
+		body = commitView(state, t, extra.commit)
 	} else if render.activeDoc(state) is Result.Ok(doc) {
-		body = docBody(state, t, doc, extra.top, extra.showText)
+		body = docBody(state, t, doc, extra)
 	}
 	return ui.column([ui.grow(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
 		tabStrip(state, t),
@@ -1584,10 +2502,11 @@ func paneTab(t: theme.Theme, text: Str, message: model.Cmd, on: Bool): hive.ui.V
 	return clickable(color, text, message, "")
 }
 
+// A Saída e o Terminal: o texto só para ler, com o cursor no fim — e o editor
+// rola até o cursor, então a caixa acompanha o fim quando chega texto novo.
 func preText(t: theme.Theme, text: Str): hive.ui.View {
-	// O recuo 9 põe a fonte monoespaçada; o gap 3 diz à ponte que esta caixa
-	// acompanha o fim quando chega texto novo (se ela estava no fim).
-	return ui.column([ui.grow(1), ui.pad(codePad()), ui.gap(3), ui.scroll(ui.Axis.Both())], [label(t.text, text)])
+	end := len(text)
+	return ui.code(plus(paneLook(), [ui.grow(1), ui.readOnly(true), fill(t.panel), tone(t.text), ui.caret(end, end, end)]), text, [])
 }
 
 func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1599,19 +2518,13 @@ func terminalBody(state: model.State, t: theme.Theme): hive.ui.View {
 	append(items, ui.row([ui.gap(6), ui.pad(6), ui.align(ui.Align.Center())], [
 		label(t.accent, "›"),
 		ui.column([ui.grow(1)], [
-			inputField(t, [ui.onInput(field("termInput", _)), ui.onSubmit(actText("termSubmit", "", _)),
-				ui.placeholder(terminalHint(state))], term.input)
+			inputField(t, plus(plus(focusOn(state, "termInput"), keyed("term", false)), [ui.onInput(field("termInput", _)), ui.onSubmit(actText("termSubmit", "", _)),
+				ui.placeholder(terminalHint(state))]), term.input)
 		]),
 		headerAction(t, "↑", tx(state, "Anterior"), act("termHistory", "-1")),
 		headerAction(t, "↓", tx(state, "Próximo"), act("termHistory", "1"))
 	]))
 	return ui.column([ui.grow(1)], items)
-}
-
-// O painel AGENTE: os agentes lado a lado, o aviso de quando um não abriu ou
-// terminou, e a caixa (de recuo 11) sobre a qual a ponte põe o terminal.
-func agentPad(): Int {
-	return 11
 }
 
 func agentPicker(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1644,8 +2557,92 @@ func agentBody(state: model.State, t: theme.Theme): hive.ui.View {
 			clickable(t.accent, "↻ " + tx(state, "Abrir de novo"), act("agentRestart", current.agent), "")
 		]))
 	}
-	append(items, ui.column([ui.grow(1), ui.pad(agentPad()), fill(t.panel)], []))
+	if current.session != 0 && !current.exited {
+		append(items, agentScreen(state, t, current.session))
+	}
 	return ui.column([ui.grow(1)], items)
+}
+
+// ── o terminal dos agentes ───────────────────────────────────────────────
+//
+// A tela é a do emulador de lib/pty.go (vt10x): o texto, linha a linha, e os
+// trechos com cor; desenhada num `ui.code` só de leitura, que toma todas as
+// teclas e as manda ao programa — menos os atalhos que saem do agente.
+
+type TermRun {
+	from: Int
+	to:   Int
+	fg:   Str
+	bg:   Str
+	line: Bool
+}
+
+type TermScreen {
+	x:      Int
+	y:      Int
+	cursor: Bool
+	cols:   Int
+	rows:   Int
+	text:   Str
+	runs:   TermRun[dyn]
+}
+
+func termColor(t: theme.Theme, color: Str): Str {
+	if color == "fg" {
+		return t.text
+	} else if color == "bg" {
+		return t.panel
+	}
+	return color
+}
+
+func agentKeyCmd(session: Int, ide: Str[], combo: Str): model.Cmd {
+	if indexOf(ide, combo) is Result.Ok(_) {
+		return keyCmd("", 0, combo)
+	}
+	return chrome("pty", "{session}|" + combo)
+}
+
+func agentPasteCmd(session: Int, text: Str): model.Cmd {
+	return chrome("ptyPaste", "{session}|" + text)
+}
+
+func agentFitCmd(session: Int, cols: Int, rows: Int): model.Cmd {
+	return chrome("ptyFit", "{session}|{cols},{rows}")
+}
+
+func agentScreen(state: model.State, t: theme.Theme, session: Int): hive.ui.View {
+	TermRun[dyn] none = []
+	mut screen := TermScreen(0, 0, false, 80, 24, "", none)
+	if TermScreen.decode(pty.screen(session), hive.json.codec()) is Result.Ok(read) {
+		screen = read
+	}
+	mut hive.ui.Run[dyn] runs = []
+	for each r in screen.runs {
+		if r.bg != "bg" {
+			append(runs, ui.shade(r.from, r.to, hex(termColor(t, r.bg))))
+		}
+		if r.fg != "fg" {
+			append(runs, ui.ink(r.from, r.to, hex(termColor(t, r.fg))))
+		}
+		if r.line {
+			append(runs, ui.underline(r.from, r.to, hex(termColor(t, r.fg))))
+		}
+	}
+	lines := split(screen.text, "\n")
+	starts := lineStarts(lines)
+	mut at := 0
+	if starts bounds screen.y {
+		at = starts[screen.y] + screen.x
+	}
+	mut attrs := plus(paneLook(), [ui.grow(1), ui.readOnly(true), fill(t.panel), tone(t.text),
+		ui.caret(at, at, pty.serial(session)),
+		ui.keys(["Any"]), ui.onKey(agentKeyCmd(session, render.agentKeys(state.settings.keymap), _)),
+		ui.onPaste(agentPasteCmd(session, _)), ui.onFit(agentFitCmd(session, _, _))])
+	if state.focus == "agent" {
+		append(attrs, ui.focus(state.focusSerial))
+	}
+	return ui.code(attrs, screen.text, runs)
 }
 
 func scoreColor(t: theme.Theme, score: Int): Str {
@@ -1696,7 +2693,15 @@ func problemsBody(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.column([ui.gap(4), ui.pad(8)], rows)
 }
 
-func panel(state: model.State, t: theme.Theme): hive.ui.View {
+func gripCmd(dx: Int, dy: Int, done: Bool): model.Cmd {
+	mut end := "0"
+	if done {
+		end = "1"
+	}
+	return chrome("drag", "{dy},{end}")
+}
+
+func panel(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View {
 	problems := state.pane is model.Pane.ProblemsPane
 	analyzing := state.pane is model.Pane.AnalysisPane
 	terminal := state.pane is model.Pane.TerminalPane
@@ -1748,6 +2753,8 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 	mut hive.ui.Attr[dyn] box = [fill(t.panel), ui.scroll(ui.Axis.Vertical())]
 	if state.panelMax {
 		append(box, ui.grow(3))
+	} else if extra.dragBase >= 0 {
+		append(box, ui.height(extra.dragHeight))
 	} else {
 		append(box, ui.height(state.settings.panelHeight))
 	}
@@ -1756,9 +2763,8 @@ func panel(state: model.State, t: theme.Theme): hive.ui.View {
 		bodyBox = [ui.grow(1)]
 	}
 	return ui.column(box, [
-		// O puxador: a ponte (lib/bridge.go) o acha pela altura 5 e deixa
-		// arrastar a altura do painel; o duplo clique maximiza.
-		ui.row([ui.height(5), fill(t.border)], []),
+		// O puxador: arrastar muda a altura do painel; o duplo clique maximiza.
+		ui.row([ui.height(5), fill(t.border), ui.onDrag(gripCmd(_, _, _)), ui.onDouble(act("panelMax", ""))], []),
 		ui.row([ui.gap(16), ui.pad(8), ui.align(ui.Align.Center())], head),
 		ui.column(bodyBox, [body])
 	])
@@ -1771,7 +2777,7 @@ func statusText(t: theme.Theme, text: Str): hive.ui.View {
 }
 
 func statusClick(t: theme.Theme, text: Str, message: model.Cmd, tip: Str): hive.ui.View {
-	return ui.link([ui.on(message), tone(t.statusFg), ui.size(ui.TextSize.Caption()), ui.hint(tip)], "#", text)
+	return ui.link([ui.on(message), tone(t.statusFg), ui.size(ui.TextSize.Caption()), ui.hint(tip), ui.hover(hex("#00000022")), ui.radius(3)], "#", text)
 }
 
 func statusBar(state: model.State, t: theme.Theme): hive.ui.View {
@@ -1933,112 +2939,10 @@ func palette(state: model.State, t: theme.Theme): hive.ui.View {
 		append(items, empty(t, tx(state, "Nenhum arquivo encontrado")))
 	}
 	return ui.overlay([ui.onDismiss(act("escape", ""))], ui.column([ui.width(620), ui.gap(8), ui.pad(12), fill(t.panel), tone(t.text)], [
-		inputField(t, [ui.onInput(field("palette", _)), ui.onSubmit(actText("paletteAccept", "{state.palette.index}", _)),
-			ui.placeholder(tx(state, "Buscar arquivo pelo nome"))], state.palette.text),
+		inputField(t, plus(plus(focusOn(state, "palette"), keyed("palette", false)), [ui.onInput(field("palette", _)), ui.onSubmit(actText("paletteAccept", "{state.palette.index}", _)),
+			ui.placeholder(tx(state, "Buscar arquivo pelo nome"))]), state.palette.text),
 		ui.column([ui.gap(1), ui.height(380), ui.scroll(ui.Axis.Vertical())], items)
 	]))
-}
-
-// ── a ponte com lib/bridge.go ────────────────────────────────────────────
-
-func noLines(): Str[dyn] {
-	Str[dyn] none = []
-	return none
-}
-
-// O realce que a página ainda não tem, sabendo que ela tem a versão `had` de
-// `hadPath`: nada (`keep`), as linhas que a última edição mudou (`patch`) ou
-// o documento inteiro (`full`) — como `render.hlUpdate` faz para a página própria.
-func hlUpdate(state: model.State, hadPath: Str, had: Int): model.HlUpdate {
-	if render.activeDoc(state) is Result.Ok(doc) {
-		if hadPath == doc.path {
-			if had == doc.version {
-				return model.HlUpdate("keep", 0, 0, noLines(), noLines(), doc.version)
-			}
-			if had == doc.version - 1 {
-				return model.HlUpdate("patch", doc.patch.from, doc.patch.remove, doc.patch.lines, doc.patch.source, doc.version)
-			}
-		}
-		return model.HlUpdate("full", 0, 0, highlight.htmlLines(doc.text, model.language(doc.path)), split(doc.text, "\n"), doc.version)
-	}
-	return model.HlUpdate("none", 0, 0, noLines(), noLines(), -1)
-}
-
-// As cores de cada classe do realce, no tema escolhido.
-type Syntax {
-	tk: Str
-	tt: Str
-	ts: Str
-	tn: Str
-	tc: Str
-	tf: Str
-	ta: Str
-	tb: Str
-	tm: Str
-	td: Str
-	gutter: Str
-	text: Str
-	accent: Str
-	danger: Str
-	warn: Str
-}
-
-func syntaxOf(t: theme.Theme): Syntax {
-	return Syntax(t.synKeyword, t.synType, t.synString, t.synNumber, t.synComment, t.synCall, t.synAtom, t.synLiteral, t.synModule,
-		t.warn, t.gutter, t.text, t.accent, t.danger, t.warn)
-}
-
-// O que o script da ponte precisa saber do estado. `focus` e os `…Ph` são
-// placeholders: é por eles que o script acha cada campo na página.
-type BridgeState {
-	keys:        Str[dyn]
-	serial:      Int
-	caret:       Int
-	popup:       Bool
-	recording:   Bool
-	focus:       Str
-	focusSerial: Int
-	clip:        Str
-	clipSerial:  Int
-	findFrom:    Int
-	findTo:      Int
-	findSerial:  Int
-	tab:         Int
-	findPh:      Str
-	palettePh:   Str
-	termPh:      Str
-	commitPh:    Str
-	ptyPort:       Int
-	ptyToken:      Str
-	agentSessions: Int[dyn]
-	agentShown:    Int
-	agentKeys:     Str[dyn]
-	termBg:        Str
-	termFg:        Str
-	vim:           Str
-	vimSerial:     Int
-	selStart:      Int
-	selEnd:        Int
-	vimScroll:     Int
-	vimAck:        Int
-	vimPh:         Str
-	textQuiet:     Bool
-	numbers:       Bool
-	themeCss:      Str
-	fontSize:      Int
-	marks:         Int[dyn]
-	markLength:    Int
-	markCurrent:   Int
-	title:         Str
-	selected:      Str
-	context:       Str
-	hoverCaret:    Int
-	hoverOk:       Bool
-	client:        Str
-	clientSerial:  Int
-	textShown:     Bool
-	syntax:        Syntax
-	lens:          model.LensMark[dyn]
 }
 
 // O placeholder da linha de comando do Vim: invisível (U+2800), e é por ele
@@ -2074,148 +2978,28 @@ func terminalHint(state: model.State): Str {
 	return tx(state, "comando (↑ ↓ histórico, Ctrl+C encerra o processo)")
 }
 
-// O campo que o programa pediu para focar (`state.focus`), pelo placeholder.
-func focusPlaceholder(state: model.State): Str {
-	target := state.focus
-	if target == "find" {
-		return tx(state, "Buscar")
-	} else if target == "prompt" {
-		return render.promptPlaceholder(state, state.prompt)
-	} else if target == "termInput" {
-		return terminalHint(state)
-	} else if target == "palette" {
-		return tx(state, "Buscar arquivo pelo nome")
-	} else if target == "searchText" {
-		return tx(state, "Buscar no projeto (Enter)")
-	} else if target == "editor" {
-		return editorMark()
-	} else if target == "agent" {
-		return "@agent"
-	} else if target == "vimCommand" {
-		return vimMark()
-	} else if target == "explorer" {
-		return "@explorer"
-	}
-	return ""
-}
-
-func bridgeState(state: model.State, extra: Chrome): BridgeState {
-	t := theme.byName(state.settings.theme)
-	mut from := -1
-	mut to := -1
-	if state.find.open {
-		matches := render.findMatches(render.searched(state), state.find)
-		if matches bounds state.find.index {
-			from = matches[state.find.index]
-			to = from + len(state.find.text)
-		}
-	}
-	mut vimMode := ""
-	mut selStart := state.caret
-	mut selEnd := state.caret
-	if state.settings.vim && editorShown(state) {
-		vimMode = vim.modeName(state.vim)
-		span := vim.shown(render.searched(state), state.caret, state.vim)
-		selStart = span.from
-		selEnd = span.to
-	}
-	// As ocorrências que o editor destaca: as da busca (Ctrl+F) ou, no Vim, as
-	// da última busca com / e ?, como a página própria.
-	mut Int[dyn] marks = []
-	mut markLength := len(state.find.text)
-	mut markCurrent := state.find.index
-	if editorShown(state) && state.find.open {
-		marks = render.findMatches(render.searched(state), state.find)
-	} else if vimMode != "" {
-		text := render.searched(state)
-		marks = vim.highlights(text, state.vim)
-		markLength = vim.highlightLength(state.vim)
-		markCurrent = -1
-		if state.vim.prompt == "/" || state.vim.prompt == "?" {
-			markCurrent = vim.currentHighlight(marks, state.caret, state.vim.prompt == "?")
-		} else if indexOf(marks, state.caret) is Result.Ok(here) {
-			markCurrent = here
-		}
-	}
-	return BridgeState(
-		keys: keys.combos(state.settings.keymap),
-		serial: state.textSerial,
-		caret: state.caret,
-		popup: len(state.suggestions) > 0,
-		recording: state.recording != "",
-		focus: focusPlaceholder(state),
-		focusSerial: state.focusSerial,
-		clip: state.vim.clip,
-		clipSerial: state.vim.clipSerial,
-		findFrom: from,
-		findTo: to,
-		findSerial: state.find.serial + state.vim.searchSerial,
-		tab: state.settings.tabSize,
-		findPh: tx(state, "Buscar"),
-		palettePh: tx(state, "Buscar arquivo pelo nome"),
-		termPh: terminalHint(state),
-		commitPh: tx(state, "Mensagem do commit (Ctrl+Enter)"),
-		ptyPort: extra.ptyPort,
-		ptyToken: extra.ptyToken,
-		agentSessions: render.agentSessions(state.agents.sessions),
-		agentShown: render.agentShown(state),
-		agentKeys: render.agentKeys(state.settings.keymap),
-		termBg: t.panel,
-		termFg: t.text,
-		vim: vimMode,
-		vimSerial: state.vim.serial,
-		selStart: selStart,
-		selEnd: selEnd,
-		vimScroll: state.vim.scroll,
-		vimAck: state.vim.acked,
-		vimPh: vimMark(),
-		textQuiet: state.textSerial == state.quietSerial,
-		numbers: state.settings.lineNumbers,
-		themeCss: theme.css(t, state.settings.fontSize, state.settings.tabSize),
-		fontSize: state.settings.fontSize,
-		marks: marks,
-		markLength: markLength,
-		markCurrent: markCurrent,
-		title: windowTitle(state),
-		selected: state.selected,
-		context: state.context.path,
-		hoverCaret: extra.hoverCaret,
-		hoverOk: extra.hoverOk,
-		client: extra.client,
-		clientSerial: extra.clientSerial,
-		textShown: extra.showText,
-		syntax: syntaxOf(t),
-		lens: render.lensMarks(state)
-	)
-}
-
-// Os dois campos escondidos da ponte: o estado que vai para o script, e o
-// canal por onde ele manda de volta um evento da página (`model.Event`).
-func bridge(state: model.State, extra: Chrome): hive.ui.View {
-	return ui.row([ui.height(0)], [
-		ui.input([ui.placeholder("hive-state")], encode(bridgeState(state, extra), hive.json.codec())),
-		ui.input([ui.placeholder("hive-bridge"), ui.onInput(model.Cmd.Ui(_))], ""),
-		ui.input([ui.placeholder("hive-hl")], extra.hl),
-		ui.input([ui.placeholder("hive-pane")], extra.pane)
-	])
-}
-
 // ── tudo junto ───────────────────────────────────────────────────────────
 
 func window(state: model.State, extra: Chrome): hive.ui.View {
 	t := theme.byName(state.settings.theme)
 	mut hive.ui.View[dyn] body = [activityBar(state, t)]
 	if state.sideOpen {
-		append(body, sidePanel(state, t))
+		append(body, sidePanel(state, t, extra))
 	}
 	mut hive.ui.View[dyn] main = [editorArea(state, t, extra)]
 	if state.panelOpen {
-		append(main, panel(state, t))
+		append(main, panel(state, t, extra))
 	}
 	append(body, ui.column([ui.grow(1), ui.scroll(ui.Axis.Vertical())], main))
-	return ui.column([ui.grow(1), fill(t.editor), tone(t.text), ui.scroll(ui.Axis.Vertical())], [
-		bridge(state, extra),
-		titleBar(state, t, extra.menu),
+	selected := native.slice(render.searched(state), minInt(extra.anchor, state.caret), maxInt(extra.anchor, state.caret) - minInt(extra.anchor, state.caret))
+	mut hive.ui.View[dyn] top = []
+	if extra.e2e {
+		append(top, ui.input([ui.placeholder("hive-event"), ui.onInput(model.Cmd.Ui(_)), ui.width(1)], ""))
+	}
+	append(top, titleBar(state, t, extra.menu))
+	return ui.column([ui.grow(1), fill(t.editor), tone(t.text), ui.scroll(ui.Axis.Vertical()), ui.title(windowTitle(state)),
+		ui.keys(windowKeys(state)), ui.onKey(keyCmd(selected, state.caret, _)), ui.clip(state.vim.clip, state.vim.clipSerial)], [
+		ui.column([], top),
 		ui.row([ui.grow(1), ui.scroll(ui.Axis.Both())], body),
 		statusBar(state, t),
 		menuDrop(state, t, extra.menu),

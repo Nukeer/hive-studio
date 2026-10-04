@@ -206,7 +206,6 @@ se existir, vence o compilador configurado.
 | `studio.hive` | entrada: `main`, o serviço, a dobra `update`, evento → `Msg` |
 | `studioui.hive` | a mesma IDE numa janela só com widgets do `hive.ui` (ver abaixo) |
 | `lib/uiview.hive` | estado → widgets do `hive.ui`, para `studioui.hive` |
-| `lib/bridge.go` | a ponte da janela do `hive.ui`: teclado, cursor, área de transferência e fonte (Go + JS) |
 | `test/<arquivo>.test.hive` | os testes de `<arquivo>.hive` (`studio.hive` ou `lib/<arquivo>.hive`) |
 | `test/support/<arquivo>.hive` | funções de apoio dos testes de `<arquivo>` |
 | `test/suite.hive` | importa todos os `.test.hive`: é a entrada do `hivec test` |
@@ -228,7 +227,7 @@ se existir, vence o compilador configurado.
 | `lib/navigate.hive` | ir para a definição |
 | `lib/process.hive` | executar programas sem console (via `native.go`) |
 | `lib/native.go` | processos ocultos, sessões de shell, carimbo de arquivo e caixa das letras (Go) |
-| `lib/pty.go` | pseudoterminal dos agentes: PTY / ConPTY (Go) |
+| `lib/pty.go` | pseudoterminal dos agentes: PTY / ConPTY, e a tela deles (vt10x) para a janela nativa (Go) |
 | `lib/watch.go` | vigia as pastas abertas e avisa das mudanças no disco (Go) |
 | `lib/agents.hive` | os agentes (Claude Code, Codex, OpenCode) e seus comandos |
 | `lib/vim.hive` | modo Vim: teclas → movimentos, operadores, macros e linha de comando |
@@ -257,20 +256,23 @@ hivec test test/vim.test.hive        # só um arquivo
 - O teste roda na pasta do projeto gerado (`test/suite.hive-build/`), não em
   `test/`: quem precisa de arquivos os cria numa pasta própria.
 
-## A janela só com `hive.ui` (`studioui.hive`)
+## A janela nativa do `hive.ui` (`studioui.hive`)
 
-A mesma IDE desenhada **só com os widgets do `hive.ui`**, sem
-`assets/shell.html`, sem o servidor dela, sem JavaScript próprio e sem xterm:
+A mesma IDE desenhada **só com os widgets do `hive.ui`**, numa janela nativa
+(Windows e Linux, sem navegador): sem `assets/shell.html`, sem o servidor
+dela, sem JavaScript próprio e sem xterm.
 
 ```
 hivec run studioui.hive [pasta]
 hivec build studioui.hive            # studioui.exe
 ```
 
-A janela é aberta com `ui.webview`, que é sempre uma página. A janela nativa
-do `hive.ui` (v0.2.11, no Windows e no Linux, sem navegador) desenha os mesmos
-widgets mas não tem página, e é na página que a ponte (`lib/bridge.go`) põe o
-teclado, o cursor, o editor colorido, o terminal dos agentes e o preview.
+Precisa de um `hivec` com o `hive.ui` novo: `ui.code` (editor), `ui.keys` e
+`ui.onKey` (teclado), `onMenu`, `onMiddle`, `onDouble`, `onDrag` e
+`anchor` (mouse e menus que abrem onde o mouse estava), `ui.focus`,
+`ui.clip` e `ui.perform`. Com `HIVE_WINDOW=print` a mesma janela é servida
+como página, desenhada pelo navegador — é assim que os testes de ponta a ponta
+a abrem.
 
 Os releases publicam os dois: `hive-studio-<os>-<arch>` (a janela própria) e
 `hive-studio-ui-<os>-<arch>` (a do `hive.ui`).
@@ -284,120 +286,57 @@ Lens respondem à janela como respondiam ao serviço.
 
 O que tem, como na janela própria: barra de título com os menus e Check · Run ·
 Test · Build · Analyze, barra de atividades, explorador (cores do git, ● de não
-salvo, criar, renomear, excluir, recolher, subir, abrir pasta; o **⋯** da linha
-faz o papel do botão direito), busca no projeto, controle de código (preparar,
+salvo, criar, renomear, excluir, recolher, subir, abrir pasta, o menu do botão
+direito onde o mouse está), busca no projeto, controle de código (preparar,
 tirar, descartar, commit, push, pull, histórico e a aba do commit com o diff),
-estrutura, TODO, abas, breadcrumb, Buscar no arquivo, Ir para arquivo (Ctrl+P),
-sugestões, preview do Markdown, JSON com o erro na linha, Configurações
-(idioma, tema, editor, agentes, compilador), painel com Problemas, Saída,
-Terminal, Análise e Agente, barra de status, diálogos e os 7 temas.
+estrutura, TODO, abas (o botão do meio fecha), breadcrumb, Buscar no arquivo,
+Ir para arquivo (Ctrl+P), sugestões junto do cursor, preview do Markdown, JSON
+com o erro na linha, Configurações, painel com Problemas, Saída, Terminal,
+Análise e Agente (a borda de cima arrasta a altura, o duplo clique maximiza),
+barra de status, diálogos, os 7 temas e o título da janela ("● nome — pasta —
+Hive Studio").
 
-O editor é o mesmo da janela própria: **o código colorido é a parte
-digitável**, com números de linha e o **Error Lens** na própria linha (ver a
-ponte, abaixo). **Dividir** põe ao lado a **vista realçada** desenhada com
-widgets — a linha do cursor, as ocorrências da busca e nomes clicáveis que
-**vão para a definição** —, e **Realce** mostra só ela.
+- **O editor** é um `ui.code`: o texto colorido é o digitável, com números de
+  linha, as ocorrências da busca destacadas, o **Error Lens** (a linha
+  tingida, a mensagem depois dela e a marca na margem; a marca segue a linha
+  quando entram linhas antes dela, e some se a linha for editada) e
+  Ctrl+clique para ir à definição. Cada edição vai ao
+  programa como diferença (`onEdit`); só as linhas perto das que estão à vista
+  (`onView`) vão coloridas, o que mantém um arquivo de milhares de linhas leve.
+  O programa põe o cursor onde precisa (outro arquivo, a busca, o Vim) com
+  `ui.caret`. Ctrl+X sem seleção recorta a linha inteira, e o tamanho da fonte
+  das Configurações vale (`ui.fontSize`).
+- **O teclado**: os atalhos das Configurações valem na janela inteira
+  (`ui.keys` na caixa de fora); cada campo toma as suas (↑/↓ na paleta e no
+  histórico do terminal, Shift+Enter na busca, Ctrl+Enter no commit); gravar
+  um atalho toma todas.
+- **O modo Vim**: fora do modo de inserção o editor toma todas as teclas e as
+  manda ao motor (`lib/vim.hive`); os atalhos da IDE com Ctrl, Alt ou F
+  continuam da IDE.
+- **O explorador pelo teclado**: Ctrl+Shift+E (ou `:Ex` no Vim) põe o foco
+  nele; `↑`/`↓`, `→`/`←`, `Enter`, `F2`, `Delete` e, no Vim, `j k l h gg G`.
+- **Os terminais dos agentes** (Claude Code, Codex, OpenCode): `lib/pty.go`
+  passa a saída do programa por um emulador de terminal (vt10x) e a janela
+  desenha a tela num `ui.code` só de leitura, que toma todas as teclas e as
+  manda ao programa — menos mostrar/ocultar o agente e o painel. Ctrl+V cola.
+  O terminal tem o tamanho da caixa (`onFit`).
+- **A área de transferência**: Copiar caminho e o `y` do Vim copiam
+  (`ui.clip`); Editar → Desfazer, Refazer, Recortar, Copiar, Colar e
+  Selecionar tudo valem no editor (`ui.perform`).
 
-### A ponte (`lib/bridge.go`)
+Os testes de ponta a ponta abrem o executável de verdade, servido como página
+(`HIVE_WINDOW=print`), num navegador headless, e mandam eventos pelo campo
+`hive-event`, que a janela só desenha com `HIVE_E2E=1`:
 
-O `hive.ui` não aceita script nem folha de estilo próprios. `lib/bridge.go`
-põe os dois na página pela variável que o runtime dele já tem para isso
-(`uiExtraScript`, a mesma da `scene`), alcançada com `go:linkname`. Com ela:
+```
+hivec build studioui.hive
+node tools/e2e/run.mjs ./studioui.exe        # Node 22+, e Edge, Chrome ou Chromium
+```
 
-- **os atalhos de teclado** das Configurações valem, e o do navegador não
-  (`Ctrl+S`, `Ctrl+P`, `F5`…);
-- **o cursor**: cada edição vai como diferença, com a posição, e o programa
-  põe o cursor onde precisa (ir para a definição, abrir na linha, a busca);
-- `Tab` insere tab, `Enter` mantém a indentação (e abre um nível depois de
-  `{`, `[` ou `(`), setas navegam nas sugestões, na paleta e no histórico do
-  terminal, `Ctrl+Enter` faz o commit, `Esc` fecha o que estiver aberto;
-- **a área de transferência**: Copiar caminho e o `y` do Vim copiam;
-- a fonte monoespaçada do código e barras de rolagem finas;
-- **os terminais dos agentes** (Claude Code, Codex, OpenCode): o mesmo
-  xterm.js e o mesmo `/pty` da janela própria, num servidor que
-  `studioui.hive` abre com um token só dele. O terminal fica numa camada fora
-  do `#root` (o `hive.ui` apagaria o que não desenhou), por cima da caixa que o
-  painel AGENTE reserva para ele; com o foco nele as teclas são do programa,
-  menos mostrar/ocultar o agente e o painel;
-- **o mouse**: a borda de cima do painel arrasta a altura dele (duplo clique
-  maximiza), o botão direito numa linha do explorador abre o menu dela onde o
-  mouse está (um clique fora o fecha) e o do meio numa aba a fecha;
-- **o explorador pelo teclado**: com o foco nele (um clique, ou `:Ex` no Vim),
-  `↑`/`↓` andam, `→`/`←` abrem e fecham pastas, `Enter` abre, `Home`/`End`,
-  `Delete`, `F2`; no Vim também `j k l h o gg G`, contagens e `:`; `Esc` volta
-  ao editor;
-- os vigias (git, disco) começam assim que a janela abre: a ponte manda um
-  "olá", a primeira mensagem, que é quando a janela passa a ter endereço.
-- **o modo Vim**: as teclas vão ao mesmo motor (`lib/vim.hive`) que a janela
-  própria usa, e a ponte aplica o texto, o cursor, a seleção e a rolagem que
-  ele devolve, desenha o cursor em bloco e trata as teclas mortas do ABNT2; a
-  linha do Vim (modo, mensagens, teclas pendentes e a linha de comando `:`,
-  `/`, `?`) é desenhada com widgets embaixo do editor;
-- gravar um atalho novo em Configurações → Atalhos de teclado.
-- **o preview do Markdown, a árvore do JSON e a aba de commit** são o mesmo
-  HTML que o Hive Studio monta para a janela própria (`doc.view`,
-  `commit.html`), com o CSS e os cliques dela (recolher um arquivo do diff,
-  rolar até ele pela lista); ele vai à página por um quarto campo,
-  `hive-pane`, só quando muda, e a ponte o mostra sobre a caixa reservada;
-- **o tema inteiro**: as variáveis de `theme.css` valem para a página, e os
-  widgets do `hive.ui` (botões, campos, diálogos) passam a usá-las, nos temas
-  claros inclusive;
-- a Saída e o Terminal acompanham o fim quando chega texto novo;
-- **a janela**: o título diz o arquivo e a pasta ("● nome — pasta — Hive
-  Studio"), o ícone é o hexágono da janela própria, e o **Navegador da
-  janela** das Configurações vale — o `hive.ui` só sabe escolher o dele ou
-  imprimir o endereço (`HIVE_WINDOW=print`), então a ponte pede o endereço, lê
-  a própria saída do programa e abre a janela no navegador escolhido, com os
-  mesmos argumentos (modo aplicativo, perfil próprio);
-- **o editor como na janela própria**: Ctrl+passar o mouse sublinha o nome
-  que tem para onde ir e Ctrl+clique vai até lá; as sugestões abrem junto do
-  cursor; as ocorrências da busca (e da busca do Vim) ficam destacadas no
-  texto; Ctrl+X sem seleção recorta a linha inteira, que volta como linha ao
-  colar; Editar → Desfazer, Refazer, Recortar, Copiar, Colar e Selecionar
-  tudo; e o tamanho da fonte das Configurações.
-- **o editor colorido**: o `textarea` fica com o texto transparente, e uma
-  camada por cima dele (que não recebe o mouse) mostra as mesmas linhas
-  realçadas, os números de linha e o Error Lens, na fonte e na rolagem dele. O
-  realce chega por um terceiro campo, `hive-hl`, como na janela própria: o
-  documento inteiro ao abrir, só as linhas que a edição mudou ao digitar, e
-  nada quando nada mudou; o que acabou de ser digitado aparece puro até o
-  realce dele chegar.
-
-O protocolo são dois campos escondidos que `lib/uiview.hive` desenha:
-`hive-state` leva ao script o estado que ele precisa, em JSON, e `hive-bridge`
-traz de volta um evento no formato da página própria (`model.Event`), que
-`studio.toMsg` traduz como sempre.
-
-O texto do editor só vai à página quando o programa o troca (outro arquivo,
-o Vim, o disco): a digitação a página já tem, e um arquivo grande em todo
-turno pesaria no diff do `hive.ui`. A camada colorida
-só desenha as linhas à vista, e a ponte manda e pinta só o trecho editado.
-Medido com o Chromium headless, do teclado ao realce: ~7,5 ms no
-`studio.hive` (2.900 linhas) e ~28 ms no `lib/assets.hive` (8.000 linhas,
-760 KB) — e ali a maior parte é o próprio navegador refazendo um `textarea`
-com linhas de base64 de dezenas de KB, o mesmo custo da janela própria.
-
-**A ponte depende do `hivec` v0.2.11 por dentro**, e o risco é este:
-
-- `uiExtraScript` é um nome interno do runtime. Um `hivec` que o renomeie faz o
-  build falhar em `lib/bridge.go` — falha alto, não em silêncio.
-- O script conta com a página do `hive.ui` como ela é: a variável `sock`, o
-  `#root`, os `data-h` dos campos com evento e o jeito como o patch troca o
-  valor de um campo. Uma mudança nisso não quebra o build; quem pega são os
-  testes de ponta a ponta, que o CI roda a cada push:
-
-  ```
-  hivec build studioui.hive
-  node tools/e2e/run.mjs ./studioui.exe        # Node 22+, e Edge, Chrome ou Chromium
-  ```
-
-  Cada cenário (`editor`, `vim`, `mouse`, `agente`) abre o executável de
-  verdade num navegador headless, pela pasta de configurações e de projeto
-  temporárias, e diz PASS ou FAIL. `BROWSER` escolhe o navegador.
-- A versão do `hivec` do CI está fixada em `.github/hivec.txt`. Para subir de
-  versão: troque a fixação, rode `hivec check studioui.hive` e o
-  `tools/e2e`; se algo quebrar, o lugar a olhar é o runtime gerado em
-  `studioui.hive-build/hive/ui.go` (o `uiShell` e o `uiOpenWindow`).
+O que ainda não tem, perto da janela própria: os temas além do claro e do
+escuro nas partes que o `hive.ui` pinta sozinho (bordas, seleção, barras de
+rolagem), colar como linha o que o Ctrl+X recortou como linha, e o
+sublinhado do Ctrl+passar o mouse antes do clique.
 
 
 ## Releases

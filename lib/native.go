@@ -422,3 +422,92 @@ func Stop(id int) error {
 	}
 	return nil
 }
+
+// Lines são as linhas `first`..`last` (contadas de 0) de `text`, precedidas do
+// caractere em que a primeira começa, em texto: ["120", "linha", …]. Um editor
+// colore só as linhas perto das que estão à vista, e isto as acha sem partir o
+// arquivo inteiro.
+func Lines(text string, first int, last int) []string {
+	if first < 0 {
+		first = 0
+	}
+	line, at, chars := 0, 0, 0
+	for line < first {
+		i := strings.IndexByte(text[at:], '\n')
+		if i < 0 {
+			break
+		}
+		chars += utf8.RuneCountInString(text[at:at+i]) + 1
+		at += i + 1
+		line++
+	}
+	out := []string{strconv.Itoa(chars)}
+	for ; line <= last; line++ {
+		i := strings.IndexByte(text[at:], '\n')
+		if i < 0 {
+			out = append(out, text[at:])
+			break
+		}
+		out = append(out, text[at:at+i])
+		at += i + 1
+	}
+	return out
+}
+
+// Relocate acha, para cada marca (a linha `rows[i]`, contada de 0, que tinha o
+// texto `sources[i]`), onde ela está agora: a mesma linha, se ainda tem esse
+// texto, ou a mais próxima que o tenha, até `reach` linhas de distância
+// (linhas entraram ou saíram antes dela); -1 se a linha foi editada.
+func Relocate(text string, rows []int, sources []string, reach int) []int {
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
+	}
+	out := make([]int, len(rows))
+	for i, row := range rows {
+		out[i] = -1
+		source := ""
+		if i < len(sources) {
+			source = sources[i]
+		}
+		if row >= 0 && row < len(lines) && (source == "" || lines[row] == source) {
+			out[i] = row
+			continue
+		}
+		if source == "" {
+			continue
+		}
+		for d := 1; d <= reach; d++ {
+			if row-d >= 0 && row-d < len(lines) && lines[row-d] == source {
+				out[i] = row - d
+				break
+			}
+			if row+d >= 0 && row+d < len(lines) && lines[row+d] == source {
+				out[i] = row + d
+				break
+			}
+		}
+	}
+	return out
+}
+
+// WordAt é o nome em volta do caractere `at` de `text` — letras, dígitos e _ —
+// como [de, até] em caracteres; [] quando ali não há nome.
+func WordAt(text string, at int) []int {
+	runes := []rune(text)
+	if at < 0 || at >= len(runes) {
+		return []int{}
+	}
+	name := func(r rune) bool { return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' }
+	if !name(runes[at]) {
+		return []int{}
+	}
+	from, to := at, at
+	for from > 0 && name(runes[from-1]) {
+		from--
+	}
+	for to < len(runes) && name(runes[to]) {
+		to++
+	}
+	return []int{from, to}
+}
