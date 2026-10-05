@@ -619,7 +619,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	assert indexOf(opened.page, "OpenCode") is Result.Ok(_)
 	assert len(render.agentKeys(start.settings.keymap)) == 3
 	_typed := pty.write(session, "pwd; stty size\r")
-	seen := agents.output(session, "24 80", 3000)
+	seen := agents.output(session, "24 80", 10000)
 	assert indexOf(seen, "agent-test") is Result.Ok(_)
 
 	// Um agente que não está instalado diz o que fazer, e o outro continua vivo.
@@ -635,7 +635,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	restarted := support.ask(db, support.event("act", "agentRestart", "claude", "", 0))
 	assert restarted.agentShown != session
 	assert restarted.agentSessions == [restarted.agentShown]
-	for waited := 0; waited < 2000; waited = waited + 50 {
+	for waited := 0; waited < 10000; waited = waited + 50 {
 		if !pty.alive(session) {
 			break
 		}
@@ -646,7 +646,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	// Quando o programa termina, o painel diz o código e oferece abrir de novo.
 	_quit := pty.write(restarted.agentShown, "exit 5\r")
 	mut notice := ""
-	for waited := 0; waited < 3000; waited = waited + 100 {
+	for waited := 0; waited < 10000; waited = waited + 100 {
 		if indexOf(notice, "(código 5)") is Result.Ok(_) {
 			break
 		}

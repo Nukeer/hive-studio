@@ -1,6 +1,6 @@
 # Changelog
 
-## Próxima
+## v0.2.0
 
 ### Uma janela só: a nativa do `hive.ui`
 
