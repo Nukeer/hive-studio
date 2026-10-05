@@ -1,0 +1,7 @@
+// Apoio aos testes de test/theme.test.hive.
+
+import ../../lib/theme
+
+func isSame(a: Str, b: Str): Bool {
+	return a == b
+}

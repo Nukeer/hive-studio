@@ -1,0 +1,45 @@
+// Testes de lib/native.go.
+
+import ../lib/native.go
+
+test "splice troca um trecho contando caracteres, acentos inclusive" {
+	assert native.splice("olá mundo", 4, 5, "Hive") == "olá Hive"
+	assert native.splice("ação", 1, 0, "x") == "axção"
+	assert native.splice("abc", 3, 0, "d") == "abcd"
+	assert native.splice("abc", 10, 2, "d") == "abcd"
+	assert native.splice("abc", 1, 99, "") == "a"
+}
+
+test "slice pega um trecho por caracteres, até onde houver" {
+	assert native.slice("olá mundo", 4, 5) == "mundo"
+	assert native.slice("ação", 1, 2) == "çã"
+	assert native.slice("abc", 2, 10) == "c"
+	assert native.slice("abc", 5, 2) == ""
+	assert native.slice("abc", 0, 0) == ""
+}
+
+test "a posição do cursor em linha e coluna, numa passada" {
+	assert native.caretLabel("ab\ncd", 0) == "Ln 1, Col 1"
+	assert native.caretLabel("ab\ncd", 2) == "Ln 1, Col 3"
+	assert native.caretLabel("ab\ncd", 3) == "Ln 2, Col 1"
+	assert native.caretLabel("ção\nx", 4) == "Ln 2, Col 1"
+	assert native.caretLabel("ab", 99) == "Ln 1, Col 3"
+}
+
+test "o mesmo arquivo, escrito de jeitos diferentes" {
+	if hive.file.makeDir("./same-test/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./same-test/lib/a.hive", "") is Result.Error(why) {
+		panic why
+	}
+	full := native.absPath("./same-test/lib/a.hive")
+	assert native.sameFile("./same-test/lib/a.hive", full)
+	assert native.sameFile("same-test\\lib\\a.hive", "./same-test/lib/a.hive")
+	assert !native.sameFile("./same-test/lib/a.hive", "./same-test/lib")
+	assert !native.sameFile("./same-test/nada.hive", "./same-test/nada.hive")
+	assert native.inside("./same-test", full) == "lib/a.hive"
+	assert native.inside(native.absPath("./same-test"), "./same-test/lib/a.hive") == "lib/a.hive"
+	assert native.inside("./same-test/lib", "./same-test") == ""
+	assert native.inside("./same-test", "./same-test") == ""
+}

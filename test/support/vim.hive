@@ -1,0 +1,45 @@
+// Apoio aos testes de test/vim.test.hive.
+
+import ../../lib/vim
+import ../../lib/model
+import ../../lib/highlight
+import ../../lib/native.go
+import ../../lib/complete
+import ../../lib/search
+import ../../lib/analysis
+
+func editorFor(text: Str, caret: Int): vim.Editor {
+	model.Snapshot[dyn] none = []
+	model.Msg[dyn] nothing = []
+	return vim.Editor(text: text, caret: caret, vim: model.emptyVim(), undo: none, redo: none, dirty: false, anyDirty: false,
+		numbers: true, active: 0, top: 0, rows: 20, tab: 4, scroll: -1, clip: "", effects: nothing)
+}
+
+proc feed(ed: mut vim.Editor, keys: Str): void {
+	for each k in vim.tokens(keys) {
+		vim.press(ed, k)
+	}
+}
+
+// Um editor com `text`, o cursor em `caret`, depois de `keys`.
+proc fed(text: Str, caret: Int, keys: Str): vim.Editor {
+	mut ed := editorFor(text, caret)
+	feed(ed, keys)
+	return ed
+}
+
+// O que a página faz quando se digita no modo de inserção.
+proc typeText(ed: mut vim.Editor, text: Str): void {
+	ed.text = vim.insertAt(ed.text, ed.caret, text)
+	ed.caret = ed.caret + len(text)
+}
+
+proc caretsOf(text: Str, caret: Int, keys: Str): Int[dyn] {
+	mut ed := editorFor(text, caret)
+	mut Int[dyn] seen = []
+	for each k in vim.tokens(keys) {
+		vim.press(ed, k)
+		append(seen, ed.caret)
+	}
+	return seen
+}

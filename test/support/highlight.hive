@@ -1,0 +1,23 @@
+// Apoio aos testes de test/highlight.test.hive.
+
+import ../../lib/highlight
+
+// O HTML de `lines` com o patch aplicado (para os testes conferirem).
+// O texto das linhas depois do patch, uma por linha.
+func patched(lines: Str[], patch: highlight.Patch): Str {
+	mut Str[dyn] out = []
+	for i := 0; i < patch.from && i < len(lines); i++ {
+		if lines bounds i {
+			append(out, lines[i])
+		}
+	}
+	for each line in patch.lines {
+		append(out, line)
+	}
+	for i := patch.from + patch.remove; i < len(lines); i++ {
+		if lines bounds i {
+			append(out, lines[i])
+		}
+	}
+	return join(out, "\n")
+}

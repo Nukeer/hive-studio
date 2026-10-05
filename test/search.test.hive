@@ -1,0 +1,61 @@
+// Testes de lib/search.hive.
+
+import ../lib/search
+import ../lib/workspace
+import ../lib/model
+import ../lib/complete
+import ../lib/native.go
+import ../lib/highlight
+
+test "minúsculas guardam as posições e acham todas as ocorrências" {
+	assert search.lower("Olá MUNDO Ção") == "olá mundo ção"
+	assert search.occurrences("abc ABC abc", "abc", false, 10) == [0, 4, 8]
+	assert search.occurrences("abc ABC abc", "abc", true, 10) == [0, 8]
+	assert search.occurrences("aaaa", "aa", true, 10) == [0, 2]
+	assert len(search.occurrences("abc", "", false, 10)) == 0
+}
+
+test "Ctrl+P ordena por nome, depois caminho, depois letras em ordem" {
+	files := ["README.md", "lib/model.hive", "lib/render.hive", "studio.hive", "tools/embed.hive"]
+	assert search.quickOpen(files, "mod", 10) == [1]
+	assert search.quickOpen(files, "re", 10) == [0, 2]
+	found := search.quickOpen(files, "lib hive", 10)
+	assert len(found) == 2
+	assert search.quickOpen(files, "stdh", 10) == [3]
+	assert search.quickOpen(files, "", 3) == [0, 1, 2]
+}
+
+test "busca no projeto acha linhas em vários arquivos" {
+	if hive.file.makeDir("./search-test/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./search-test/main.hive", "proc main(): void \{\n\techo \"Olá\"\n}\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./search-test/lib/a.hive", "func ola(): Str \{\n\treturn \"olá\"\n}\n") is Result.Error(why) {
+		panic why
+	}
+	result := search.searchProject("./search-test", "olá", false, false, 100)
+	assert result.files == 2
+	assert len(result.hits) == 2
+	if result.hits is [first, second] {
+		assert first.line == 2
+		assert first.column == 7 || second.column == 7 || first.column == 9 || second.column == 9
+	}
+	assert search.allFiles("./search-test", false, 100) == ["lib/a.hive", "main.hive"]
+}
+
+test "o Ctrl+P lista os ocultos e o build, só não a pasta .git" {
+	for each folder in ["./every-test/.git", "./every-test/.vscode", "./every-test/node_modules/x"] {
+		if hive.file.makeDir(folder) is Result.Error(why) {
+			panic why
+		}
+	}
+	for each file in ["./every-test/.git/HEAD", "./every-test/.vscode/settings.json", "./every-test/node_modules/x/i.js", "./every-test/.env", "./every-test/main.hive"] {
+		if hive.file.write(file, "x") is Result.Error(why) {
+			panic why
+		}
+	}
+	assert search.everyFile("./every-test", 100) == [".env", ".vscode/settings.json", "main.hive", "node_modules/x/i.js"]
+	assert search.allFiles("./every-test", false, 100) == ["main.hive"]
+}

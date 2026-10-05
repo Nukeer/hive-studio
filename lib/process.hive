@@ -40,11 +40,3 @@ func firstLine(text: Str): Str {
 	}
 	return ""
 }
-
-test "run devolve código e saída" {
-	ok := run("git", ["--version"], "")
-	assert ok.code == 0
-	assert indexOf(ok.text, "git version") is Result.Ok(_)
-	missing := run("programa-que-nao-existe-hive", ["x"], "")
-	assert missing.code == -1
-}

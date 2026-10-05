@@ -1,0 +1,87 @@
+// Testes de lib/workspace.hive.
+
+import ../lib/workspace
+import ../lib/model
+import ../lib/native.go
+
+test "caminhos se juntam com uma barra só" {
+	assert workspace.joinPath(".", "a.hive") == "./a.hive"
+	assert workspace.joinPath("src/", "a.hive") == "src/a.hive"
+	assert workspace.joinPath("C:\\proj", "a.hive") == "C:/proj/a.hive"
+}
+
+test "caminhos com . e .. ficam com um nome só" {
+	assert workspace.tidy("C:/p/./lib/x.hive") == "C:/p/lib/x.hive"
+	assert workspace.tidy("C:/p/lib/../a.hive") == "C:/p/a.hive"
+	assert workspace.tidy("./lib/x.hive") == "./lib/x.hive"
+	assert workspace.tidy("../up/x") == "../up/x"
+	assert workspace.joinPath("./studio", "./lib/model.hive") == "./studio/lib/model.hive"
+}
+
+test "o nome de um arquivo é o último pedaço do caminho" {
+	assert workspace.baseName("C:\\proj\\lib\\a.hive") == "a.hive"
+	assert workspace.baseName("a.hive") == "a.hive"
+}
+
+test "subir uma pasta" {
+	assert workspace.parentOf("C:/proj/lib") == "C:/proj"
+	assert workspace.parentOf("C:/proj") == "C:/"
+	assert workspace.parentOf("lib") == "."
+	assert workspace.parentOf(".") == ".."
+	assert workspace.parentOf("..") == "../.."
+	assert workspace.parentOf("/home") == "/"
+}
+
+test "breadcrumb é o caminho a partir da raiz" {
+	assert workspace.crumbs("C:/proj", "C:/proj/lib/a.hive") == split("lib/a.hive", "/")
+	assert workspace.crumbs(".", "./studio.hive") == split("studio.hive", "/")
+	assert workspace.crumbs("C:/proj/", "C:\\proj\\a.hive") == split("a.hive", "/")
+}
+
+test "a árvore mostra os filhos só das pastas expandidas" {
+	if hive.file.makeDir("./tree-test/lib/inner") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./tree-test/main.hive", "") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./tree-test/lib/a.hive", "") is Result.Error(why) {
+		panic why
+	}
+	mut Str[dyn] closed = []
+	mut model.TreeRow[dyn] collapsed = []
+	workspace.buildTree("./tree-test", 0, closed, collapsed)
+	assert len(collapsed) == 2
+	mut Str[dyn] expanded = ["./tree-test/lib"]
+	mut model.TreeRow[dyn] opened = []
+	workspace.buildTree("./tree-test", 0, expanded, opened)
+	assert len(opened) == 4
+	if opened is [lib, inner, a, main] {
+		assert lib.open && lib.entry.folder
+		assert inner.depth == 1 && inner.entry.name == "inner" && !inner.open
+		assert a.depth == 1 && a.entry.name == "a.hive"
+		assert main.depth == 0 && main.entry.name == "main.hive"
+	}
+}
+
+test "o explorador mostra ocultos e build, só não a pasta .git" {
+	for each folder in ["./hidden-test/.git", "./hidden-test/app.hive-build"] {
+		if hive.file.makeDir(folder) is Result.Error(why) {
+			panic why
+		}
+	}
+	if hive.file.write("./hidden-test/.env", "") is Result.Error(why) {
+		panic why
+	}
+	if workspace.listEntries("./hidden-test") is Result.Ok(entries) {
+		mut Str[dyn] names = []
+		for each entry in entries {
+			append(names, entry.name)
+		}
+		assert names == ["app.hive-build", ".env"]
+	} else {
+		assert false
+	}
+	assert workspace.isHive("lib/x.hive")
+	assert !workspace.isHive("x.go")
+}

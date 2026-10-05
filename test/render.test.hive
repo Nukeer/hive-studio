@@ -1,0 +1,28 @@
+// Testes de lib/render.hive.
+
+import ../lib/render
+import ../lib/model
+import ../lib/analysis
+import ../lib/workspace
+import ../lib/theme
+import ../lib/settings
+import ../lib/highlight
+import ../lib/markdown
+import ../lib/jsonview
+import ../lib/keys
+import ../lib/git
+import ../lib/i18n
+import ../lib/search
+import ../lib/complete
+import ../lib/version
+import ../lib/vim
+import ../lib/agents
+
+test "a posição do cursor em linha e coluna" {
+	assert render.caretPosition("ab\ncd", 0) == "Ln 1, Col 1"
+	assert render.caretPosition("ab\ncd", 2) == "Ln 1, Col 3"
+	assert render.caretPosition("ab\ncd", 3) == "Ln 2, Col 1"
+	assert render.caretPosition("ab\ncd", 5) == "Ln 2, Col 3"
+	assert render.caretPosition("ab\ncd", 99) == "Ln 2, Col 3"
+	assert render.caretPosition("ação", 4) == "Ln 1, Col 5"
+}

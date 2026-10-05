@@ -1,0 +1,12 @@
+// Testes de lib/process.hive.
+
+import ../lib/process
+import ../lib/native.go
+
+test "run devolve código e saída" {
+	ok := process.run("git", ["--version"], "")
+	assert ok.code == 0
+	assert indexOf(ok.text, "git version") is Result.Ok(_)
+	missing := process.run("programa-que-nao-existe-hive", ["x"], "")
+	assert missing.code == -1
+}

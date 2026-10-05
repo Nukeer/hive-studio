@@ -158,7 +158,7 @@ proc textFor(path: Str): Str {
 
 // Procura em todos os arquivos de texto da pasta (até 1 MB cada), numa thread
 // própria, e manda o que achou de volta para a janela.
-proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool): void {
+proc scan(window: Address, root: Str, showHidden: Bool): void {
 	mut model.Todo[dyn] found = []
 	for each rel in search.allFiles(root, showHidden, 20000) {
 		if search.isTextFile(rel) {
@@ -167,31 +167,4 @@ proc scan(window: hive.syslink.Address, root: Str, showHidden: Bool): void {
 		}
 	}
 	async window(model.Cmd.Post(model.Msg.TodosFound(found)))
-}
-
-test "TODO, FIXME, HACK e XXX em comentários viram itens" {
-	text := "// TODO: trocar isto\nx := 1 // FIXME conta errada\n# HACK(ana): provisório\n/* XXX: bloco */\n * TODO continuação\ny := \"TODO: num texto\"\n// TODOS os casos\n<!-- TODO: html -->\n"
-	found := todosIn("a.hive", text)
-	assert len(found) == 6
-	if found bounds 5 {
-		assert found[0] == model.Todo("a.hive", 1, 3, "TODO", "trocar isto")
-		assert found[1].tag == "FIXME" && found[1].text == "conta errada" && found[1].line == 2
-		assert found[2].tag == "HACK" && found[2].text == "(ana): provisório"
-		assert found[3].tag == "XXX" && found[3].text == "bloco"
-		assert found[4].line == 5 && found[4].text == "continuação"
-		assert found[5].line == 8 && found[5].text == "html"
-	}
-}
-
-test "os TODO de um arquivo são trocados no mesmo lugar da lista" {
-	first := model.Todo("a", 1, 0, "TODO", "a")
-	second := model.Todo("b", 1, 0, "TODO", "b")
-	third := model.Todo("c", 1, 0, "TODO", "c")
-	updated := withTodosOf([first, second, third], "b", "// TODO: um\n// FIXME: dois\n")
-	assert len(updated) == 4
-	if updated bounds 3 {
-		assert updated[0].file == "a" && updated[1].text == "um" && updated[2].text == "dois" && updated[3].file == "c"
-	}
-	assert len(withTodosOf([first], "b", "nada")) == 1
-	assert len(withTodosOf([first], "a", "nada")) == 0
 }

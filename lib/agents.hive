@@ -72,31 +72,14 @@ func environment(): Str[dyn] {
 	return ["TERM=xterm-256color", "COLORTERM=truecolor"]
 }
 
-// Abre o agente na pasta `folder`. O terminal começa em 80×24; a página manda o
-// tamanho de verdade assim que se conecta.
+// Abre o agente na pasta `folder`. O terminal começa em 80×24; a janela manda
+// o tamanho de verdade assim que ele aparece.
 func start(prefs: settings.Settings, agent: Str, folder: Str): Result<Int, Str> {
 	parts := words(commandOf(prefs, agent))
 	if parts is [program, ...args] {
 		return pty.start(folder, program, args, environment(), 80, 24)
 	}
 	return Result.Error(labelOf(agent) + ": comando vazio")
-}
-
-test "cada agente tem um comando, partido em programa e argumentos" {
-	prefs := settings.defaults()
-	assert commandOf(prefs, "claude") == "claude"
-	assert commandOf(prefs, "codex") == "codex"
-	assert commandOf(prefs, "opencode") == "opencode"
-	assert words("npx  @anthropic-ai/claude-code") == ["npx", "@anthropic-ai/claude-code"]
-	assert labelOf("codex") == "Codex"
-	assert isAgent("opencode")
-	assert !isAgent("vim")
-	mut empty := prefs
-	empty.claudeCommand = "  "
-	assert start(empty, "claude", ".") is Result.Error(_)
-	mut missing := prefs
-	missing.codexCommand = "programa-que-nao-existe-hive"
-	assert start(missing, "codex", ".") is Result.Error(_)
 }
 
 // O que o programa escreveu até agora, esperando até `ms` por ele.
@@ -118,33 +101,4 @@ proc outputFrom(session: Int, wanted: Str, left: Int, seen: Str): Str {
 		return now
 	}
 	return outputFrom(session, wanted, left - 50, now)
-}
-
-test "um agente roda num terminal de verdade: tty, tamanho, digitação e saída" {
-	mut prefs := settings.defaults()
-	prefs.claudeCommand = "sh"
-	started := start(prefs, "claude", ".")
-	if started is Result.Ok(session) {
-		_script := pty.write(session, "tty; stty size\r")
-		first := output(session, "24 80", 3000)
-		assert indexOf(first, "/dev/") is Result.Ok(_)
-		assert indexOf(first, "24 80") is Result.Ok(_)
-		_resized := pty.resize(session, 100, 30)
-		_again := pty.write(session, "stty size; echo ação-$TERM\r")
-		second := output(session, "ação-xterm-256color", 3000)
-		assert indexOf(second, "30 100") is Result.Ok(_)
-		assert indexOf(second, "ação-xterm-256color") is Result.Ok(_)
-		assert pty.alive(session)
-		_quit := pty.write(session, "exit 3\r")
-		for waited := 0; waited < 3000; waited = waited + 50 {
-			if !pty.alive(session) {
-				break
-			}
-			hive.task.sleep(50)
-		}
-		assert !pty.alive(session)
-		assert pty.code(session) == 3
-	} else {
-		assert false
-	}
 }

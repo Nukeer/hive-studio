@@ -80,6 +80,7 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 	info.behind = 0
 	info.files = noFiles
 	info.log = noLog
+	info.ignored = noLog
 	top := process.run("git", ["rev-parse", "--show-toplevel"], root)
 	if top.code != 0 {
 		return
@@ -97,6 +98,7 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 		}
 	}
 	info.files = files
+	info.ignored = ignoredIn(root)
 	history := process.run("git", ["log", "--oneline", "--no-color", "-15"], root)
 	if history.code == 0 {
 		mut Str[dyn] log = []
@@ -107,6 +109,39 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 		}
 		info.log = log
 	}
+}
+
+// O que o .gitignore deixa de fora, debaixo de `root` e relativo a ela. Uma
+// pasta ignorada inteira (node_modules/, dist/) vem como uma linha só.
+proc ignoredIn(root: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	listed := process.run("git", ["-c", "core.quotepath=false", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root)
+	if listed.code != 0 {
+		return found
+	}
+	for each line in split(replaceAll(listed.text, "\r", ""), "\n") {
+		if line != "" {
+			append(found, line)
+		}
+	}
+	return found
+}
+
+// Se `rel` (relativo à pasta aberta) é ignorado pelo git: ele mesmo, ou uma
+// pasta acima dele.
+func ignored(info: model.GitInfo, rel: Str): Bool {
+	if rel == "" {
+		return false
+	}
+	for each entry in info.ignored {
+		if entry == rel || entry == rel + "/" {
+			return true
+		}
+		if entry is "{folder}/" && startsWith(rel, entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func kindOf(file: model.GitFile): Str {
@@ -401,12 +436,12 @@ proc discard(info: model.GitInfo, path: Str): process.Output {
 
 // Commit, push e pull podem demorar (hooks, rede), então rodam numa thread e
 // respondem com `GitDone`.
-proc runAsync(db: hive.syslink.Address, directory: Str, label: Str, arguments: Str[dyn]): void {
+proc runAsync(db: Address, directory: Str, label: Str, arguments: Str[dyn]): void {
 	result := process.run("git", arguments, directory)
 	async db(model.Cmd.Post(model.Msg.GitDone(label, result.text, result.code == 0)))
 }
 
-proc commitAsync(db: hive.syslink.Address, directory: Str, message: Str, everything: Bool): void {
+proc commitAsync(db: Address, directory: Str, message: Str, everything: Bool): void {
 	if everything {
 		added := process.run("git", ["add", "-A"], directory)
 		if added.code != 0 {
@@ -416,65 +451,4 @@ proc commitAsync(db: hive.syslink.Address, directory: Str, message: Str, everyth
 	}
 	Str[dyn] arguments = ["commit", "-m", message]
 	runAsync(db, directory, "commit", arguments)
-}
-
-test "o porcelain vira arquivos com caminho relativo à pasta aberta" {
-	if parseFile("?? lib/novo.hive", "") is Result.Ok(fresh) {
-		assert kindOf(fresh) == "new" && badge("new", fresh) == "U"
-		assert fresh.rel == "lib/novo.hive"
-	} else {
-		assert false
-	}
-	if parseFile(" M app/lib/x.hive", "app/") is Result.Ok(edited) {
-		assert kindOf(edited) == "modified" && edited.rel == "lib/x.hive"
-		assert unstaged(edited) && !staged(edited)
-	} else {
-		assert false
-	}
-	if parseFile("R  velho.hive -> novo.hive", "") is Result.Ok(renamed) {
-		assert renamed.path == "novo.hive" && staged(renamed)
-	}
-	if parseFile(" M outro/y.hive", "app/") is Result.Ok(outside) {
-		assert outside.rel == ""
-	}
-}
-
-test "um diff vira arquivos com linhas numeradas nos dois lados" {
-	patch := "diff --git a/lib/a.hive b/lib/a.hive\nindex 1..2 100644\n--- a/lib/a.hive\n+++ b/lib/a.hive\n@@ -1,3 +1,3 @@ proc main\n linha um\n-velha\n+nova\n fim\ndiff --git a/novo.md b/novo.md\nnew file mode 100644\n--- /dev/null\n+++ b/novo.md\n@@ -0,0 +1 @@\n+# oi\n"
-	parsed := parseDiff(patch, 100)
-	assert len(parsed.files) == 2
-	assert !parsed.truncated
-	if parsed.files is [edited, created] {
-		assert edited.path == "lib/a.hive" && edited.status == "M"
-		assert edited.added == 1 && edited.removed == 1
-		assert len(edited.lines) == 5
-		if edited.lines is [hunk, same, gone, came, last] {
-			assert hunk.kind == "hunk"
-			assert same.kind == "ctx" && same.old == 1 && same.new == 1 && same.text == "linha um"
-			assert gone.kind == "del" && gone.old == 2 && gone.new == 0
-			assert came.kind == "add" && came.new == 2 && came.old == 0
-			assert last.old == 3 && last.new == 3
-		}
-		assert created.status == "A" && created.added == 1
-	}
-	short := parseDiff(patch, 3)
-	assert short.truncated
-}
-
-test "o cabeçalho diz o branch e quanto está à frente" {
-	mut info := model.emptyGit()
-	withBranch(info, "main...origin/main [ahead 2, behind 1]")
-	assert info.branch == "main" && info.ahead == 2 && info.behind == 1
-	mut empty := model.emptyGit()
-	withBranch(empty, "No commits yet on main")
-	assert empty.branch == "main"
-}
-
-test "pastas herdam a cor dos arquivos" {
-	mut info := model.emptyGit()
-	info.files = [model.GitFile("lib/a.hive", "lib/a.hive", "?", "?"), model.GitFile("src/b.hive", "src/b.hive", " ", "M")]
-	assert folderKind(info, "lib") == "new"
-	assert folderKind(info, "src") == "modified"
-	assert folderKind(info, "docs") == ""
-	assert fileKind(info, "src/b.hive") == "modified"
 }

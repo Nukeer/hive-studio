@@ -1,0 +1,27 @@
+// Testes de lib/theme.hive.
+
+import ../lib/theme
+import ./support/theme as support
+
+test "todo tema tem nome único e um desconhecido cai no primeiro" {
+	all := theme.names()
+	assert len(all) == 7
+	assert theme.byName("Dracula").name == "Dracula"
+	assert theme.byName("não existe").name == "Hive Dark"
+	for each name in all {
+		assert len(filter(all, support.isSame(_, name))) == 1
+	}
+}
+
+test "o CSS do tema traz interface, sintaxe e fonte" {
+	sheet := theme.css(theme.byName("Monokai"), 14, 4)
+	assert indexOf(sheet, "--syn-keyword:#f92672;") is Result.Ok(_)
+	assert indexOf(sheet, "--line:21px;") is Result.Ok(_)
+	assert indexOf(sheet, "color-scheme:dark") is Result.Ok(_)
+}
+
+test "ícones por extensão" {
+	assert theme.iconFor("app.hive").glyph == "⬡"
+	assert theme.iconFor("util.go").glyph == "◆"
+	assert theme.iconFor("LEIAME").glyph == "≡"
+}

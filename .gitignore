@@ -12,3 +12,4 @@ view-test/
 studio-*-*
 dist/
 .hivec/
+/studio

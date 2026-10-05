@@ -16,14 +16,93 @@ func safeHref(url: Str): Str {
 	return ""
 }
 
+// Um caminho de arquivo, relativo ao .md ou absoluto (C:/…, /…): sem esquema
+// como `javascript:`.
+func isLocal(url: Str): Bool {
+	if url == "" {
+		return false
+	}
+	if url is "{drive}:/{rest}" && len(drive) == 1 {
+		return true
+	}
+	return indexOf(url, ":") is Result.Error(_)
+}
+
+// O valor de um atributo de uma tag HTML que chegou escapada; "" sem ele.
+func attribute(attrs: Str, name: Str): Str {
+	pieces := split(" " + replaceAll(attrs, "\t", " "), " " + name + "=&quot;")
+	if pieces bounds 1 {
+		if pieces[1] is "{value}&quot;{tail}" {
+			return value
+		}
+	}
+	return ""
+}
+
+// O texto sem as tags `<tag …>` que abrem uma caixa (o que vem dentro fica).
+func dropTag(text: Str, tag: Str): Str {
+	pieces := split(text, "&lt;" + tag + " ")
+	mut Str[dyn] out = []
+	for i := 0; i < len(pieces); i++ {
+		if pieces bounds i {
+			if i == 0 {
+				append(out, pieces[i])
+			} else if pieces[i] is "{attrs}&gt;{rest}" {
+				append(out, rest)
+			} else {
+				append(out, "&lt;" + tag + " " + pieces[i])
+			}
+		}
+	}
+	return join(out, "")
+}
+
+// O HTML que um README costuma ter: `<img>` vira imagem (com a largura dada) e
+// as caixas em volta dela (`<p align="center">`, `<div>`, `<br>`) somem.
+func rawHtml(text: Str): Str {
+	mut out := text
+	for each tag in ["p", "div", "center", "picture", "br"] {
+		out = replaceAll(out, "&lt;/" + tag + "&gt;", "")
+		out = replaceAll(out, "&lt;" + tag + "&gt;", "")
+		out = replaceAll(out, "&lt;" + tag + "/&gt;", "")
+		out = dropTag(replaceAll(out, "&lt;" + tag + " /&gt;", ""), tag)
+	}
+	for ;; {
+		if out is "{before}&lt;img {attrs}&gt;{rest}" {
+			mut tail := ""
+			width := attribute(replaceAll(attrs, "/", " "), "width")
+			if hive.conv.sti(width) is Result.Ok(_) {
+				tail = " width=\"" + width + "\""
+			}
+			src := attribute(attrs, "src")
+			alt := attribute(attrs, "alt")
+			href := safeHref(src)
+			if href != "" {
+				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\"" + tail + ">" + rest
+			} else if isLocal(src) {
+				out = before + "<img src=\"local:" + src + "\" alt=\"" + alt + "\"" + tail + ">" + rest
+			} else {
+				out = before + "<span class=\"md-img\">🖼 " + alt + "</span>" + rest
+			}
+		} else {
+			return out
+		}
+	}
+	return out
+}
+
 // Ênfase, links e imagens num trecho que não é código. Já chega escapado.
 func emphasis(text: Str): Str {
-	mut out := text
+	mut out := rawHtml(text)
 	for ;; {
 		if out is "{before}![{alt}]({url}){rest}" {
 			href := safeHref(url)
 			if href != "" {
 				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\">" + rest
+			} else if isLocal(url) {
+				// Um arquivo ao lado do .md: quem mostra o preview troca o
+				// `local:` pela imagem (studio.localImages).
+				out = before + "<img src=\"local:" + url + "\" alt=\"" + alt + "\">" + rest
 			} else {
 				out = before + "<span class=\"md-img\">🖼 " + alt + "</span>" + rest
 			}
@@ -342,40 +421,4 @@ func render(text: Str): Str {
 		append(out, "<pre class=\"md-code\"><code>" + esc(highlight.joined(code, "\n")) + "</code></pre>")
 	}
 	return join(out, "\n")
-}
-
-test "títulos, ênfase e código inline" {
-	html := render("# Olá\n\nTexto **forte** e *leve* com `x := 1`.")
-	assert indexOf(html, "<h1>Olá</h1>") is Result.Ok(_)
-	assert indexOf(html, "<strong>forte</strong>") is Result.Ok(_)
-	assert indexOf(html, "<em>leve</em>") is Result.Ok(_)
-	assert indexOf(html, "<code>x := 1</code>") is Result.Ok(_)
-}
-
-test "listas, citação e bloco hive com realce" {
-	html := render("- um\n- dois\n\n1. a\n2. b\n\n> nota\n\n```hive\nproc main(): void \{}\n```\n")
-	assert indexOf(html, "<ul>\n<li>um</li>\n<li>dois</li>\n</ul>") is Result.Ok(_)
-	assert indexOf(html, "<ol>") is Result.Ok(_)
-	assert indexOf(html, "<blockquote>nota</blockquote>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
-}
-
-test "item de lista e parágrafo em várias linhas ficam inteiros" {
-	html := render("- **um
-  dois** três
-- quatro
-
-linha *a
-b* fim")
-	assert indexOf(html, "<li><strong>um dois</strong> três</li>") is Result.Ok(_)
-	assert indexOf(html, "<li>quatro</li>") is Result.Ok(_)
-	assert indexOf(html, "<p>linha <em>a b</em> fim</p>") is Result.Ok(_)
-}
-
-test "tabela e links seguros" {
-	html := render("| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[site](https://x.dev) e [ruim](javascript:alert)")
-	assert indexOf(html, "<th>a</th><th>b</th>") is Result.Ok(_)
-	assert indexOf(html, "<td>1</td><td>2</td>") is Result.Ok(_)
-	assert indexOf(html, "href=\"https://x.dev\"") is Result.Ok(_)
-	assert indexOf(html, "href=\"\" title=\"javascript:alert\"") is Result.Ok(_)
 }

@@ -1,0 +1,51 @@
+// Testes de lib/jsonview.hive.
+
+import ../lib/jsonview
+import ../lib/highlight
+import ./support/jsonview as support
+
+test "um JSON vira uma árvore com chaves, textos, números e literais" {
+	html := jsonview.view("\{\"nome\": \"Ada\", \"idade\": 36, \"ativo\": true, \"tags\": [\"a\", null], \"vazio\": \{}}", 1000, support.labelsForTest()).html
+	assert indexOf(html, "<span class=\"jk\">&quot;nome&quot;</span>: <span class=\"ts\">&quot;Ada&quot;</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tn\">36</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tb\">true</span>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"tb\">null</span>") is Result.Ok(_)
+	assert indexOf(html, "<details class=\"jo o\" open>") is Result.Ok(_)
+	assert indexOf(html, "<span class=\"jn\">5</span>") is Result.Ok(_)
+	assert jsonview.problem("[1, 2, -3.5e2]") is Result.Error(_)
+}
+
+test "um JSON inválido diz a linha, a coluna e o que faltou" {
+	if jsonview.problem("\{\n  \"a\": 1,\n  \"b\" 2\n}") is Result.Ok(p) {
+		assert p.line == 3 && p.column == 7 && p.message == "esperava ':' depois da chave"
+	} else {
+		assert false
+	}
+	if jsonview.problem("[1, 2") is Result.Ok(p) {
+		assert p.message == "o JSON acabou antes de um valor" || p.message == "esperava ',' ou ']'"
+	} else {
+		assert false
+	}
+	if jsonview.problem("\{\"a\": 1} x") is Result.Ok(p) {
+		assert p.message == "sobrou texto depois do fim do JSON" && p.column == 10
+	} else {
+		assert false
+	}
+	broken := jsonview.view("[1,", 1000, support.labelsForTest())
+	assert indexOf(broken.html, "JSON inválido — linha 1") is Result.Ok(_) && broken.problem.line == 1
+}
+
+test "um JSON grande desenha só até o limite, mas lê até o fim" {
+	mut Str[dyn] items = []
+	for i := 0; i < 50; i++ {
+		append(items, "{i}")
+	}
+	big := jsonview.view("[" + join(items, ", ") + "]", 10, support.labelsForTest())
+	assert indexOf(big.html, "mostrando só o começo") is Result.Ok(_)
+	assert indexOf(big.html, "<span class=\"ji\">9</span>") is Result.Ok(_)
+	assert indexOf(big.html, "<span class=\"ji\">10</span>") is Result.Error(_)
+	assert indexOf(big.html, "<span class=\"jn\">50</span>") is Result.Ok(_)
+	assert big.problem.line == 0
+	late := jsonview.view("[" + join(items, ", ") + ", x]", 10, support.labelsForTest())
+	assert late.problem.line == 1 && late.problem.message == "esperava um valor e achou 'x'"
+}

@@ -1,0 +1,79 @@
+// Testes de lib/analysis.hive.
+
+import ../lib/analysis
+import ../lib/model
+import ../lib/highlight
+import ../lib/workspace
+
+test "a saída do analyze vira resumo e funções" {
+	output := "  studio.hive scores 80/100 over 552 callables\n  422 findings — 272 copies\n\n  0   vim.playMacro                       func, line 2446\n        ×64    e\n             an argument to `vim.keyStep` is deep-copied\n        ·      ed\n             a binding is deep-copied\n\n  35  serve                               proc, line 12\n        ·      next\n             a copy\n"
+	report := analysis.parseAnalyze(output)
+	assert report.head == ["studio.hive scores 80/100 over 552 callables", "422 findings — 272 copies"]
+	assert len(report.spots) == 2
+	if report.spots bounds 1 {
+		assert report.spots[0].name == "vim.playMacro" && report.spots[0].score == 0 && report.spots[0].line == 2446
+		assert report.spots[0].kind == "func" && report.spots[0].detail == "an argument to vim.keyStep is deep-copied"
+		assert report.spots[1].name == "serve" && report.spots[1].detail == "a copy"
+	}
+	assert analysis.moduleOf("vim.playMacro") == "vim" && analysis.moduleOf("serve") == ""
+}
+
+test "erro de módulo importado volta para o arquivo e a linha certos" {
+	far := analysis.locate("in `util_0_ruim`: cannot prove `3` is in range: `v` has no length")
+	assert far.module == "util" && far.name == "ruim"
+	assert far.message == "ruim: cannot prove `3` is in range: `v` has no length"
+	own := analysis.locate("in `main`: `z` holds 2, so `5` is not a position it has")
+	assert own.module == "" && own.message == "main: `z` holds 2, so `5` is not a position it has"
+	assert analysis.locate("expected `)` but found `}`").module == ""
+	body := "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n\nfunc ruim(v: Int[dyn]): Int \{\n\tmut t := 0\n\tt = v[3]\n\treturn t\n}\n"
+	assert analysis.refineLine(body, 5, far.message) == 7
+	main := "proc main(): void \{\n\tz := [1, 2]\n\techo z[5]\n}\n"
+	assert analysis.refineLine(main, 1, own.message) == 3
+	assert analysis.refineLine(main, 1, "main: sem trecho nenhum") == 1
+	assert analysis.fragments("`settings_0_Settings` has 17 fields") == ["Settings"]
+	assert analysis.lineText("a\nb\nc", 2) == "b" && analysis.lineText("a\nb", 1) == "a" && analysis.lineText("a\nb", 3) == "" && analysis.lineText("só", 1) == "só"
+}
+
+test "os imports de arquivo, com as, aspas e ../" {
+	text := "import hive.ui\nimport ./lib/util\nimport ./lib/native.go\nimport ../comum/texto as txt\nimport \"./lib/com espaço\" as esp\nimport https://github.com/a/b/c\n\tfalso := \"import ./nao\"\n"
+	found := analysis.importsOf(text, "C:/p")
+	assert found == [analysis.ModuleRef("util", "C:/p/lib/util.hive"), analysis.ModuleRef("native", "C:/p/lib/native.go"),
+		analysis.ModuleRef("txt", "C:/comum/texto.hive"), analysis.ModuleRef("esp", "C:/p/lib/com espaço.hive")]
+	assert analysis.importsOf("import ./b", "lib") == [analysis.ModuleRef("b", "lib/b.hive")]
+}
+
+test "diagnósticos do compilador viram itens" {
+	output := "main.hive:12: cannot prove this index is in range: the index is a computed\n    expression. Bind it.\nC:\\p\\lib\\x.hive:3: expected `]` but found `,`\nCompiled nothing"
+	found := analysis.parseDiagnostics(output)
+	assert len(found) == 2
+	if found is [first, second] {
+		assert first.file == "main.hive"
+		assert first.line == 12
+		assert first.message == "cannot prove this index is in range: the index is a computed expression. Bind it."
+		assert second.file == "C:\\p\\lib\\x.hive"
+		assert second.line == 3
+	}
+}
+
+test "saída sem erros não gera diagnóstico" {
+	assert len(analysis.parseDiagnostics("No problems found in x.hive (0s)")) == 0
+}
+
+test "a estrutura lista as declarações de topo" {
+	source := "import ./lib/a\n\ntype User \{\n\tname: Str\n}\n\nfunc greet(u: User): Str \{\n\treturn u.name\n}\n\nproc main(): void \{\n}\n\ntest \"greets\" \{\n}\n"
+	found := analysis.outline(source)
+	assert len(found) == 5
+	if found is [imp, ty, fn, pr, te] {
+		assert imp.name == "./lib/a"
+		assert ty.kind == "type" && ty.name == "User" && ty.line == 3
+		assert fn.kind == "func" && fn.name == "greet" && fn.line == 7
+		assert pr.name == "main" && pr.line == 11
+		assert te.kind == "test" && te.name == "greets"
+	}
+}
+
+test "o trecho marca a linha pedida" {
+	shown := analysis.excerpt("a\nb\nc\nd\ne", 3, 1)
+	assert len(shown) == 3
+	assert shown == ["     2  b", ">    3  c", "     4  d"]
+}

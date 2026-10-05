@@ -1,0 +1,30 @@
+// Testes de lib/keys.hive.
+
+import ../lib/keys
+
+test "padrões valem até o usuário mudar" {
+	assert keys.keysFor("", "newFile") == "Ctrl+N"
+	assert keys.keysFor("", "togglePanel") == "Ctrl+`"
+	if keys.actionFor("", "Ctrl+N") is Result.Ok(found) {
+		assert found == "newFile"
+	} else {
+		assert false
+	}
+}
+
+test "gravar um atalho tira ele de quem usava antes" {
+	stored := keys.assign("", "save", "Ctrl+N")
+	assert keys.keysFor(stored, "save") == "Ctrl+N"
+	assert keys.keysFor(stored, "newFile") == ""
+	if keys.actionFor(stored, "Ctrl+N") is Result.Ok(found) {
+		assert found == "save"
+	}
+	back := keys.reset(keys.reset(stored, "save"), "newFile")
+	assert back == ""
+	assert keys.keysFor(back, "newFile") == "Ctrl+N"
+}
+
+test "voltar ao padrão não deixa lixo guardado" {
+	assert keys.assign("", "run", "F5") == ""
+	assert keys.assign("", "run", "F9") == "run=F9"
+}

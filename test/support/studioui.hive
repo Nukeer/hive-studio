@@ -1,0 +1,83 @@
+// Apoio aos testes de test/studioui.test.hive (a janela de studio.hive): um arquivo `.test.hive`
+// importado por test/suite.hive só pode ter imports e blocos `test`.
+
+import ../../studio
+import ../../lib/model
+import ../../lib/settings
+import ../../lib/uiview
+import ../../lib/agents
+
+// Uma pasta de projeto de mentira, escrita pelo próprio teste.
+proc fixture(): Str {
+	folder := "./ui-test"
+	if hive.file.makeDir(folder + "/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/main.hive", "import ./lib/util\r\n\r\nproc main(): void \{\r\n\techo util.dobro(2) // TODO mais\r\n}\r\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/lib/util.hive", "func dobro(n: Int): Int \{\n\treturn n * 2\n}\n") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/LEIAME.md", "# Título\n\nTexto **forte**.\n\n- [x] feito\n- item\n\n```hive\nproc main(): void \{}\n```\n") is Result.Error(why) {
+		panic why
+	}
+	return folder
+}
+
+// A janela sobre a pasta, com as configurações padrão (e não as do usuário,
+// para os textos serem os de pt-BR), e sem os vigias.
+proc window(folder: Str): studio.Win {
+	mut core := model.initial(folder, settings.defaults())
+	studio.openRoot(core, folder)
+	return studio.Win(core, uiview.emptyChrome(), true)
+}
+
+// Um serviço que só recebe: o endereço que o trabalho em outra thread usa
+// para mandar de volta o que fez, ignorado nos testes.
+proc sink(count: mut Int, command: model.Cmd): model.Cmd {
+	count += 1
+	return command
+}
+
+// O HTML que o hive.ui manda à janela agora.
+func page(win: studio.Win): Str {
+	return hive.ui.html(studio.view(win))
+}
+
+func shows(win: studio.Win, text: Str): Bool {
+	return indexOf(page(win), text) is Result.Ok(_)
+}
+
+// O texto do documento aberto (o primeiro), ou "".
+func docText(win: studio.Win): Str {
+	if win.core.docs bounds 0 {
+		return win.core.docs[0].text
+	}
+	return ""
+}
+
+func docDirty(win: studio.Win): Bool {
+	if win.core.docs bounds 0 {
+		return model.dirty(win.core.docs[0])
+	}
+	return false
+}
+
+// O endereço de um serviço que acabou de começar (spawn responde com um
+// Result); um teste que não consegue nem começar o serviço falha aqui.
+func started(spawned: Result<Address, hive.syslink.SyslinkError>): Address {
+	if spawned is Result.Ok(address) {
+		return address
+	} else if spawned is Result.Error(why) {
+		panic "o serviço não começou: " + why.message
+	}
+}
+
+// O terminal de agente à vista agora (0 = nenhum).
+func agentShown(state: model.State): Int {
+	if studio.showingAgent(state) {
+		return agents.sessionOf(state.agents, state.agents.current).session
+	}
+	return 0
+}

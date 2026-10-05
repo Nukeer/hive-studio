@@ -1,0 +1,13 @@
+// Testes de lib/i18n.hive.
+
+import ../lib/i18n
+import ./support/i18n as support
+
+test "traduções existem nos três idiomas e as chaves não repetem" {
+	english := i18n.words("en")
+	assert i18n.tr(english, "Configurações") == "Settings"
+	assert i18n.tr(i18n.words("es"), "Configurações") == "Configuración"
+	assert i18n.tr(i18n.words("pt-BR"), "Configurações") == "Configurações"
+	assert i18n.tr(english, "texto sem tradução") == "texto sem tradução"
+	assert support.unique(map(i18n.table(), support.keyOf))
+}

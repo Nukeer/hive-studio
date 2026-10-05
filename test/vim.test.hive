@@ -1,0 +1,689 @@
+// Testes de lib/vim.hive.
+
+import ../lib/vim
+import ../lib/model
+import ../lib/highlight
+import ../lib/native.go
+import ../lib/complete
+import ../lib/search
+import ../lib/analysis
+import ./support/vim as support
+
+test "w, W, e, b e ge andam por palavras, pontuação e linhas vazias" {
+	text := "foo bar.baz\n  qux quux\n\nend"
+	assert support.caretsOf(text, 0, "wwwwwww") == [4, 7, 8, 14, 18, 23, 24]
+	assert support.caretsOf(text, 0, "WW") == [4, 14]
+	assert support.caretsOf(text, 0, "eeee") == [2, 6, 7, 10]
+	assert support.caretsOf(text, 10, "bbbb") == [8, 7, 4, 0]
+	assert support.caretsOf(text, 8, "gege") == [8, 7, 7, 6]
+	assert support.caretsOf(text, 0, "3w") == [0, 8]
+}
+
+test "linhas: 0, ^, $, j e k com a coluna guardada, gg e G" {
+	text := "foo bar.baz\n  qux quux\n\nend"
+	assert support.fed(text, 5, "$").caret == 10
+	assert support.fed(text, 5, "0").caret == 0
+	assert support.fed(text, 16, "^").caret == 14
+	assert support.caretsOf(text, 2, "jjjkk") == [14, 23, 26, 23, 14]
+	assert support.caretsOf(text, 0, "$jj") == [10, 21, 23]
+	assert support.fed(text, 20, "gg").caret == 0
+	assert support.fed(text, 0, "G").caret == 24
+	assert support.fed(text, 0, "2G").caret == 14
+	assert support.fed(text, 0, "3gg").caret == 23
+	assert support.fed("a\nb\n", 0, "G").caret == 2
+	tabs := "\tab\n12345678"
+	assert support.fed(tabs, 1, "j").caret == 8
+}
+
+test "f, t, F, T, ; e , ficam na linha" {
+	text := "foo bar.baz(a)"
+	assert support.fed(text, 0, "f.").caret == 7
+	assert support.caretsOf(text, 0, "fa;,") == [0, 5, 9, 5]
+	assert support.fed(text, 0, "t.").caret == 6
+	assert support.fed(text, 0, "t.;").caret == 6
+	assert support.fed(text, 13, "Fb").caret == 8
+	assert support.fed(text, 13, "Tb").caret == 9
+	assert support.fed(text, 0, "fq").caret == 0
+	assert support.fed(text, 0, "2fa").caret == 9
+}
+
+test "% salta entre pares, chaves entre parágrafos" {
+	assert support.caretsOf("(a [b] c)", 0, "%%") == [8, 0]
+	assert support.fed("x = f(a[1])", 0, "%").caret == 10
+	text := "a\nb\n\nc\nd\n\ne"
+	assert support.caretsOf(text, 0, "}}}") == [4, 9, 10]
+	assert support.caretsOf(text, 10, "\{\{") == [9, 4]
+}
+
+test "dw não leva o fim da linha, cw muda só até o fim da palavra" {
+	assert support.fed("foo bar\nbaz", 4, "dw").text == "foo \nbaz"
+	assert support.fed("foo bar baz", 0, "d2w").text == "baz"
+	assert support.fed("a b\nc d", 0, "d2w").text == "\nc d"
+	deleted := support.fed("foo bar", 0, "dw")
+	assert deleted.text == "bar"
+	assert deleted.vim.register == "foo "
+	mut changed := support.fed("foo bar", 0, "cw")
+	support.typeText(changed, "x")
+	support.feed(changed, "<Esc>")
+	assert changed.text == "x bar"
+	assert changed.vim.mode == model.VimMode.NormalMode()
+	mut probe1 := support.fed("foo bar", 2, "cw")
+	support.typeText(probe1, "x")
+	support.feed(probe1, "<Esc>")
+	assert probe1.text == "fox bar"
+	assert support.fed("foo bar baz", 4, "de").text == "foo  baz"
+	assert support.fed("foo bar baz", 8, "db").text == "foo baz"
+	assert support.fed("foo(a, b)", 0, "dt,").text == ", b)"
+	assert support.fed("foo(a, b)", 0, "df(").text == "a, b)"
+}
+
+test "dd, D, x e X, com contagem" {
+	assert support.fed("a\nb\nc\nd", 0, "dd").text == "b\nc\nd"
+	assert support.fed("a\nb\nc\nd", 0, "2dd").text == "c\nd"
+	assert support.fed("a\nb\nc\nd", 0, "d2d").text == "c\nd"
+	last := support.fed("a\nb", 2, "dd")
+	assert last.text == "a"
+	assert last.caret == 0
+	assert last.vim.register == "b\n"
+	assert last.vim.linewise
+	assert support.fed("a\nb\n", 2, "dd").text == "a\n"
+	assert support.fed("a\nb\nc", 2, "dj").text == "a"
+	assert support.fed("a\nb\nc", 2, "dk").text == "c"
+	assert support.fed("a\n  b\nc", 0, "dG").text == ""
+	lines := support.fed("a\nb\nc\nd", 0, "3dd")
+	assert lines.vim.message == "%1 linhas a menos"
+	assert lines.vim.args == ["3"]
+	cut := support.fed("hello world", 5, "D")
+	assert cut.text == "hello"
+	assert cut.caret == 4
+	assert support.fed("abc", 1, "x").text == "ac"
+	assert support.fed("abcdef", 1, "3x").text == "aef"
+	assert support.fed("abc", 2, "x").caret == 1
+	assert support.fed("abc", 2, "X").text == "ac"
+	assert support.fed("abc", 0, "X").text == "abc"
+}
+
+test "yy, yw, p e P, e xp troca dois caracteres" {
+	below := support.fed("one\ntwo", 0, "yyp")
+	assert below.text == "one\none\ntwo"
+	assert below.caret == 4
+	above := support.fed("one\ntwo", 4, "yyP")
+	assert above.text == "one\ntwo\ntwo"
+	assert above.caret == 4
+	word := support.fed("foo bar", 4, "ywP")
+	assert word.text == "foo barbar"
+	assert word.caret == 6
+	assert support.fed("a\nb", 2, "yyp").text == "a\nb\nb"
+	assert support.fed("a\nb", 0, "yy3p").text == "a\na\na\na\nb"
+	assert support.fed("ab", 0, "xp").text == "ba"
+	copied := support.fed("a\nb\nc", 0, "yj")
+	assert copied.clip == "a\nb\n"
+	assert copied.caret == 0
+	assert support.fed("a", 0, "p").vim.error
+}
+
+test "inserir: i, a, I, A, o e O, com indentação e contagem" {
+	appended := support.fed("foo", 0, "A")
+	assert appended.caret == 3
+	assert appended.vim.mode == model.VimMode.InsertMode()
+	doneBefore := appended
+	mut done := doneBefore
+	support.typeText(done, "!")
+	support.feed(done, "<Esc>")
+	assert done.text == "foo!"
+	assert done.caret == 3
+	opened := support.fed("\tfoo \{", 0, "o")
+	assert opened.text == "\tfoo \{\n\t\t"
+	assert opened.caret == len(opened.text)
+	above := support.fed("\tfoo", 1, "O")
+	assert above.text == "\t\n\tfoo"
+	assert above.caret == 1
+	assert support.fed("\t  x", 0, "I").caret == 3
+	assert support.fed("ab", 0, "a").caret == 1
+	mut probe2 := support.fed("", 0, "3i")
+	support.typeText(probe2, "hi")
+	support.feed(probe2, "<Esc>")
+	assert probe2.text == "hihihi"
+	mut probe3 := support.fed("a", 0, "2o")
+	support.typeText(probe3, "x")
+	support.feed(probe3, "<Esc>")
+	assert probe3.text == "a\nx\nx"
+}
+
+test "o ponto repete a última alteração, inclusive o que foi digitado" {
+	assert support.fed("a b c d", 0, "dw.").text == "c d"
+	mut changed := support.fed("foo bar", 0, "ciw")
+	support.typeText(changed, "x")
+	support.feed(changed, "<Esc>")
+	againBefore := changed
+	mut again := againBefore
+	support.feed(again, "w.")
+	assert again.text == "x x"
+	assert again.caret == 2
+	mut semicolons := support.fed("a\nb", 0, "A")
+	support.typeText(semicolons, ";")
+	support.feed(semicolons, "<Esc>j.")
+	assert semicolons.text == "a;\nb;"
+	assert support.fed("abcdef", 0, "x2.").text == "def"
+	assert support.fed("a\nb\nc", 0, "ddu.").text == "b\nc"
+}
+
+test "u e Ctrl+R, e uma inserção inteira é um passo só" {
+	undone := support.fed("a\nb", 0, "ddu")
+	assert undone.text == "a\nb"
+	assert undone.caret == 0
+	probe4Before := undone
+	mut probe4 := probe4Before
+	support.feed(probe4, "<C-r>")
+	assert probe4.text == "b"
+	mut typed := support.fed("x", 0, "A")
+	support.typeText(typed, "yz")
+	support.feed(typed, "<Esc>")
+	assert typed.text == "xyz"
+	assert len(typed.undo) == 1
+	backBefore := typed
+	mut back := backBefore
+	support.feed(back, "u")
+	assert back.text == "x"
+	oldestBefore := back
+	mut oldest := oldestBefore
+	support.feed(oldest, "u")
+	assert oldest.vim.message == "Já está na alteração mais antiga"
+	several := support.fed("a\nb\nc\nd", 0, "dddddd2u")
+	assert several.text == "b\nc\nd"
+	assert len(several.undo) == 1
+	assert len(several.redo) == 2
+	severalBefore := several
+	mut forward := severalBefore
+	support.feed(forward, "5<C-r>")
+	assert forward.text == "d"
+	assert len(forward.undo) == 3
+	assert len(forward.redo) == 0
+	assert len(support.fed("abc", 0, "i<Esc>").undo) == 0
+	assert support.fed("abc", 0, "xxx3u").text == "abc"
+}
+
+test "objetos de texto: palavras, aspas, blocos e parágrafos" {
+	assert support.fed("f(a, b)", 3, "di(").text == "f()"
+	assert support.fed("f(a, b)", 3, "da(").text == "f"
+	assert support.fed("f(a, (b))", 7, "d2i(").text == "f()"
+	mut probe5 := support.fed("x = \"hello\"", 0, "ci\"")
+	support.typeText(probe5, "bye")
+	support.feed(probe5, "<Esc>")
+	assert probe5.text == "x = \"bye\""
+	assert support.fed("say 'hi' now", 5, "da'").text == "say now"
+	assert support.fed("foo bar", 5, "diw").text == "foo "
+	assert support.fed("foo bar baz", 4, "daw").text == "foo baz"
+	assert support.fed("foo bar", 6, "daw").text == "foo"
+	block := "f() \{\n\ta\n\tb\n}"
+	assert support.fed(block, 7, "di\{").text == "f() \{\n}"
+	changed := support.fed(block, 7, "ci\{")
+	assert changed.text == "f() \{\n\t\n}"
+	assert changed.caret == 7
+	assert support.fed(block, 7, "yiB").vim.linewise
+	assert support.fed("x [1, 2]", 4, "di]").text == "x []"
+	assert support.fed("a\nb\n\nc", 0, "dip").text == "\nc"
+	assert support.fed("a\nb\n\nc", 0, "dap").text == "c"
+	assert support.fed("f(a)", 0, "dix").text == "f(a)"
+}
+
+test "maiúsculas, r, ~, J, gJ, >> e <<" {
+	assert support.fed("foo bar", 4, "gUiw").text == "foo BAR"
+	assert support.fed("FOO BAR", 0, "guu").text == "foo bar"
+	assert support.fed("ação", 0, "gUU").text == "AÇÃO"
+	assert support.fed("abc", 0, "rx").text == "xbc"
+	replaced := support.fed("abcd", 0, "3r-")
+	assert replaced.text == "---d"
+	assert replaced.caret == 2
+	assert support.fed("abc", 1, "5rx").text == "abc"
+	toggled := support.fed("aBc", 0, "~")
+	assert toggled.text == "ABc"
+	assert toggled.caret == 1
+	assert support.fed("aBc", 0, "3~").text == "AbC"
+	joined := support.fed("a\n  b", 0, "J")
+	assert joined.text == "a b"
+	assert joined.caret == 1
+	assert support.fed("a\n  b", 0, "gJ").text == "a  b"
+	assert support.fed("f(\n)", 0, "J").text == "f()"
+	assert support.fed("a\nb\nc", 0, "3J").text == "a b c"
+	assert support.fed("a", 0, ">>").text == "\ta"
+	assert support.fed("\t\ta", 0, "<<").text == "\ta"
+	assert vim.shiftedLine("      x", "\t", false, 1, 4) == "  x"
+	assert vim.shiftedLine("      x", "\t", false, 2, 4) == "x"
+	assert vim.shiftedLine("\t  x", "\t", false, 2, 4) == "x"
+	assert vim.shiftedLine(" x", "\t", false, 3, 4) == "x"
+	assert vim.trim("  a b \t ") == "a b"
+	assert vim.upper("olá ção") == "OLÁ ÇÃO"
+	assert support.fed("a\nb\nc", 0, "2>>").text == "\ta\n\tb\nc"
+	assert support.fed("  x\ny", 4, ">>").text == "  x\n    y"
+	assert support.fed("f \{\n\ta\n}", 7, ">i\{").text == "f \{\n\t\ta\n}"
+}
+
+test "visual: v, V, o, operadores e objetos" {
+	yanked := support.fed("hello world", 0, "vey")
+	assert yanked.vim.register == "hello"
+	assert yanked.vim.mode == model.VimMode.NormalMode()
+	assert yanked.caret == 0
+	assert support.fed("hello world", 0, "ved").text == " world"
+	assert support.fed("a\nb\nc", 0, "Vjd").text == "c"
+	assert support.fed("ab\ncd", 1, "vjd").text == "a"
+	assert support.fed("foo bar", 5, "viwU").text == "foo BAR"
+	assert support.fed("a\nb", 0, "Vj>").text == "\ta\n\tb"
+	swapped := support.fed("abcdef", 1, "vllo")
+	assert swapped.caret == 1
+	assert swapped.vim.anchor == 3
+	over := support.fed("foo bar", 0, "yiwwviwp")
+	assert over.text == "foo foo"
+	assert over.vim.register == "bar"
+	selecting := support.fed("a\nb\nc", 0, "Vj")
+	assert selecting.vim.mode == model.VimMode.VisualLineMode()
+	span := vim.shown(selecting.text, selecting.caret, selecting.vim)
+	assert span.from == 0 && span.to == 4
+	probe6Before := selecting
+	mut probe6 := probe6Before
+	support.feed(probe6, "<Esc>")
+	assert probe6.vim.mode == model.VimMode.NormalMode()
+	assert support.fed("abc", 0, "vlrx").text == "xxc"
+}
+
+test "a busca: /, n, N, *, # e smartcase" {
+	text := "foo bar foo baz foo"
+	mut found := support.fed(text, 0, "/")
+	vim.submit(found, "foo")
+	assert found.caret == 8
+	assert found.vim.highlight
+	probe7Before := found
+	mut probe7 := probe7Before
+	support.feed(probe7, "n")
+	assert probe7.caret == 16
+	wrappedBefore := found
+	mut wrapped := wrappedBefore
+	support.feed(wrapped, "nn")
+	assert wrapped.caret == 0
+	assert wrapped.vim.message == "a busca chegou ao FIM, continuando do INÍCIO"
+	probe8Before := found
+	mut probe8 := probe8Before
+	support.feed(probe8, "N")
+	assert probe8.caret == 0
+	probe9Before := found
+	mut probe9 := probe9Before
+	support.feed(probe9, "dn")
+	assert probe9.text == "foo bar foo"
+	mut backward := support.fed(text, 10, "?")
+	vim.submit(backward, "foo")
+	assert backward.caret == 8
+	probe10Before := backward
+	mut probe10 := probe10Before
+	support.feed(probe10, "n")
+	assert probe10.caret == 0
+	mut probe11 := support.fed("Foo foo", 0, "/")
+	vim.submit(probe11, "foo")
+	assert probe11.caret == 4
+	mut probe12 := support.fed("Foo foo", 1, "/")
+	vim.submit(probe12, "Foo")
+	assert probe12.caret == 0
+	assert support.fed("ab abc ab", 0, "*").caret == 7
+	assert support.fed("ab abc ab", 7, "#").caret == 0
+	mut missing := support.fed(text, 0, "/")
+	vim.submit(missing, "zzz")
+	assert missing.vim.error
+	assert missing.vim.args == ["zzz"]
+	assert len(vim.highlights(text, found.vim)) == 3
+	probe13Before := found
+	mut probe13 := probe13Before
+	vim.submit(probe13, "noh")
+	assert len(vim.highlights(text, probe13.vim)) == 0
+}
+
+test "linha de comando: endereços, :s, :d, :m, :t, :sort e :>" {
+	mut probe14 := support.fed("a\nb\nc", 0, ":")
+	vim.submit(probe14, "3")
+	assert probe14.caret == 4
+	mut probe15 := support.fed("a\nb\nc", 0, ":")
+	vim.submit(probe15, "$")
+	assert probe15.caret == 4
+	mut all := support.fed("foo\nboo", 0, ":")
+	vim.submit(all, "%s/o/0/g")
+	assert all.text == "f00\nb00"
+	assert all.vim.args == ["4", "2"]
+	mut probe16 := support.fed("foo", 0, ":")
+	vim.submit(probe16, "s/o/[&]/")
+	assert probe16.text == "f[o]o"
+	mut probe17 := support.fed("a.b", 0, ":")
+	vim.submit(probe17, "s#.#\\n#")
+	assert probe17.text == "a\nb"
+	mut probe18 := support.fed("a\nb\nc\nd", 0, ":")
+	vim.submit(probe18, "2,3d")
+	assert probe18.text == "a\nd"
+	mut probe19 := support.fed("a\nb\nc", 4, ":")
+	vim.submit(probe19, "m0")
+	assert probe19.text == "c\na\nb"
+	mut probe20 := support.fed("a\nb\nc", 0, ":")
+	vim.submit(probe20, "m$")
+	assert probe20.text == "b\nc\na"
+	mut probe21 := support.fed("a\nb", 0, ":")
+	vim.submit(probe21, "t.")
+	assert probe21.text == "a\na\nb"
+	mut probe22 := support.fed("c\na\nb", 0, ":")
+	vim.submit(probe22, "sort")
+	assert probe22.text == "a\nb\nc"
+	mut probe23 := support.fed("c\na\nb", 0, ":")
+	vim.submit(probe23, "sort!")
+	assert probe23.text == "c\nb\na"
+	mut probe24 := support.fed("a\nb", 0, ":")
+	vim.submit(probe24, "%>")
+	assert probe24.text == "\ta\n\tb"
+	mut probe25 := support.fed("a\nb\nc", 0, ":")
+	vim.submit(probe25, ".,+1j")
+	assert probe25.text == "a b\nc"
+	mut ranged := support.fed("a\nb\nc", 0, "Vj:")
+	vim.submit(ranged, "'<,'>d")
+	assert ranged.text == "c"
+	assert support.fed("a\nb\nc", 0, "Vj:").vim.command == "'<,'>"
+	assert support.fed("a\nb\nc", 0, "3:").vim.command == ".,.+2"
+	mut unknown := support.fed("a", 0, ":")
+	vim.submit(unknown, "frobnicate")
+	assert unknown.vim.error
+	assert unknown.vim.args == ["frobnicate"]
+	mut probe26 := support.fed("a", 0, ":")
+	vim.submit(probe26, "5,2d")
+	assert probe26.text == "a"
+}
+
+test "linha de comando: salvar, fechar, abrir e opções viram efeitos" {
+	mut clean := support.editorFor("a", 0)
+	clean.active = 2
+	mut dirty := support.editorFor("a", 0)
+	dirty.active = 2
+	dirty.dirty = true
+	probe27Before := clean
+	mut probe27 := probe27Before
+	vim.submit(probe27, "w")
+	assert probe27.effects == [model.Msg.Save()]
+	probe28Before := clean
+	mut probe28 := probe28Before
+	vim.submit(probe28, "q")
+	assert probe28.effects == [model.Msg.CloseDoc(2)]
+	probe29Before := clean
+	mut probe29 := probe29Before
+	vim.submit(probe29, "x")
+	assert probe29.effects == [model.Msg.CloseDoc(2)]
+	probe30Before := clean
+	mut probe30 := probe30Before
+	vim.submit(probe30, "wq")
+	assert probe30.effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	refusedBefore := dirty
+	mut refused := refusedBefore
+	vim.submit(refused, "q")
+	assert refused.vim.error
+	assert len(refused.effects) == 0
+	probe31Before := dirty
+	mut probe31 := probe31Before
+	vim.submit(probe31, "q!")
+	assert probe31.effects == [model.Msg.CloseDocNow(2)]
+	probe32Before := dirty
+	mut probe32 := probe32Before
+	vim.submit(probe32, "x")
+	assert probe32.effects == [model.Msg.Save(), model.Msg.CloseDoc(2)]
+	probe33Before := clean
+	mut probe33 := probe33Before
+	vim.submit(probe33, "e lib/novo.hive")
+	assert probe33.effects == [model.Msg.VimEdit("lib/novo.hive")]
+	probe34Before := dirty
+	mut probe34 := probe34Before
+	vim.submit(probe34, "e!")
+	assert probe34.effects == [model.Msg.VimReload()]
+	probe35Before := clean
+	mut probe35 := probe35Before
+	vim.submit(probe35, "set nonu")
+	assert probe35.effects == [model.Msg.ToggleSetting("lineNumbers")]
+	probe36Before := clean
+	mut probe36 := probe36Before
+	vim.submit(probe36, "set nu")
+	assert len(probe36.effects) == 0
+	probe37Before := clean
+	mut probe37 := probe37Before
+	vim.submit(probe37, "set ts=2")
+	assert probe37.effects == [model.Msg.SetTabSize(2)]
+	probe38Before := clean
+	mut probe38 := probe38Before
+	vim.submit(probe38, "bn")
+	assert probe38.effects == [model.Msg.CycleTab(1)]
+	probe39Before := clean
+	mut probe39 := probe39Before
+	vim.submit(probe39, "run")
+	assert probe39.effects == [model.Msg.Invoke("run")]
+	probe40Before := clean
+	mut probe40 := probe40Before
+	vim.submit(probe40, "make")
+	assert probe40.effects == [model.Msg.Invoke("build")]
+	probe41Before := clean
+	mut probe41 := probe41Before
+	vim.submit(probe41, "check")
+	assert probe41.effects == [model.Msg.Invoke("check")]
+	probe42Before := clean
+	mut probe42 := probe42Before
+	vim.submit(probe42, "!ls")
+	assert probe42.effects == [model.Msg.ShowPane(model.Pane.TerminalPane()), model.Msg.TermSubmit("ls")]
+	probe43Before := clean
+	mut probe43 := probe43Before
+	vim.submit(probe43, "Ex")
+	assert probe43.effects == [model.Msg.FocusExplorer("")]
+	probe44Before := clean
+	mut probe44 := probe44Before
+	vim.submit(probe44, "Vex lib")
+	assert probe44.effects == [model.Msg.FocusExplorer("lib")]
+	probe45Before := clean
+	mut probe45 := probe45Before
+	vim.submit(probe45, "Claude")
+	assert probe45.effects == [model.Msg.ShowAgent("claude")]
+	probe46Before := clean
+	mut probe46 := probe46Before
+	vim.submit(probe46, "Codex")
+	assert probe46.effects == [model.Msg.ShowAgent("codex")]
+	probe47Before := clean
+	mut probe47 := probe47Before
+	vim.submit(probe47, "OpenCode")
+	assert probe47.effects == [model.Msg.ShowAgent("opencode")]
+	probe48Before := clean
+	mut probe48 := probe48Before
+	vim.submit(probe48, "Agent Codex")
+	assert probe48.effects == [model.Msg.ShowAgent("codex")]
+	probe49Before := clean
+	mut probe49 := probe49Before
+	support.feed(probe49, "gd")
+	assert probe49.effects == [model.Msg.GotoDefinition(0)]
+	probe50Before := clean
+	mut probe50 := probe50Before
+	support.feed(probe50, "ZZ")
+	assert probe50.effects == [model.Msg.CloseDoc(2)]
+	historyBefore := clean
+	mut history := historyBefore
+	support.feed(history, ":")
+	vim.submit(history, "set nu")
+	vim.submit(history, "noh")
+	mut browsing := history.vim
+	browsing.prompt = ":"
+	probe51Before := browsing
+	mut probe51 := probe51Before
+	vim.browseHistory(probe51, -1)
+	assert probe51.command == "noh"
+	probe52Before := browsing
+	mut probe52 := probe52Before
+	vim.browseHistory(probe52, -1)
+	vim.browseHistory(probe52, -1)
+	assert probe52.command == "set nu"
+}
+
+test "Ctrl+A, Ctrl+X, rolagem e clique" {
+	plus := support.fed("x = 41", 0, "<C-a>")
+	assert plus.text == "x = 42"
+	assert plus.caret == 5
+	assert support.fed("x = 41", 0, "5<C-x>").text == "x = 36"
+	assert support.fed("-3", 0, "<C-a>").text == "-2"
+	mut Str[dyn] many = []
+	for n := 0; n < 100; n++ {
+		append(many, "line {n}")
+	}
+	long := join(many, "\n")
+	down := support.fed(long, 0, "<C-d>")
+	assert vim.lineOf(split(long, ""), down.caret) == 10
+	assert down.scroll == 10
+	mut middle := support.editorFor(long, vim.lineOffset(split(long, ""), 50))
+	middle.top = 45
+	probe53Before := middle
+	mut probe53 := probe53Before
+	support.feed(probe53, "zz")
+	assert probe53.scroll == 40
+	probe54Before := middle
+	mut probe54 := probe54Before
+	support.feed(probe54, "zt")
+	assert probe54.scroll == 50
+	probe55Before := middle
+	mut probe55 := probe55Before
+	support.feed(probe55, "H")
+	assert vim.lineOf(split(long, ""), probe55.caret) == 45
+	probe56Before := middle
+	mut probe56 := probe56Before
+	support.feed(probe56, "L")
+	assert vim.lineOf(split(long, ""), probe56.caret) == 64
+	mut selected := support.editorFor("hello", 0)
+	vim.click(selected, 1, 4)
+	assert selected.vim.mode == model.VimMode.VisualMode()
+	assert selected.vim.anchor == 1
+	assert selected.caret == 3
+	probe57Before := selected
+	mut probe57 := probe57Before
+	vim.click(probe57, 2, 2)
+	assert probe57.vim.mode == model.VimMode.NormalMode()
+	mut probe58 := support.editorFor("ab\n", 0)
+	vim.click(probe58, 3, 3)
+	assert probe58.caret == 1
+}
+
+test "teclas que chegam atrasadas no modo de inserção viram texto" {
+	typed := support.fed("\tf(", 2, "a<CR>x<BS>y<Esc>")
+	assert typed.text == "\tf(\n\t\ty"
+	assert typed.vim.mode == model.VimMode.NormalMode()
+	assert typed.vim.typed == "\n\t\ty"
+	mut v := support.fed("a", 0, ":").vim
+	vim.promptKey(v, "w")
+	vim.promptKey(v, "q")
+	vim.promptKey(v, "<BS>")
+	assert v.command == "w"
+	assert support.fed("abc def", 0, "g_").caret == 6
+}
+
+test "macros: q grava, @ repete, e a repetição para no primeiro erro" {
+	mut recorded := support.fed("a\nb\nc", 0, "qaA")
+	support.typeText(recorded, ";")
+	support.feed(recorded, "<Esc>jq")
+	assert recorded.text == "a;\nb\nc"
+	assert recorded.vim.recordingTo == ""
+	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
+		assert keys == ["A", "<Text>;", "<Esc>", "j"]
+	} else {
+		assert false
+	}
+	onceBefore := recorded
+	mut once := onceBefore
+	support.feed(once, "@a")
+	assert once.text == "a;\nb;\nc"
+	assert vim.lineOf(split(once.text, ""), once.caret) == 2
+	// No fim, o `j` falha e a macro para, mas o que já fez fica.
+	probe59Before := once
+	mut probe59 := probe59Before
+	support.feed(probe59, "@@")
+	assert probe59.text == "a;\nb;\nc;"
+	probe60Before := recorded
+	mut probe60 := probe60Before
+	support.feed(probe60, "5@a")
+	assert probe60.text == "a;\nb;\nc;"
+	probe61Before := recorded
+	mut probe61 := probe61Before
+	support.feed(probe61, "u")
+	assert probe61.text == "a\nb\nc"
+	lines := support.fed("x\nx\nx\nx", 0, "qb0rYjq100@b")
+	assert lines.text == "Y\nY\nY\nY"
+	recording := support.fed("a", 0, "qc")
+	assert recording.vim.recordingTo == "c"
+	probe62Before := recording
+	mut probe62 := probe62Before
+	support.feed(probe62, "vq")
+	assert probe62.vim.recordingTo == ""
+}
+
+test "macros: comandos de :, visual, maiúscula acrescenta, @: e macro que chama a si mesma" {
+	mut started := support.fed("foo\nfoo\nfoo", 0, "qa:")
+	vim.submit(started, "s/o/0/g")
+	recordedBefore := started
+	mut recorded := recordedBefore
+	support.feed(recorded, "jq")
+	assert recorded.text == "f00\nfoo\nfoo"
+	if hive.map.get(recorded.vim.macros, "a") is Result.Ok(keys) {
+		assert keys == [":", "<Text>s/o/0/g", "<CR>", "j"]
+	}
+	probe63Before := recorded
+	mut probe63 := probe63Before
+	support.feed(probe63, "@a")
+	assert probe63.text == "f00\nf00\nfoo"
+	probe64Before := recorded
+	mut probe64 := probe64Before
+	support.feed(probe64, "@:")
+	assert probe64.text == "f00\nf00\nfoo"
+	probe65Before := recorded
+	mut probe65 := probe65Before
+	support.feed(probe65, "j@:")
+	support.feed(probe65, "")
+	assert probe65.caret == 8
+	mut visual := support.fed("a\nb\nc\nd", 0, "qvVj:")
+	vim.submit(visual, "'<,'>d")
+	support.feed(visual, "q")
+	assert visual.text == "c\nd"
+	probe66Before := visual
+	mut probe66 := probe66Before
+	support.feed(probe66, "@v")
+	assert probe66.text == ""
+	appended := support.fed("abcdef", 0, "qbxqqBxq")
+	if hive.map.get(appended.vim.macros, "b") is Result.Ok(keys) {
+		assert keys == ["x", "x"]
+	}
+	probe67Before := appended
+	mut probe67 := probe67Before
+	support.feed(probe67, "@b")
+	assert probe67.text == "ef"
+	mut cancelled := support.fed("abc", 0, "qd:")
+	vim.cancel(cancelled)
+	assert cancelled.vim.prompt == ""
+	probe68Before := cancelled
+	mut probe68 := probe68Before
+	support.feed(probe68, "xq@d")
+	assert probe68.text == "c"
+	endless := support.fed("abc", 0, "qeq")
+	mut looping := endless
+	looping.vim.macros = endless.vim.macros
+	mut hive.map.Map<Str, Str[dyn]> macros = endless.vim.macros
+	hive.map.set(macros, "e", ["l", "@", "e"])
+	looping.vim.macros = macros
+	stoppedBefore := looping
+	mut stopped := stoppedBefore
+	support.feed(stopped, "@e")
+	assert stopped.vim.replaying == 0
+	assert len(stopped.vim.pending) == 0
+	assert support.fed("abc", 0, "@z").text == "abc"
+	assert support.fed("abc", 0, "q!").vim.recordingTo == ""
+}
+
+test "teclas incompletas esperam, e Esc esquece" {
+	waiting := support.fed("abc", 0, "2d")
+	assert waiting.vim.pending == ["2", "d"]
+	assert waiting.text == "abc"
+	probe69Before := waiting
+	mut probe69 := probe69Before
+	support.feed(probe69, "<Esc>")
+	assert len(probe69.vim.pending) == 0
+	assert len(support.fed("abc", 0, "dq").vim.pending) == 0
+	assert support.fed("abc", 0, "dq").text == "abc"
+	assert vim.modeName(support.fed("abc", 0, "v").vim) == "visual"
+	assert vim.modeLabel(support.fed("abc", 0, "i").vim) == "-- INSERÇÃO --"
+}

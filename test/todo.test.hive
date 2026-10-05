@@ -1,0 +1,35 @@
+// Testes de lib/todo.hive.
+
+import ../lib/todo
+import ../lib/model
+import ../lib/highlight
+import ../lib/complete
+import ../lib/search
+import ../lib/workspace
+
+test "TODO, FIXME, HACK e XXX em comentários viram itens" {
+	text := "// TODO: trocar isto\nx := 1 // FIXME conta errada\n# HACK(ana): provisório\n/* XXX: bloco */\n * TODO continuação\ny := \"TODO: num texto\"\n// TODOS os casos\n<!-- TODO: html -->\n"
+	found := todo.todosIn("a.hive", text)
+	assert len(found) == 6
+	if found bounds 5 {
+		assert found[0] == model.Todo("a.hive", 1, 3, "TODO", "trocar isto")
+		assert found[1].tag == "FIXME" && found[1].text == "conta errada" && found[1].line == 2
+		assert found[2].tag == "HACK" && found[2].text == "(ana): provisório"
+		assert found[3].tag == "XXX" && found[3].text == "bloco"
+		assert found[4].line == 5 && found[4].text == "continuação"
+		assert found[5].line == 8 && found[5].text == "html"
+	}
+}
+
+test "os TODO de um arquivo são trocados no mesmo lugar da lista" {
+	first := model.Todo("a", 1, 0, "TODO", "a")
+	second := model.Todo("b", 1, 0, "TODO", "b")
+	third := model.Todo("c", 1, 0, "TODO", "c")
+	updated := todo.withTodosOf([first, second, third], "b", "// TODO: um\n// FIXME: dois\n")
+	assert len(updated) == 4
+	if updated bounds 3 {
+		assert updated[0].file == "a" && updated[1].text == "um" && updated[2].text == "dois" && updated[3].file == "c"
+	}
+	assert len(todo.withTodosOf([first], "b", "nada")) == 1
+	assert len(todo.withTodosOf([first], "a", "nada")) == 0
+}

@@ -71,8 +71,8 @@ jobs:
             exit 1
           fi
 
-      # A página embutida tem de refletir assets/.
-      - name: Página embutida em dia
+      # O seletor de arquivo embutido (assets/pick.ps1) tem de refletir assets/.
+      - name: Assets embutidos em dia
         run: |
           (cd tools && hivec run embed.hive)
           git diff --exit-code -- lib/assets.hive || {
@@ -84,13 +84,24 @@ jobs:
         run: hivec check studio.hive
 
       - name: Testes
-        run: hivec test studio.hive
+        run: hivec test test/suite.hive
 
-      # Com Go 64 bits o hivec consegue embutir o ícone no executável; ver
-      # "Limites conhecidos" no README.
+      # A janela do Hive Studio de verdade, servida como página
+      # (HIVE_WINDOW=print) num Chrome headless: pega um hivec que quebre o
+      # editor, o teclado ou o mouse sem quebrar o build. O Node 22 traz o WebSocket que o tools/e2e
+      # usa para falar com o DevTools do Chrome.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Janela do hive.ui, de ponta a ponta
+        run: |
+          hivec build studio.hive
+          node tools/e2e/run.mjs ./studio
+
+      # O hivec embute assets/icon.png em cada executável.
       - name: Binários para cada plataforma
         run: |
-          cp assets/logo.png assets/icon.png
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"

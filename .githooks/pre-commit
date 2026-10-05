@@ -13,7 +13,7 @@ if ! command -v hivec >/dev/null 2>&1; then
 	exit 1
 fi
 
-# A página embutida precisa refletir assets/shell.html: regenera e compara.
+# O que vai embutido (assets/pick.ps1) precisa refletir assets/: regenera e compara.
 before=$(git hash-object lib/assets.hive)
 (cd tools && hivec run embed.hive >/dev/null)
 after=$(git hash-object lib/assets.hive)
@@ -28,5 +28,5 @@ hivec check studio.hive
 
 if [ "${HIVE_SKIP_TESTS:-0}" != "1" ]; then
 	echo "pre-commit: hivec test"
-	hivec test studio.hive
+	hivec test test/suite.hive
 fi

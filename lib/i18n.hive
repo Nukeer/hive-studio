@@ -76,15 +76,12 @@ func table(): Str[3][dyn] {
 		["Largura do tab", "Tab Width", "Ancho de tabulación"],
 		["Quantos espaços um tab ocupa na tela.", "How many spaces a tab takes on screen.", "Cuántos espacios ocupa una tabulación en pantalla."],
 		["Arquivos ocultos", "Hidden Files", "Archivos ocultos"],
-		["Mostrar arquivos ocultos e artefatos de build", "Show hidden files and build artifacts", "Mostrar archivos ocultos y artefactos de build"],
+		["Incluir ocultos e artefatos de build na busca e no TODO", "Include hidden files and build artifacts in search and TODO", "Incluir ocultos y artefactos de build en la búsqueda y el TODO"],
 		["Execução", "Running", "Ejecución"],
 		["Salvar antes de rodar", "Save Before Running", "Guardar antes de ejecutar"],
 		["Salvar arquivos antes de Check, Run, Test e Build", "Save files before Check, Run, Test and Build", "Guardar archivos antes de Check, Run, Test y Build"],
 		["Compilador", "Compiler", "Compilador"],
 		["Caminho do hivec. A variável HIVEC, se existir, tem prioridade.", "Path to hivec. The HIVEC variable, if set, takes precedence.", "Ruta de hivec. La variable HIVEC, si existe, tiene prioridad."],
-		["Navegador da janela", "Window Browser", "Navegador de la ventana"],
-		["Executável Chromium (Edge, Chrome, Brave) usado para a janela. Vazio = automático. Vale na próxima abertura.", "Chromium executable (Edge, Chrome, Brave) used for the window. Empty = automatic. Takes effect on next launch.", "Ejecutable Chromium (Edge, Chrome, Brave) usado para la ventana. Vacío = automático. Se aplica en la próxima apertura."],
-		["automático", "automatic", "automático"],
 		["Atalhos de teclado", "Keyboard Shortcuts", "Atajos de teclado"],
 		["Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.", "Click Record and press the combination. A key already in use is removed from the other action. Esc cancels.", "Haz clic en Grabar y presiona la combinación. Una tecla ya usada se quita de la otra acción. Esc cancela."],
 		["Restaurar todos os padrões", "Restore All Defaults", "Restaurar todos los predeterminados"],
@@ -214,6 +211,8 @@ func table(): Str[3][dyn] {
 		["Ir para arquivo…", "Go to File…", "Ir al archivo…"],
 		["Buscar arquivo pelo nome", "Search files by name", "Buscar archivo por nombre"],
 		["Nenhum arquivo encontrado", "No files found", "No se encontraron archivos"],
+		["Digite ao menos 3 letras do nome", "Type at least 3 letters of the name", "Escriba al menos 3 letras del nombre"],
+		["Não foi possível mostrar a imagem (até 8 MB).", "Could not show the image (up to 8 MB).", "No se pudo mostrar la imagen (hasta 8 MB)."],
 		["Nenhum resultado", "No results", "Sin resultados"],
 		["de", "of", "de"],
 		["resultado(s) em", "result(s) in", "resultado(s) en"],
@@ -340,31 +339,4 @@ func tr(dictionary: hive.map.Map<Str, Str>, text: Str): Str {
 		return translated
 	}
 	return text
-}
-
-func unique(values: Str[]): Bool {
-	mut hive.map.Map<Str, Bool> seen = hive.map.new()
-	for each v in values {
-		if hive.map.has(seen, v) {
-			return false
-		}
-		hive.map.set(seen, v, true)
-	}
-	return true
-}
-
-func keyOf(row: Str[]): Str {
-	if row bounds 0 {
-		return row[0]
-	}
-	return ""
-}
-
-test "traduções existem nos três idiomas e as chaves não repetem" {
-	english := words("en")
-	assert tr(english, "Configurações") == "Settings"
-	assert tr(words("es"), "Configurações") == "Configuración"
-	assert tr(words("pt-BR"), "Configurações") == "Configurações"
-	assert tr(english, "texto sem tradução") == "texto sem tradução"
-	assert unique(map(table(), keyOf))
 }

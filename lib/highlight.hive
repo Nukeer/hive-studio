@@ -440,7 +440,7 @@ func highlightText(text: Str, lang: Str): Highlighted {
 	return Highlighted(len(lines), open)
 }
 
-// O HTML de todas as linhas de um texto (ao abrir, ou quando a página pede tudo).
+// O HTML de todas as linhas de um texto.
 func htmlLines(text: Str, lang: Str): Str[dyn] {
 	mut Str[dyn] out = []
 	mut carry := 0
@@ -548,105 +548,4 @@ func rehighlight(old: Highlighted, before: Str, after: Str, lang: Str): Rehighli
 		}
 	}
 	return Rehighlight(Highlighted(newCount, kept), Patch(prefix, oldEnd - prefix, changed, changedSource))
-}
-
-// O HTML de `lines` com o patch aplicado (para os testes conferirem).
-// O texto das linhas depois do patch, uma por linha.
-func patched(lines: Str[], patch: Patch): Str {
-	mut Str[dyn] out = []
-	for i := 0; i < patch.from && i < len(lines); i++ {
-		if lines bounds i {
-			append(out, lines[i])
-		}
-	}
-	for each line in patch.lines {
-		append(out, line)
-	}
-	for i := patch.from + patch.remove; i < len(lines); i++ {
-		if lines bounds i {
-			append(out, lines[i])
-		}
-	}
-	return join(out, "\n")
-}
-
-test "realce por linha carrega o texto entre crases" {
-	first := highlightLine("x := `abre", 0)
-	assert first.carry == 1
-	second := highlightLine("meio", 1)
-	assert second.carry == 1 && second.html == "<span class=\"ts\">meio</span>"
-	third := highlightLine("fecha` + 1", 1)
-	assert third.carry == 0
-	assert indexOf(third.html, "<span class=\"tn\">1</span>") is Result.Ok(_)
-	assert highlightLine("// uma crase ` num comentário", 0).carry == 0
-	assert highlightLine("if c == \"`\" \{", 0).carry == 0
-	assert highlightLine("x := \"a\\\"`\"", 0).carry == 0
-	assert highlightLine("x := \"a\" + `abre // não é comentário", 0).carry == 1
-	assert highlightLine("render(\"- **um", 0).carry == 2
-	assert highlightLine("  dois \\\" ` três\") + 1", 2).carry == 0
-}
-
-test "rehighlight muda só as linhas editadas e devolve o patch" {
-	before := "proc a(): void \{\n\techo 1\n}\n"
-	after := "proc a(): void \{\n\techo 2\n\techo 3\n}\n"
-	old := highlightText(before, "hive")
-	done := rehighlight(old, before, after, "hive")
-	assert done.patch.from == 1
-	assert done.patch.remove == 1
-	assert len(done.patch.lines) == 2
-	assert patched(htmlLines(before, "hive"), done.patch) == join(htmlLines(after, "hive"), "\n")
-	assert done.result == highlightText(after, "hive")
-	opening := "a\nb := `x\nc\nd` + 1\n"
-	closed := highlightText(opening, "hive")
-	assert closed.open == [1, 1, 2, 1] && carryAt(closed, 2) == 1 && carryAt(closed, 3) == 0 && carryAt(closed, -1) == 0
-	closedAfter := replaceAll(opening, "`x", "x")
-	edited := rehighlight(closed, opening, closedAfter, "hive")
-	assert patched(htmlLines(opening, "hive"), edited.patch) == join(htmlLines(closedAfter, "hive"), "\n")
-	assert edited.result == highlightText(closedAfter, "hive")
-	quoted := "a\nb := \"x\nc\nd\" + 1\n"
-	quotedAfter := replaceAll(quoted, "\"x", "x")
-	unquoted := rehighlight(highlightText(quoted, "hive"), quoted, quotedAfter, "hive")
-	assert patched(htmlLines(quoted, "hive"), unquoted.patch) == join(htmlLines(quotedAfter, "hive"), "\n")
-	assert unquoted.result == highlightText(quotedAfter, "hive")
-	// Linhas abertas depois do trecho são deslocadas quando ele cresce.
-	shifted := "x := 1\nb := `y\nz`\n"
-	grown := "x := 1\nnova\noutra\nb := `y\nz`\n"
-	moved := rehighlight(highlightText(shifted, "hive"), shifted, grown, "hive")
-	assert moved.result == highlightText(grown, "hive") && moved.result.open == [3, 1]
-}
-
-test "palavras-chave, tipos, textos e comentários ganham classes" {
-	html := highlight("proc main(): void \{ // oi\n\tx := \"a<b\" + 1\n}")
-	assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tf\">main</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tk\">void</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tc\">// oi</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"ts\">&quot;a&lt;b&quot;</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tn\">1</span>") is Result.Ok(_)
-}
-
-test "JSON ganha cores de chave, texto, número e literal; TODO se destaca no comentário" {
-	line := jsonLine("  \"nome\": \"Ada\", \"n\": -3.5, \"ok\": true, \"x\": null")
-	assert indexOf(line, "<span class=\"tt\">&quot;nome&quot;</span>") is Result.Ok(_)
-	assert indexOf(line, "<span class=\"ts\">&quot;Ada&quot;</span>") is Result.Ok(_)
-	assert indexOf(line, "<span class=\"tn\">-3.5</span>") is Result.Ok(_)
-	assert indexOf(line, "<span class=\"tb\">true</span>") is Result.Ok(_)
-	assert htmlLines("\{\"a\": 1}", "json") == ["\{<span class=\"tt\">&quot;a&quot;</span>: <span class=\"tn\">1</span>}"]
-	assert htmlLines("x <y>", "") == ["x &lt;y&gt;"]
-	assert indexOf(highlight("x := 1 // TODO: isto"), "<span class=\"tc\">// <span class=\"td\">TODO</span>: isto</span>") is Result.Ok(_)
-}
-
-test "tipos, átomos e o módulo hive" {
-	html := highlight("hive.file.read(p) is Result.Ok(#Ready)")
-	assert indexOf(html, "<span class=\"tm\">hive</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tt\">Result</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"ta\">#Ready</span>") is Result.Ok(_)
-	assert indexOf(html, "<span class=\"tf\">read</span>") is Result.Ok(_)
-}
-
-test "o texto sai igual, só com marcação em volta" {
-	source := "type A \{ x: Int }\n"
-	html := highlight(source)
-	plain := replaceAll(replaceAll(html, "<span class=\"tk\">", ""), "</span>", "")
-	assert replaceAll(replaceAll(plain, "<span class=\"tt\">", ""), "&lt;", "<") == source
 }
