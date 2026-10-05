@@ -12,5 +12,4 @@ view-test/
 studio-*-*
 dist/
 .hivec/
-/studioui
-studioui-*-*
+/studio

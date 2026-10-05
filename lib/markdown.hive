@@ -100,7 +100,7 @@ func emphasis(text: Str): Str {
 			if href != "" {
 				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\">" + rest
 			} else if isLocal(url) {
-				// Um arquivo ao lado do .md: quem mostra a página troca o
+				// Um arquivo ao lado do .md: quem mostra o preview troca o
 				// `local:` pela imagem (studio.localImages).
 				out = before + "<img src=\"local:" + url + "\" alt=\"" + alt + "\">" + rest
 			} else {

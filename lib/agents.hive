@@ -72,8 +72,8 @@ func environment(): Str[dyn] {
 	return ["TERM=xterm-256color", "COLORTERM=truecolor"]
 }
 
-// Abre o agente na pasta `folder`. O terminal começa em 80×24; a página manda o
-// tamanho de verdade assim que se conecta.
+// Abre o agente na pasta `folder`. O terminal começa em 80×24; a janela manda
+// o tamanho de verdade assim que ele aparece.
 func start(prefs: settings.Settings, agent: Str, folder: Str): Result<Int, Str> {
 	parts := words(commandOf(prefs, agent))
 	if parts is [program, ...args] {

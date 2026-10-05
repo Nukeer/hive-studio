@@ -10,7 +10,6 @@ type Settings {
 	tabSize:       Int  -- JSON as tab_size; Default as 4;
 	autocomplete:  Bool -- Default as true;
 	keymap:        Str  -- Default as "";
-	browser:       Str  -- Default as "";
 	panelHeight:   Int  -- JSON as panel_height; Default as 260;
 	language:      Str  -- Default as "pt-BR";
 	vim:           Bool -- Default as false;
@@ -21,7 +20,7 @@ type Settings {
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", "", 260, "pt-BR", false, "claude", "codex", "opencode", true)
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", 260, "pt-BR", false, "claude", "codex", "opencode", true)
 }
 
 func envOr(name: Str, fallback: Str): Str {

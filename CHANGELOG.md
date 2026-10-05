@@ -2,20 +2,26 @@
 
 ## Próxima
 
-### Janela nativa do `hive.ui`
+### Uma janela só: a nativa do `hive.ui`
 
-* **`studioui.hive` abre na janela nativa do `hive.ui`** (Windows e Linux, sem
-  navegador), com tudo o que a janela própria tem: o editor colorido e
-  digitável (`ui.code`), os atalhos, o modo Vim, o explorador pelo teclado, o
-  menu do botão direito onde o mouse está, as sugestões junto do cursor,
-  Ctrl+clique para a definição, o puxador do painel, o botão do meio fechando
-  a aba, o preview do Markdown, o JSON e a aba de commit desenhados com
-  widgets, e os terminais dos agentes, emulados em Go (vt10x) e desenhados na
-  janela.
-* **Sai a ponte** (`lib/bridge.go`): o que ela fazia com JavaScript na página o
-  `hive.ui` faz agora para a janela nativa e para a página.
-* Os testes de ponta a ponta (`tools/e2e`) abrem a mesma janela servida como
-  página (`HIVE_WINDOW=print`).
+* **`studio.hive` abre na janela nativa do `hive.ui`** (Windows e Linux, sem
+  navegador): o editor colorido e digitável (`ui.code`), os atalhos, o modo
+  Vim, o explorador pelo teclado, o menu do botão direito onde o mouse está,
+  as sugestões junto do cursor, Ctrl+clique para a definição, o puxador do
+  painel, o botão do meio fechando a aba, o preview do Markdown, o JSON e a
+  aba de commit desenhados com widgets, e os terminais dos agentes, emulados
+  em Go (vt10x) e desenhados na janela.
+* **Sai a janela própria** (o Chromium em modo aplicativo): a página
+  (`assets/shell.html`), o servidor HTTP/WebSocket (`lib/server.hive`), o
+  xterm.js (`assets/vendor/`), a ponte (`lib/bridge.go`), o HTML do
+  `lib/render.hive` e a configuração "Navegador da janela". `studioui.hive`
+  vira o `studio.hive`, e os releases publicam um executável só,
+  `hive-studio-<os>-<arch>`.
+* Os testes de ponta a ponta (`tools/e2e`) abrem a janela servida como página
+  (`HIVE_WINDOW=print`).
+* **Itens do `.gitignore` ficam num cinza mais escuro no explorador**
+  (`git ls-files --others --ignored --directory`; uma pasta ignorada inteira,
+  como `node_modules/`, é uma linha só).
 
 ### Ícone e prints
 
@@ -55,10 +61,9 @@
 
 ### Precisa de
 
-* **`hivec` v0.2.12** para o `studio.hive` (o CI passa a usá-la), e para o
-  `studioui.hive` o `hive.ui` novo (`ui.code`, `ui.keys`, `ui.focus`,
-  `ui.clip`, `ui.perform`, `anchor`, `onDrag`…), que está no PR
-  R0DR160HM/hive-lang#47 e ainda não saiu numa versão.
+* **`hivec` v0.2.13**, com o `hive.ui` novo (`ui.code`, `ui.keys`,
+  `ui.focus`, `ui.clip`, `ui.perform`, `anchor`, `onDrag`…). O CI passa a
+  usá-la.
 * O autocomplete conhece os nomes novos da v0.2.12 (`hide`, `reveal`,
   `bypass`, `Secret`, `getSecret`, `randomSecret`, `ui.touch`) e os do
   `hive.ui` novo.

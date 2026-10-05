@@ -71,8 +71,8 @@ jobs:
             exit 1
           fi
 
-      # A página embutida tem de refletir assets/.
-      - name: Página embutida em dia
+      # O seletor de arquivo embutido (assets/pick.ps1) tem de refletir assets/.
+      - name: Assets embutidos em dia
         run: |
           (cd tools && hivec run embed.hive)
           git diff --exit-code -- lib/assets.hive || {
@@ -81,16 +81,14 @@ jobs:
           }
 
       - name: Check
-        run: |
-          hivec check studio.hive
-          hivec check studioui.hive
+        run: hivec check studio.hive
 
       - name: Testes
         run: hivec test test/suite.hive
 
-      # A janela do hive.ui de verdade, servida como página (HIVE_WINDOW=print)
-      # num Chrome headless: pega um hivec que quebre o editor, o teclado ou o
-      # mouse sem quebrar o build. O Node 22 traz o WebSocket que o tools/e2e
+      # A janela do Hive Studio de verdade, servida como página
+      # (HIVE_WINDOW=print) num Chrome headless: pega um hivec que quebre o
+      # editor, o teclado ou o mouse sem quebrar o build. O Node 22 traz o WebSocket que o tools/e2e
       # usa para falar com o DevTools do Chrome.
       - uses: actions/setup-node@v4
         with:
@@ -98,28 +96,22 @@ jobs:
 
       - name: Janela do hive.ui, de ponta a ponta
         run: |
-          hivec build studioui.hive
-          node tools/e2e/run.mjs ./studioui
+          hivec build studio.hive
+          node tools/e2e/run.mjs ./studio
 
-      # Com Go 64 bits o hivec consegue embutir o ícone no executável; ver
-      # "Limites conhecidos" no README.
+      # O hivec embute assets/icon.png em cada executável.
       - name: Binários para cada plataforma
         run: |
-          cp assets/logo.png assets/icon.png
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
-            # studio.hive é a janela própria; studioui.hive, a do hive.ui.
-            for entry in studio:hive-studio studioui:hive-studio-ui; do
-              source="${entry%%:*}"
-              name="${entry#*:}-$os-$arch"
-              built="$source-$os-$arch"
-              if [ "$os" = windows ]; then name="$name.exe"; built="$built.exe"; fi
-              hivec build "$source.hive" --target "$target"
-              mv "$built" "dist/$name"
-              echo "  $name — $(du -h "dist/$name" | cut -f1)"
-            done
+            name="hive-studio-$os-$arch"
+            built="studio-$os-$arch"
+            if [ "$os" = windows ]; then name="$name.exe"; built="$built.exe"; fi
+            hivec build studio.hive --target "$target"
+            mv "$built" "dist/$name"
+            echo "  $name — $(du -h "dist/$name" | cut -f1)"
           done
           cd dist && sha256sum hive-studio-* > SHA256SUMS && cd ..
           cat dist/SHA256SUMS

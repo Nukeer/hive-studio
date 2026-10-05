@@ -1,5 +1,5 @@
-// Tudo o que a janela sabe, tudo o que pode acontecer com ela, e o que
-// viaja entre a página e o programa.
+// Tudo o que a janela sabe, tudo o que pode acontecer com ela, e os eventos
+// que os widgets mandam.
 
 import ./settings
 import ./i18n
@@ -87,7 +87,7 @@ type Todo {
 
 // Uma marca do Error Lens numa linha do documento à vista: `error` (do
 // compilador) ou `warning` (do último Analyze). `source` é o texto da linha
-// quando a marca foi feita — a página só a mostra enquanto a linha continua
+// quando a marca foi feita — a janela só a mostra enquanto a linha continua
 // igual, e a acha de novo se ela mudou de lugar.
 type LensMark {
 	line:     Int
@@ -120,6 +120,8 @@ type GitFile {
 	work:  Str
 }
 
+// `ignored` é o que o .gitignore tira do repositório, relativo à pasta
+// aberta; uma pasta ignorada inteira vem uma vez só, com a barra no fim.
 type GitInfo {
 	repo:    Bool
 	top:     Str
@@ -132,6 +134,7 @@ type GitInfo {
 	message: Str
 	busy:    Str
 	confirm: Str
+	ignored: Str[dyn]
 }
 
 // O terminal do painel: um shell de verdade (cmd.exe ou $SHELL) aberto por
@@ -146,7 +149,7 @@ type Terminal {
 }
 
 // A caixa de busca do editor (Ctrl+F). `index` é a ocorrência atual; `serial`
-// muda quando a página deve selecioná-la.
+// muda quando o editor deve selecioná-la.
 type FindBox {
 	open:          Bool
 	text:          Str
@@ -204,11 +207,11 @@ type VimMode {
 // `whole` são a última busca, realçada enquanto `highlight`. `find` é o último
 // `f`/`t`/`F`/`T` (tecla e caractere), para `;` e `,`. `change` e `typed` são
 // a última alteração, para o `.`; `insertBase`, `insertAt`, `insertKeys` e
-// `count` descrevem a inserção em andamento. `serial` muda sempre que a página
+// `count` descrevem a inserção em andamento. `serial` muda sempre que o editor
 // deve aplicar o cursor e a seleção; `scroll` é a linha que vai para o topo
 // (-1 = só manter o cursor à vista). `clip` é o último texto copiado com `y`.
-// `acked` conta as teclas do Vim já tratadas: enquanto a página estiver atrás,
-// ela manda as teclas para cá em vez de digitá-las. `recordingTo` é o
+// `acked` conta as teclas do Vim já tratadas: enquanto o editor estiver atrás,
+// ele manda as teclas para cá em vez de digitá-las. `recordingTo` é o
 // registrador da macro sendo gravada (`q`), com as teclas em `recorded`;
 // `macros` guarda as gravadas, `lastMacro` é a do `@@` e `replaying` conta
 // macros dentro de macros. `promptFrom` diz de onde a linha de comando foi
@@ -296,13 +299,11 @@ type EditorView {
 	CommitPage
 }
 
-// A aba que mostra um commit (ou as alterações de um arquivo). O HTML é
-// montado uma vez, quando a aba abre — um diff grande não é redesenhado a
-// cada tecla. `key` é o hash, ou `work:<caminho>`; vazio = aba fechada.
+// A aba que mostra um commit (ou as alterações de um arquivo). `key` é o
+// hash, ou `work:<caminho>`; vazio = aba fechada.
 type CommitTab {
 	key:   Str
 	title: Str
-	html:  Str
 }
 
 // A caixa de texto no topo do explorador, e para que ela serve agora.
@@ -375,7 +376,6 @@ type Msg {
 	SetFontSize      { size: Int }
 	SetTabSize       { size: Int }
 	CompilerTyped    { text: Str }
-	BrowserTyped     { text: Str }
 	StartRecording   { action: Str }
 	CancelRecording
 	KeyPressed       { combo: Str }
@@ -384,8 +384,6 @@ type Msg {
 	Peek             { file: Str, line: Int }
 	ClosePeek
 	ClearOutput
-	Connected
-	Disconnected
 	TogglePanelMax
 	SetPanelHeight   { height: Int }
 	TermTyped        { text: Str }
@@ -485,8 +483,6 @@ type State {
 	peekLine:      Int
 	peekText:      Str
 	status:        Str
-	pulse:         Int
-	clients:       Int
 	panelMax:      Bool
 	git:           GitInfo
 	term:          Terminal
@@ -508,11 +504,6 @@ type State {
 	treeKeys:      Str
 	agents:        Agents
 	quietSerial:   Int
-	clientHv:      Int
-	clientHvPath:  Str
-	clientSerial:  Int
-	frameSeq:      Int
-	clientView:    Str
 	viewPending:   Str
 	analysisHead:  Str[dyn]
 	hotspots:      Hotspot[dyn]
@@ -525,9 +516,9 @@ type State {
 	todoScanning:  Bool
 }
 
-// ── o que viaja entre a página e o programa ──────────────────────────────
+// ── os eventos dos widgets ───────────────────────────────────────────────
 
-// Um evento da página, em JSON. `kind` diz o que foi; o resto depende dele.
+// Um evento de um widget, em JSON. `kind` diz o que foi; o resto depende dele.
 // Uma edição pode vir como diferença: a partir de `at`, saem `cut` caracteres e
 // entra `arg` (`at` = -1: o texto inteiro vem em `text`). `seen` é o `serial`
 // do texto sobre o qual a diferença foi feita: se o programa trocou o texto
@@ -543,89 +534,12 @@ type Event {
 	seen:  Int -- Default as -1;
 }
 
-// O realce que vai no frame: `none` (sem documento), `keep` (a página já tem),
-// `patch` (troca as linhas de `from` a `from + remove` por `lines`, sobre a
-// versão `version - 1`) ou `full` (o documento todo).
-// `source` é o texto puro das mesmas linhas, para a página saber a que texto
-// aquele realce corresponde e mostrar na hora o que ainda não voltou colorido.
-type HlUpdate {
-	mode:    Str
-	from:    Int
-	remove:  Int
-	lines:   Str[dyn]
-	source:  Str[dyn]
-	version: Int
-}
-
-// Um pedaço da página, trocado inteiro quando muda.
-type Region {
-	id:   Str
-	html: Str
-}
-
-// Tudo o que a página precisa para se desenhar. O texto do editor só é
-// aplicado quando `serial` muda — digitar não reescreve o que se digita.
-// `textQuiet` diz que o texto novo veio do disco (um agente mudou o arquivo):
-// a página o troca sem mexer no foco nem na rolagem.
-type Frame {
-	regions:   Region[dyn]
-	css:       Str
-	text:      Str
-	hasText:   Bool
-	seq:       Int
-	hl:        HlUpdate
-	lineCount: Int
-	serial:    Int
-	caret:     Int
-	keys:      Str[dyn]
-	layout:    Str
-	side:      Bool
-	panel:     Bool
-	popup:     Bool
-	numbers:   Bool
-	panelHeight: Int
-	panelMax:  Bool
-	focus:     Str
-	focusSerial: Int
-	marks:       Int[dyn]
-	markLength:  Int
-	markCurrent: Int
-	findSerial:  Int
-	recording: Bool
-	title:     Str
-	vim:        Str
-	vimSerial:  Int
-	selStart:   Int
-	selEnd:     Int
-	vimScroll:  Int
-	clip:       Str
-	clipSerial: Int
-	vimAck:     Int
-	agentSessions: Int[dyn]
-	agentShown:    Int
-	agentKeys:     Str[dyn]
-	textQuiet:     Bool
-	lens:          LensMark[dyn]
-}
-
-// A resposta a "dá para ir à definição do nome em `caret`?", mandada enquanto
-// o mouse passa com Ctrl pressionado. Pequena de propósito: não é um frame.
-type HoverReply {
-	hover: Bool
-	caret: Int
-	ok:    Bool
-}
-
 // A caixa de mensagens do serviço que guarda o estado.
+// A mensagem da janela: um evento dos widgets (JSON de `Event`), ou uma
+// mensagem que o trabalho em outra thread manda de volta.
 type Cmd {
-	Ui         { event: Str }
-	Post       { msg: Msg }
-	Render
-	Pulse
-	Clients
-	Reply      { frame: Str }
-	PulseIs    { n: Int }
-	ClientsAre { n: Int }
+	Ui   { event: Str }
+	Post { msg: Msg }
 }
 
 func initial(root: Str, prefs: settings.Settings): State {
@@ -663,14 +577,12 @@ func initial(root: Str, prefs: settings.Settings): State {
 		peekLine: 0,
 		peekText: "",
 		status: "pronto",
-		pulse: 0,
-		clients: 0,
 		panelMax: false,
 		git: emptyGit(),
 		term: emptyTerminal(),
 		focus: "",
 		focusSerial: 0,
-		commit: CommitTab("", "", ""),
+		commit: CommitTab("", ""),
 		words: i18n.words(prefs.language),
 		about: false,
 		closing: "",
@@ -683,11 +595,6 @@ func initial(root: Str, prefs: settings.Settings): State {
 		treeKeys: "",
 		agents: emptyAgents(),
 		quietSerial: -1,
-		clientHv: -1,
-		clientHvPath: "",
-		clientSerial: -1,
-		frameSeq: 0,
-		clientView: "",
 		viewPending: "",
 		analysisHead: [],
 		hotspots: [],
@@ -808,7 +715,8 @@ func emptyPalette(): Palette {
 func emptyGit(): GitInfo {
 	GitFile[dyn] files = []
 	Str[dyn] log = []
-	return GitInfo(false, "", "", "", 0, 0, files, log, "", "", "")
+	Str[dyn] ignored = []
+	return GitInfo(false, "", "", "", 0, 0, files, log, "", "", "", ignored)
 }
 
 func emptyTerminal(): Terminal {

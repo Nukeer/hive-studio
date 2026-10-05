@@ -65,3 +65,26 @@ test "pastas herdam a cor dos arquivos" {
 	assert git.folderKind(info, "docs") == ""
 	assert git.fileKind(info, "src/b.hive") == "modified"
 }
+
+test "o que o .gitignore tira do repositório: o próprio item ou uma pasta acima" {
+	folder := "./ignore-test"
+	if hive.file.makeDir(folder + "/dist/sub") is Result.Error(why) {
+		panic why
+	}
+	_init := process.run("git", ["init", "-q"], folder)
+	for each file in [".gitignore", "dist/sub/a.js", "app.log", "main.hive"] {
+		mut text := "x"
+		if file == ".gitignore" {
+			text = "dist/\n*.log\n"
+		}
+		if hive.file.write(folder + "/" + file, text) is Result.Error(why) {
+			panic why
+		}
+	}
+	mut info := model.emptyGit()
+	git.refresh(folder, info)
+	assert info.ignored == ["app.log", "dist/"]
+	assert git.ignored(info, "dist") && git.ignored(info, "dist/sub") && git.ignored(info, "dist/sub/a.js")
+	assert git.ignored(info, "app.log")
+	assert !git.ignored(info, "main.hive") && !git.ignored(info, "distante") && !git.ignored(info, "")
+}

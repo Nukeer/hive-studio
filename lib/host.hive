@@ -1,0 +1,24 @@
+// O pouco que o Hive Studio pergunta ao sistema: em que sistema está, abrir
+// um programa sem esperar por ele, e esperar entre as voltas de um vigia.
+
+func envPath(name: Str): Str {
+	if hive.env.get(name) is Result.Ok(value) {
+		return replaceAll(value, "\\", "/")
+	}
+	return ""
+}
+
+func isWindows(): Bool {
+	return envPath("OS") == "Windows_NT"
+}
+
+// Roda um programa (o explorador de arquivos do sistema, por exemplo) sem
+// esperar que ele termine.
+proc openWith(program: Str, arguments: Str[]): void {
+	_ran := hive.term.exec(program, arguments, "")
+}
+
+// Uma espera entre duas voltas de um laço que vigia alguma coisa.
+proc pause(ms: Int): void {
+	hive.task.sleep(ms)
+}

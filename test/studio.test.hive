@@ -11,7 +11,7 @@ import ../lib/settings
 import ../lib/highlight
 import ../lib/complete
 import ../lib/keys
-import ../lib/server
+import ../lib/host
 import ../lib/git
 import ../lib/navigate
 import ../lib/process
@@ -46,8 +46,8 @@ test "o analyze enche o painel ANÁLISE e cada função aponta para o arquivo de
 		assert next.hotspots[0].detail == "a copy"
 	}
 	assert next.analysisReport == folder + "/main-analysis.html"
-	assert indexOf(render.panel(next), "util.dobro") is Result.Ok(_)
-	assert indexOf(render.titleBar(next), "Analyze") is Result.Ok(_)
+	assert support.shows(next, "util.dobro")
+	assert support.shows(next, "Analyze")
 }
 
 test "o Error Lens põe o erro de um módulo no arquivo e na linha dele" {
@@ -77,31 +77,24 @@ test "o Error Lens põe o erro de um módulo no arquivo e na linha dele" {
 	assert len(render.lensMarks(state)) == 0
 }
 
-test "a visualização fica guardada: o frame só a manda quando muda, e ela é refeita quando a digitação para" {
+test "a visualização fica guardada enquanto se digita, e é refeita quando a digitação para" {
 	folder := support.explorerFolder("view-test")
 	if hive.file.write(folder + "/dados.json", "\{\"a\": 1}\n") is Result.Error(why) {
 		panic why
 	}
 	mut opened := support.fresh(folder)
 	studio.openDoc(opened, folder + "/dados.json")
-	db := support.started(spawn(studio.serve, opened))
-	first := support.answer(db, support.event("hello", "", "", "", 0))
-	assert indexOf(support.regionOf(first, "preview"), "<span class=\"jk\">&quot;a&quot;</span>") is Result.Ok(_)
-	quiet := support.answer(db, support.event("caret", "", "", "", 1))
-	assert !support.hasRegion(quiet, "preview")
-	typed := support.answer(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
-	assert !support.hasRegion(typed, "preview") && len(typed.lens) == 0
+	db := support.serve(opened)
+	first := support.look(db)
+	assert indexOf(first.view, "<span class=\"jk\">&quot;a&quot;</span>") is Result.Ok(_)
+	quiet := support.ask(db, support.event("caret", "", "", "", 1))
+	assert quiet.view == first.view && quiet.caret == 1
+	typed := support.ask(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
+	assert typed.text == "x\{\"a\": 1}\n"
+	assert typed.view == first.view && len(typed.lens) == 0
 	hive.task.sleep(1200)
-	answered := db(model.Cmd.Render())
-	mut later := first
-	if answered is Result.Ok(reply) {
-		if reply is model.Cmd.Reply(text) {
-			if model.Frame.decode(text, hive.json.codec()) is Result.Ok(frame) {
-				later = frame
-			}
-		}
-	}
-	assert indexOf(support.regionOf(later, "preview"), "JSON inválido") is Result.Ok(_)
+	later := support.look(db)
+	assert indexOf(later.view, "JSON inválido") is Result.Ok(_)
 	assert len(later.lens) == 1
 	if later.lens bounds 0 {
 		assert later.lens[0].line == 1 && later.lens[0].source == "x\{\"a\": 1}"
@@ -184,33 +177,35 @@ test "atalhos viram ações e podem ser regravados" {
 	}
 }
 
-test "markdown abre em preview e o frame traz o HTML renderizado" {
+test "markdown abre em preview e a janela mostra o HTML renderizado" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/LEIAME.md")
 	assert render.layoutOf(state) == "preview"
-	assert render.encodeFrame(state) != ""
-	page := render.preview(state)
-	assert indexOf(page, "<h1>Título</h1>") is Result.Ok(_)
-	assert indexOf(page, "<strong>forte</strong>") is Result.Ok(_)
+	if render.activeDoc(state) is Result.Ok(doc) {
+		assert indexOf(doc.view, "<h1>Título</h1>") is Result.Ok(_)
+		assert indexOf(doc.view, "<strong>forte</strong>") is Result.Ok(_)
+	} else {
+		assert false
+	}
+	assert support.shows(state, "Título")
 }
 
-test "o frame desenha todas as telas sem erro" {
+test "a janela desenha todas as telas sem erro" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
-	assert render.encodeFrame(state) != ""
+	assert support.page(state) != ""
 	studio.openDoc(state, folder + "/main.hive")
 	studio.peekAt(state, folder + "/main.hive", 2)
 	state.diagnostics = analysis.parseDiagnostics("main.hive:2: oops")
 	state.pane = model.Pane.ProblemsPane()
-	page := render.encodeFrame(state)
-	assert indexOf(page, "oops") is Result.Ok(_)
+	state.panelOpen = true
+	assert support.shows(state, "oops")
 	state.settingsOpen = true
 	state.editorView = model.EditorView.SettingsView()
 	state.recording = "save"
-	settingsPage := render.encodeFrame(state)
-	assert indexOf(settingsPage, "Atalhos de teclado") is Result.Ok(_)
-	assert indexOf(settingsPage, "Solarized Light") is Result.Ok(_)
+	assert support.shows(state, "Atalhos de teclado")
+	assert support.shows(state, "Solarized Light")
 }
 
 test "git marca arquivo novo e editado, e commitado volta ao normal" {
@@ -237,17 +232,32 @@ test "git marca arquivo novo e editado, e commitado volta ao normal" {
 	studio.gitRefresh(state)
 	assert render.gitKindOf(state, folder + "/a.hive") == "modified"
 	state.side = model.SideView.GitSide()
-	page := render.sidePanel(state)
-	assert indexOf(page, "ALTERAÇÕES") is Result.Ok(_)
-	assert indexOf(page, "g-mod") is Result.Ok(_)
-	assert indexOf(page, "gitShow") is Result.Ok(_)
+	assert support.shows(state, "ALTERAÇÕES")
+	assert support.shows(state, "a.hive")
 
 	shown := git.show(state.git, "HEAD")
 	if shown is Result.Ok(commit) {
 		assert commit.subject == "um"
-		html := render.commitPage(commit, state.words)
-		assert indexOf(html, "<tr class=\"add\">") is Result.Ok(_)
-		assert indexOf(html, "<span class=\"tk\">proc</span>") is Result.Ok(_)
+		if commit.files is [file] {
+			assert file.path == "a.hive" && file.status == "A" && file.added == 1
+			assert indexOf(file.lines | map(support.lineKind), "add") is Result.Ok(_)
+		} else {
+			assert false
+		}
+		// A aba do commit, aberta pelo clique no histórico, mostra o que ele mudou.
+		mut win := support.window(state)
+		db := support.address()
+		if studio.clickMsg(win.core, support.event("act", "gitShow", commit.hash, "", 0)) is Result.Ok(message) {
+			studio.step(win.core, message, db)
+		} else {
+			assert false
+		}
+		studio.follow(win)
+		assert render.showingCommit(win.core)
+		assert win.extra.commit.hash == commit.hash
+		html := hive.ui.html(studio.view(win))
+		assert indexOf(html, "um") is Result.Ok(_)
+		assert indexOf(html, "proc main(): void \{}") is Result.Ok(_)
 	} else {
 		assert false
 	}
@@ -301,27 +311,28 @@ test "o terminal roda um comando e devolve a saída" {
 test "a interface muda de idioma na hora" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
-	pt := render.titleBar(state)
+	pt := support.page(state)
 	assert indexOf(pt, ">Arquivo<") is Result.Ok(_)
 	assert indexOf(pt, ">Executar<") is Result.Ok(_)
 	state.settings.language = "en"
 	state.words = i18n.words("en")
-	en := render.titleBar(state)
-	assert indexOf(en, ">File<") is Result.Ok(_)
-	assert indexOf(en, ">Open Folder…<") is Result.Ok(_)
+	assert indexOf(support.page(state), ">File<") is Result.Ok(_)
+	assert indexOf(support.menuPage(state, "Arquivo"), "Open Folder…") is Result.Ok(_)
 	state.settingsOpen = true
 	state.editorView = model.EditorView.SettingsView()
-	assert indexOf(render.settingsPage(state), "Keyboard Shortcuts") is Result.Ok(_)
+	assert support.shows(state, "Keyboard Shortcuts")
 	state.words = i18n.words("es")
-	assert indexOf(render.titleBar(state), ">Archivo<") is Result.Ok(_)
+	assert indexOf(support.page(state), ">Archivo<") is Result.Ok(_)
 }
 
 test "as opções da tela inicial são clicáveis" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
-	page := render.welcome(state)
-	for each action in ["newFile", "openFolder", "terminal", "settings", "docs"] {
-		assert indexOf(page, "data-arg=\"" + action + "\"") is Result.Ok(_)
+	for each label in ["Novo arquivo", "Abrir pasta…", "Terminal", "Configurações", "Documentação do Hive"] {
+		assert support.shows(state, label)
+	}
+	for each action in ["newFile", "openFolder", "terminal", "settings"] {
+		assert studio.actionMsg(state, action, 0) is Result.Ok(_)
 	}
 	if studio.actionMsg(state, "docs", 0) is Result.Ok(message) {
 		assert message == model.Msg.OpenDocs()
@@ -336,7 +347,7 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	studio.openDoc(state, folder + "/main.hive")
 	state.find = model.FindBox(true, "ECHO", false, 0, 0)
 	assert len(render.findMatches(render.searched(state), state.find)) == 1
-	assert indexOf(render.findBox(state), "1 de 1") is Result.Ok(_)
+	assert support.shows(state, "1 de 1")
 	state.find.caseSensitive = true
 	assert len(render.findMatches(render.searched(state), state.find)) == 0
 	files := search.allFiles(folder, false, 100)
@@ -345,7 +356,7 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	// Com menos de três letras a busca nem começa.
 	assert len(render.paletteSearch(files, "ma")) == 0
 	assert studio.paletteChoice(state, 0) == "main.hive"
-	assert indexOf(render.palette(state), "main.hive") is Result.Ok(_)
+	assert support.shows(state, "Buscar arquivo pelo nome")
 	if studio.actionMsg(state, "quickOpen", 0) is Result.Ok(message) {
 		assert message == model.Msg.PaletteOpen()
 	} else {
@@ -356,37 +367,33 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	assert moved.caret == len("proc main(): void \{") + 2
 }
 
-test "o frame só leva o texto e o realce que a página ainda não tem" {
+test "a edição chega como diferença sobre o texto que o editor tinha, e uma sobre um texto antigo não vale" {
 	folder := support.scratch()
 	mut opened := support.fresh(folder)
 	studio.openDoc(opened, folder + "/main.hive")
-	db := support.started(spawn(studio.serve, opened))
-	first := support.answer(db, support.event("hello", "", "", "", 0))
-	assert first.hasText && first.text == "proc main(): void \{\n\techo 1\n}\n"
-	assert first.hl.mode == "full" && len(first.hl.lines) == 4 && first.lineCount == 4
-	typed := support.answer(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
-	assert !typed.hasText && typed.text == ""
-	assert typed.hl.mode == "patch" && typed.hl.from == 0 && typed.hl.remove == 1
-	assert typed.hl.source == ["xproc main(): void \{"] && typed.hl.version == first.hl.version + 1
-	quiet := support.answer(db, support.event("caret", "", "", "", 3))
-	assert !quiet.hasText && quiet.hl.mode == "keep"
-	stale := support.answer(db, model.Event("edit", "", "y", "", 1, 0, 0, first.serial + 7))
-	assert stale.hl.mode == "keep"
-	again := support.answer(db, support.event("resync", "", "", "", 0))
-	assert again.hasText && again.text == "xproc main(): void \{\n\techo 1\n}\n" && again.hl.mode == "full"
+	db := support.serve(opened)
+	first := support.look(db)
+	assert first.text == "proc main(): void \{\n\techo 1\n}\n"
+	assert indexOf(first.page, ">proc</span>") is Result.Ok(_)
+	typed := support.ask(db, model.Event("edit", "", "x", "", 1, 0, 0, first.serial))
+	// O editor já tem o texto que ele mesmo mudou: o serial não anda.
+	assert typed.text == "xproc main(): void \{\n\techo 1\n}\n" && typed.serial == first.serial
+	quiet := support.ask(db, support.event("caret", "", "", "", 3))
+	assert quiet.text == typed.text && quiet.serial == typed.serial && quiet.caret == 3
+	stale := support.ask(db, model.Event("edit", "", "y", "", 1, 0, 0, first.serial + 7))
+	assert stale.text == typed.text && stale.serial == typed.serial
 }
 
-test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e barra" {
+test "modo Vim: as teclas passam pela janela e voltam como texto, cursor e barra" {
 	folder := support.scratch()
 	mut start := support.fresh(folder)
 	start.settings.vim = true
 	studio.openDoc(start, folder + "/main.hive")
-	db := support.started(spawn(studio.serve, start))
+	db := support.serve(start)
 
 	first := support.vimKeys(db, "")
 	assert first.vim == "normal"
-	assert support.regionOf(first, "vimbar") != ""
-	assert indexOf(support.regionOf(first, "status"), "VIM NORMAL") is Result.Ok(_)
+	assert indexOf(first.page, "VIM NORMAL") is Result.Ok(_)
 
 	moved := support.vimKeys(db, "j")
 	assert moved.caret == 20
@@ -401,14 +408,14 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 	// `o` abre a linha; o que se digita chega como edição, e Esc volta ao normal.
 	opened := support.vimKeys(db, "o")
 	assert opened.vim == "insert"
-	assert indexOf(support.regionOf(opened, "vimbar"), "-- INSERÇÃO --") is Result.Ok(_)
+	assert indexOf(opened.page, "INSERÇÃO") is Result.Ok(_)
 	typed := replaceAll(opened.text, "\techo 1\n\t\n", "\techo 1\n\techo 2\n")
 	_edited := support.ask(db, support.event("edit", "", "", typed, opened.caret + 6))
 	back := support.vimKeys(db, "<Esc>")
 	assert back.vim == "normal"
 	assert back.text == "proc main(): void \{\n\techo 1\n\techo 2\n}\n"
 
-	// Uma tecla que chega antes da página saber da inserção vira texto.
+	// Uma tecla que chega antes do editor saber da inserção vira texto.
 	late := support.vimKeys(db, "Ax<Esc>")
 	assert late.text == "proc main(): void \{\n\techo 1\n\techo 2x\n}\n"
 	assert support.vimKeys(db, "u").text == back.text
@@ -416,10 +423,10 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 	// A linha de comando: `:` põe o foco nela, e `:w` salva com o fim de linha do arquivo.
 	prompt := support.vimKeys(db, ":")
 	assert prompt.focus == "vimCommand"
-	assert indexOf(support.regionOf(prompt, "vimbar"), "data-vimcmd") is Result.Ok(_)
+	assert prompt.vimPrompt == ":"
 	saved := support.ask(db, support.event("act", "vimSubmit", "", "w", 0))
 	assert saved.focus == "editor"
-	assert indexOf(support.regionOf(saved, "vimbar"), "main.hive") is Result.Ok(_)
+	assert indexOf(saved.vimMessage, "main.hive") is Result.Ok(_)
 	if hive.file.read(folder + "/main.hive") is Result.Ok(disk) {
 		assert disk == "proc main(): void \{\r\n\techo 1\r\n\techo 2\r\n}\r\n"
 	} else {
@@ -453,8 +460,8 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 
 	// Esc sem nada pendente fecha a busca do Ctrl+F.
 	withFind := support.ask(db, support.event("key", "", "", "Ctrl+F", 0))
-	assert support.regionOf(withFind, "find") != ""
-	assert support.regionOf(support.vimKeys(db, "<Esc>"), "find") == ""
+	assert withFind.find
+	assert !support.vimKeys(db, "<Esc>").find
 
 	// `:e` abre (e cria) um arquivo relativo à pasta aberta, e volta ao modo normal.
 	_again := support.vimKeys(db, ":")
@@ -469,27 +476,30 @@ test "modo Vim: as teclas passam pelo serviço e voltam como texto, cursor e bar
 test "o modo Vim se liga pelo menu Editar, pelas Configurações e por um atalho gravável" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
-	menu := render.titleBar(state)
+	menu := support.menuPage(state, "Editar")
 	assert indexOf(menu, ">Modo Vim<") is Result.Ok(_)
-	assert indexOf(menu, "data-arg=\"toggleVim\"") is Result.Ok(_)
 	assert indexOf(menu, "✓ Modo Vim") is Result.Error(_)
+	if studio.actionMsg(state, "toggleVim", 0) is Result.Ok(message) {
+		assert message == model.Msg.ToggleSetting("vim")
+	} else {
+		assert false
+	}
 	state.settingsOpen = true
 	state.editorView = model.EditorView.SettingsView()
-	page := render.settingsPage(state)
+	page := support.page(state)
 	assert indexOf(page, "Usar as teclas do Vim no editor") is Result.Ok(_)
-	assert indexOf(page, "data-arg=\"vim\"") is Result.Ok(_)
 	assert indexOf(page, "Modo Vim (ligar/desligar)") is Result.Ok(_)
-	assert indexOf(render.statusBar(state), "VIM") is Result.Error(_)
+	assert indexOf(page, "VIM NORMAL") is Result.Error(_)
 	if studio.clickMsg(state, support.event("act", "setting", "vim", "", 0)) is Result.Ok(message) {
 		assert message == model.Msg.ToggleSetting("vim")
 	} else {
 		assert false
 	}
 	state.settings.vim = true
-	assert indexOf(render.titleBar(state), "✓ Modo Vim") is Result.Ok(_)
-	assert indexOf(render.statusBar(state), "VIM NORMAL") is Result.Ok(_)
+	assert indexOf(support.menuPage(state, "Editar"), "✓ Modo Vim") is Result.Ok(_)
+	assert support.shows(state, "VIM NORMAL")
 	state.words = i18n.words("en")
-	assert indexOf(render.titleBar(state), "Vim Mode") is Result.Ok(_)
+	assert indexOf(support.menuPage(state, "Editar"), "Vim Mode") is Result.Ok(_)
 }
 
 test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando funciona lá" {
@@ -500,7 +510,7 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	mut start := support.fresh(folder)
 	start.settings.vim = true
 	studio.openDoc(start, folder + "/lib/util.hive")
-	db := support.started(spawn(studio.serve, start))
+	db := support.serve(start)
 
 	// O explorador começa aberto: `:Ex` o fecha e deixa o foco no código.
 	_toClose := support.vimKeys(db, ":")
@@ -511,26 +521,26 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	_prompt := support.vimKeys(db, ":")
 	shown := support.ask(db, support.event("act", "vimSubmit", "", "Ex", 0))
 	assert shown.focus == "explorer"
-	assert support.selectedName(shown) == "util.hive"
+	assert shown.selected == "util.hive"
 	assert shown.side
 
-	assert support.selectedName(support.treeKeys(db, "k")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "h")) == "lib"
+	assert support.treeKeys(db, "k").selected == "lib"
+	assert support.treeKeys(db, "h").selected == "lib"
 	collapsed := support.treeKeys(db, "")
-	assert indexOf(support.regionOf(collapsed, "side"), "util.hive") is Result.Error(_)
-	assert support.selectedName(support.treeKeys(db, "l")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "l")) == "util.hive"
-	assert support.selectedName(support.treeKeys(db, "h")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "G")) == "main.hive"
-	assert support.selectedName(support.treeKeys(db, "gg")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "2j")) == "LEIAME.md"
-	assert support.selectedName(support.treeKeys(db, "<Up><Down><Down>")) == "main.hive"
-	assert support.selectedName(support.treeKeys(db, "3G")) == "LEIAME.md"
+	assert indexOf(collapsed.tree, "util.hive") is Result.Error(_)
+	assert support.treeKeys(db, "l").selected == "lib"
+	assert support.treeKeys(db, "l").selected == "util.hive"
+	assert support.treeKeys(db, "h").selected == "lib"
+	assert support.treeKeys(db, "G").selected == "main.hive"
+	assert support.treeKeys(db, "gg").selected == "lib"
+	assert support.treeKeys(db, "2j").selected == "LEIAME.md"
+	assert support.treeKeys(db, "<Up><Down><Down>").selected == "main.hive"
+	assert support.treeKeys(db, "3G").selected == "LEIAME.md"
 
 	// `:` no explorador abre a linha de comando; Esc volta o foco para ele.
 	command := support.treeKeys(db, ":")
 	assert command.focus == "vimCommand"
-	assert indexOf(support.regionOf(command, "vimbar"), "data-vimcmd") is Result.Ok(_)
+	assert command.vimPrompt == ":"
 	assert support.ask(db, support.event("act", "vimCancel", "", "", 0)).focus == "explorer"
 	_again := support.treeKeys(db, ":")
 	stayed := support.ask(db, support.event("act", "vimSubmit", "", "noh", 0))
@@ -544,7 +554,7 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	_edit := support.vimKeys(db, ":")
 	back := support.ask(db, support.event("act", "vimSubmit", "", "e .", 0))
 	assert back.focus == "explorer"
-	assert support.selectedName(back) == "main.hive"
+	assert back.selected == "main.hive"
 	// Um comando que abre arquivo, vindo do explorador, leva o foco ao editor.
 	_open := support.treeKeys(db, ":")
 	util := support.ask(db, support.event("act", "vimSubmit", "", "e lib/util.hive", 0))
@@ -573,7 +583,7 @@ test "o explorador anda pelo teclado, :Ex põe o foco nele e a linha de comando 
 	lib := support.ask(db, support.event("act", "vimSubmit", "", "Ex lib", 0))
 	assert lib.side
 	assert lib.focus == "explorer"
-	assert support.selectedName(lib) == "lib"
+	assert lib.selected == "lib"
 	_removed := hive.file.delete(folder + "/lib/util.hive")
 }
 
@@ -581,11 +591,11 @@ test "sem o modo Vim, as setas andam no explorador mas j e k não" {
 	folder := support.explorerFolder("explorer-plain-test")
 	mut start := support.fresh(folder)
 	start.selected = folder + "/lib"
-	db := support.started(spawn(studio.serve, start))
-	assert support.selectedName(support.treeKeys(db, "")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "j")) == "lib"
-	assert support.selectedName(support.treeKeys(db, "<Down>")) == "LEIAME.md"
-	assert support.selectedName(support.treeKeys(db, "<End>")) == "main.hive"
+	db := support.serve(start)
+	assert support.treeKeys(db, "").selected == "lib"
+	assert support.treeKeys(db, "j").selected == "lib"
+	assert support.treeKeys(db, "<Down>").selected == "LEIAME.md"
+	assert support.treeKeys(db, "<End>").selected == "main.hive"
 	opened := support.treeKeys(db, "<CR>")
 	assert indexOf(opened.title, "main.hive") is Result.Ok(_)
 	assert support.treeKeys(db, ":").focus != "vimCommand"
@@ -597,7 +607,7 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	start.settings.claudeCommand = "sh"
 	start.settings.codexCommand = "programa-que-nao-existe-hive --flag"
 	studio.openDoc(start, folder + "/main.hive")
-	db := support.started(spawn(studio.serve, start))
+	db := support.serve(start)
 
 	opened := support.ask(db, support.event("act", "agent", "claude", "", 0))
 	session := opened.agentShown
@@ -605,9 +615,9 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	assert opened.agentSessions == [session]
 	assert opened.focus == "agent"
 	assert opened.panel
-	assert indexOf(support.regionOf(opened, "panelview"), "AGENTE") is Result.Ok(_)
-	assert indexOf(support.regionOf(opened, "panelview"), "OpenCode") is Result.Ok(_)
-	assert len(opened.agentKeys) == 3
+	assert indexOf(opened.page, "AGENTE") is Result.Ok(_)
+	assert indexOf(opened.page, "OpenCode") is Result.Ok(_)
+	assert len(render.agentKeys(start.settings.keymap)) == 3
 	_typed := pty.write(session, "pwd; stty size\r")
 	seen := agents.output(session, "24 80", 3000)
 	assert indexOf(seen, "agent-test") is Result.Ok(_)
@@ -615,8 +625,8 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 	// Um agente que não está instalado diz o que fazer, e o outro continua vivo.
 	missing := support.ask(db, support.event("act", "agent", "codex", "", 0))
 	assert missing.agentShown == 0
-	assert indexOf(support.regionOf(missing, "panelview"), "programa-que-nao-existe-hive: não encontrado no PATH") is Result.Ok(_)
-	assert indexOf(support.regionOf(missing, "panelview"), "Configurações") is Result.Ok(_)
+	assert indexOf(missing.page, "programa-que-nao-existe-hive: não encontrado no PATH") is Result.Ok(_)
+	assert indexOf(missing.page, "Configurações") is Result.Ok(_)
 	back := support.ask(db, support.event("act", "agent", "claude", "", 0))
 	assert back.agentShown == session
 	assert pty.alive(session)
@@ -641,10 +651,10 @@ test "o painel AGENTE abre cada agente num terminal de verdade, troca entre eles
 			break
 		}
 		hive.task.sleep(100)
-		notice = support.regionOf(support.ask(db, support.event("hello", "", "", "", 0)), "panelview")
+		notice = support.look(db).page
 	}
 	assert indexOf(notice, "O agente terminou (código 5)") is Result.Ok(_)
-	assert indexOf(notice, "agentRestart") is Result.Ok(_)
+	assert indexOf(notice, "Abrir de novo") is Result.Ok(_)
 
 	// O atalho do agente fecha o painel quando ele está à vista, e abre de novo.
 	combo := keys.keysFor("", "agent")
@@ -659,7 +669,7 @@ test "a busca de TODO lê o disco, e um documento não salvo entra com o texto d
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
 	studio.withText(state, "// TODO: não salvo\n")
-	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	db := support.address()
 	disk := [model.Todo(folder + "/LEIAME.md", 1, 5, "TODO", "do disco")]
 	studio.update(state, model.Msg.TodosFound(disk), db)
 	assert state.todoScanned && !state.todoScanning
@@ -678,7 +688,7 @@ test "a busca de TODO lê o disco, e um documento não salvo entra com o texto d
 
 test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou cancelar" {
 	folder := support.explorerFolder("close-test")
-	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	db := support.address()
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
 	studio.update(state, model.Msg.CloseDoc(0), db)
@@ -688,7 +698,7 @@ test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou
 	studio.update(state, model.Msg.CloseDoc(0), db)
 	assert len(state.docs) == 1
 	assert state.closing == folder + "/main.hive"
-	dialog := render.overlay(state)
+	dialog := support.page(state)
 	assert indexOf(dialog, "Salvar e fechar") is Result.Ok(_) && indexOf(dialog, "Fechar sem salvar") is Result.Ok(_)
 	assert studio.escapeKind(state) == "dialog"
 	studio.update(state, model.Msg.CancelDialog(), db)
@@ -716,7 +726,7 @@ test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou
 
 test "abrir pelo caminho do git cai na aba que o explorador abriu" {
 	folder := support.explorerFolder("same-tab-test")
-	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	db := support.address()
 	mut state := support.fresh(folder)
 	studio.update(state, model.Msg.Open(folder + "/main.hive"), db)
 	// O git escreve a raiz absoluta, com outras barras.
@@ -732,12 +742,12 @@ test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto
 	if hive.file.write(folder + "/lib/util.hive", "\n") is Result.Error(why) {
 		panic why
 	}
-	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	db := support.address()
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/LEIAME.md")
 	studio.update(state, model.Msg.AskRemove(folder + "/LEIAME.md"), db)
 	assert state.removing == folder + "/LEIAME.md"
-	assert indexOf(render.overlay(state), "O arquivo é apagado do disco") is Result.Ok(_)
+	assert indexOf(support.page(state), "O arquivo é apagado do disco") is Result.Ok(_)
 	studio.update(state, model.Msg.CancelDialog(), db)
 	assert state.removing == "" && hive.file.exists(folder + "/LEIAME.md")
 	studio.update(state, model.Msg.AskRemove(folder + "/LEIAME.md"), db)
@@ -748,7 +758,7 @@ test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto
 	// Uma pasta vai com o que tem dentro; o arquivo aberto dela fecha.
 	studio.openDoc(state, folder + "/lib/util.hive")
 	studio.update(state, model.Msg.AskRemove(folder + "/lib"), db)
-	assert indexOf(render.overlay(state), "A pasta e tudo o que ela tem dentro") is Result.Ok(_)
+	assert indexOf(support.page(state), "A pasta e tudo o que ela tem dentro") is Result.Ok(_)
 	studio.update(state, model.Msg.Remove(folder + "/lib"), db)
 	assert !hive.file.exists(folder + "/lib")
 	assert len(state.docs) == 0
@@ -766,21 +776,21 @@ test "o botão direito no explorador abre o menu do arquivo, e renomear leva jun
 	if hive.file.write(folder + "/lib/util.hive", "func um(): Int \{\n\treturn 1\n}\n") is Result.Error(why) {
 		panic why
 	}
-	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	db := support.address()
 	mut state := support.fresh(folder)
 	studio.update(state, model.Msg.OpenContext(folder + "/main.hive", 40, 60), db)
 	assert state.selected == folder + "/main.hive"
-	menu := render.contextMenu(state)
-	assert indexOf(menu, "left:40px;top:60px") is Result.Ok(_)
-	for each label in ["Abrir", "Renomear…", "Excluir", "Copiar caminho relativo", "Mostrar na pasta do sistema", "Abrir no terminal", "Fixar como entrada"] {
+	menu := support.page(state)
+	assert state.context.x == 40 && state.context.y == 60
+	for each label in [">Abrir<", "Renomear…", "Excluir", "Copiar caminho relativo", "Mostrar na pasta do sistema", "Abrir no terminal", "Fixar como entrada"] {
 		assert indexOf(menu, label) is Result.Ok(_)
 	}
 	assert studio.escapeKind(state) == "context"
 	studio.update(state, model.Msg.CloseContext(), db)
-	assert render.contextMenu(state) == ""
+	assert !support.shows(state, "Copiar caminho relativo")
 	// Uma pasta não tem "Abrir" nem "Fixar como entrada".
 	studio.update(state, model.Msg.OpenContext(folder + "/lib", 0, 0), db)
-	folderMenu := render.contextMenu(state)
+	folderMenu := support.page(state)
 	assert indexOf(folderMenu, ">Abrir<") is Result.Error(_) && indexOf(folderMenu, "Fixar como entrada") is Result.Error(_)
 	studio.update(state, model.Msg.ContextPick("copyRelative", folder + "/lib/util.hive"), db)
 	assert state.vim.clip == "lib/util.hive" && state.context.path == ""
@@ -906,7 +916,7 @@ test "arquivos criados e apagados por fora aparecem e somem da árvore; um abert
 	if render.activeDoc(state) is Result.Ok(doc) {
 		assert doc.gone
 	}
-	assert indexOf(render.tabStrip(state), "g-del") is Result.Ok(_)
+	assert support.shows(state, "salvar cria de novo")
 	assert indexOf(state.status, "foi apagado do disco") is Result.Ok(_)
 	if hive.file.write(folder + "/main.hive", "\n") is Result.Error(why) {
 		panic why
@@ -915,7 +925,7 @@ test "arquivos criados e apagados por fora aparecem e somem da árvore; um abert
 	if render.activeDoc(state) is Result.Ok(doc) {
 		assert !doc.gone
 	}
-	assert indexOf(render.tabStrip(state), "g-del") is Result.Error(_)
+	assert !support.shows(state, "salvar cria de novo")
 }
 
 test "o texto relido do disco vem quieto; abrir um arquivo, não" {
@@ -923,7 +933,7 @@ test "o texto relido do disco vem quieto; abrir um arquivo, não" {
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/LEIAME.md")
 	studio.openDoc(state, folder + "/main.hive")
-	assert !render.frame(state).textQuiet
+	assert !support.quiet(state)
 	// Mudou o que não está à vista: o documento é relido, o editor não muda.
 	if hive.file.write(folder + "/LEIAME.md", "# Novo\n") is Result.Error(why) {
 		panic why
@@ -940,12 +950,19 @@ test "o texto relido do disco vem quieto; abrir um arquivo, não" {
 	}
 	studio.refreshFromDisk(state)
 	assert state.textSerial == serial + 1
-	frame := render.frame(state)
-	assert frame.textQuiet
-	assert frame.text == "proc main(): void \{}\n"
+	assert support.quiet(state)
+	assert studio.activeText(state) == "proc main(): void \{}\n"
+	// Na janela, o texto quieto não mexe no cursor do editor; um arquivo aberto, sim.
+	mut win := support.window(state)
+	win.extra.seenText = state.textSerial - 1
+	studio.follow(win)
+	assert win.extra.selSerial == 0
 	studio.openDoc(state, folder + "/LEIAME.md")
 	state.textSerial = state.textSerial + 1
-	assert !render.frame(state).textQuiet
+	assert !support.quiet(state)
+	win.core = state
+	studio.follow(win)
+	assert win.extra.selSerial == 1
 	mut Str[dyn] watchedNow = []
 	studio.watchedFolders(state, watchedNow)
 	assert watchedNow == [folder]
@@ -957,15 +974,15 @@ test "o texto relido do disco vem quieto; abrir um arquivo, não" {
 	}
 }
 
-test "sem o modo Vim, as teclas do Vim não fazem nada e o frame não mostra a barra" {
+test "sem o modo Vim, as teclas do Vim não fazem nada e a janela não mostra o modo" {
 	folder := support.scratch()
 	mut state := support.fresh(folder)
 	studio.openDoc(state, folder + "/main.hive")
-	db := support.started(spawn(studio.serve, state))
-	frame := support.vimKeys(db, "dd")
-	assert frame.vim == ""
-	assert support.regionOf(frame, "vimbar") == ""
-	assert frame.text == "proc main(): void \{\n\techo 1\n}\n"
+	db := support.serve(state)
+	seen := support.vimKeys(db, "dd")
+	assert seen.vim == ""
+	assert indexOf(seen.page, "VIM NORMAL") is Result.Error(_)
+	assert seen.text == "proc main(): void \{\n\techo 1\n}\n"
 	if studio.toMsg(state, support.event("vim", "", "0 30", "j", -1)) is Result.Ok(message) {
 		assert message == model.Msg.VimKey("j", -1, "0 30")
 	} else {

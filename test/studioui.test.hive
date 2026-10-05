@@ -1,7 +1,7 @@
-// Testes de studioui.hive e lib/uiview.hive: o Hive Studio desenhado só com
+// Testes da janela de studio.hive e de lib/uiview.hive: o Hive Studio desenhado só com
 // os widgets do hive.ui.
 
-import ../studioui as studioUi
+import ../studio as studioUi
 import ../lib/model
 import ../lib/uiview
 import ../lib/highlight
@@ -66,19 +66,19 @@ test "abrir, digitar, salvar e fechar pelos widgets" {
 	mut win := support.window(folder)
 	assert support.shows(win, "Hive Studio")
 	assert support.shows(win, "main.hive")
-	_opened := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
+	_opened := studioUi.turn(win, uiview.act("open", folder + "/main.hive"), sink)
 	assert len(win.core.docs) == 1
 	// O realce que vai à ponte: `proc` como palavra-chave, o TODO em destaque.
 	assert support.shows(win, ">proc</span>")
 	assert support.shows(win, ">TODO</span>")
 	text := support.docText(win)
-	_typed := studioUi.update(win, uiview.edited(text + "// fim\n"), sink)
+	_typed := studioUi.turn(win, uiview.edited(text + "// fim\n"), sink)
 	assert support.docDirty(win)
 	assert win.core.caret == len(text + "// fim\n")
 	assert support.shows(win, "●")
-	_closing := studioUi.update(win, uiview.act("close", "0"), sink)
+	_closing := studioUi.turn(win, uiview.act("close", "0"), sink)
 	assert support.shows(win, "Salvar e fechar")
-	_saved := studioUi.update(win, uiview.act("closeSave", folder + "/main.hive"), sink)
+	_saved := studioUi.turn(win, uiview.act("closeSave", folder + "/main.hive"), sink)
 	assert len(win.core.docs) == 0
 	if hive.file.read(folder + "/main.hive") is Result.Ok(disk) {
 		assert indexOf(disk, "// fim\r\n") is Result.Ok(_)
@@ -92,10 +92,10 @@ test "menus abrem e fecham, e qualquer outro clique fecha o menu" {
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	assert !support.shows(win, "Fechar aba")
-	_open := studioUi.update(win, uiview.chrome("menu", "Arquivo"), sink)
+	_open := studioUi.turn(win, uiview.chrome("menu", "Arquivo"), sink)
 	assert win.extra.menu == "Arquivo"
 	assert support.shows(win, "Fechar aba")
-	_other := studioUi.update(win, uiview.act("side", "git"), sink)
+	_other := studioUi.turn(win, uiview.act("side", "git"), sink)
 	assert win.extra.menu == ""
 	assert win.core.side == model.SideView.GitSide()
 }
@@ -104,23 +104,23 @@ test "cada tela desenha: configurações, preview, busca, painel e a paleta" {
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_settings := studioUi.update(win, uiview.act("settings", ""), sink)
+	_settings := studioUi.turn(win, uiview.act("settings", ""), sink)
 	assert support.shows(win, "Tema de cor")
 	assert support.shows(win, "Hive Dark")
-	_closed := studioUi.update(win, uiview.act("closeSettings", ""), sink)
-	_md := studioUi.update(win, uiview.act("open", folder + "/LEIAME.md"), sink)
+	_closed := studioUi.turn(win, uiview.act("closeSettings", ""), sink)
+	_md := studioUi.turn(win, uiview.act("open", folder + "/LEIAME.md"), sink)
 	// O preview é o HTML da janela própria, que vai à ponte pelo hive-pane.
 	assert support.shows(win, "Título</h1>")
 	assert support.shows(win, "Texto forte.")
-	_code := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
-	_find := studioUi.update(win, uiview.action("find"), sink)
-	_typed := studioUi.update(win, uiview.field("find", "n"), sink)
+	_code := studioUi.turn(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_find := studioUi.turn(win, uiview.action("find"), sink)
+	_typed := studioUi.turn(win, uiview.field("find", "n"), sink)
 	assert support.shows(win, "1 de")
-	_problems := studioUi.update(win, uiview.act("pane", "problems"), sink)
+	_problems := studioUi.turn(win, uiview.act("pane", "problems"), sink)
 	assert support.shows(win, "PROBLEMAS")
-	_palette := studioUi.update(win, uiview.action("quickOpen"), sink)
+	_palette := studioUi.turn(win, uiview.action("quickOpen"), sink)
 	assert support.shows(win, "Buscar arquivo pelo nome")
-	_side := studioUi.update(win, uiview.act("side", "outline"), sink)
+	_side := studioUi.turn(win, uiview.act("side", "outline"), sink)
 	assert support.shows(win, "dobro")
 }
 
@@ -128,10 +128,10 @@ test "as setas da vista realçada a movem, e o cursor volta a mandar nela" {
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
-	_moved := studioUi.update(win, uiview.chrome("top", "3"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/main.hive"), sink)
+	_moved := studioUi.turn(win, uiview.chrome("top", "3"), sink)
 	assert win.extra.top == 3
-	_caret := studioUi.update(win, uiview.edited(support.docText(win) + "x"), sink)
+	_caret := studioUi.turn(win, uiview.edited(support.docText(win) + "x"), sink)
 	assert win.extra.top == 0
 }
 
@@ -139,19 +139,19 @@ test "a janela toma os atalhos do mapa, e a busca põe o cursor na ocorrência" 
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	assert support.shows(win, "data-keys=\"")
 	assert support.shows(win, "Ctrl+S")
 	assert support.shows(win, "data-title=\"util.hive")
-	_find := studioUi.update(win, uiview.action("find"), sink)
-	_typed := studioUi.update(win, uiview.field("find", "dobro"), sink)
+	_find := studioUi.turn(win, uiview.action("find"), sink)
+	_typed := studioUi.turn(win, uiview.field("find", "dobro"), sink)
 	assert win.extra.selA == 5 && win.extra.selH == 10
 	assert support.shows(win, "data-caret=\"5,10,")
 	// O cursor do editor: a cabeça vai ao estado, a âncora fica na janela.
-	_caret := studioUi.update(win, uiview.caretCmd(3, 7), sink)
+	_caret := studioUi.turn(win, uiview.caretCmd(3, 7), sink)
 	assert win.core.caret == 7 && win.extra.anchor == 3
 	// Um atalho que a janela tomou chega como a página própria o mandava.
-	_saved := studioUi.update(win, uiview.keyCmd("", 7, "Ctrl+S"), sink)
+	_saved := studioUi.turn(win, uiview.keyCmd("", 7, "Ctrl+S"), sink)
 	assert !support.docDirty(win)
 }
 
@@ -161,13 +161,13 @@ test "o painel AGENTE abre o agente num terminal de verdade, desenhado na janela
 	mut win := support.window(folder)
 	win.core.settings.claudeCommand = "sh"
 	win.core.settings.codexCommand = "programa-que-nao-existe-hive --flag"
-	_opened := studioUi.update(win, uiview.act("pane", "agent"), sink)
-	assert render.agentShown(win.core) != 0
+	_opened := studioUi.turn(win, uiview.act("pane", "agent"), sink)
+	assert support.agentShown(win.core) != 0
 	assert win.core.focus == "agent"
 	assert support.shows(win, "OpenCode")
 	assert support.shows(win, "h-code")
-	_missing := studioUi.update(win, uiview.act("agent", "codex"), sink)
-	assert render.agentShown(win.core) == 0
+	_missing := studioUi.turn(win, uiview.act("agent", "codex"), sink)
+	assert support.agentShown(win.core) == 0
 	assert support.shows(win, "programa-que-nao-existe-hive: não encontrado no PATH")
 }
 
@@ -176,10 +176,10 @@ test "o olá da ponte põe os vigias para rodar, e o painel tem o puxador da alt
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	win.started = false
-	_hello := studioUi.update(win, uiview.chrome("hello", ""), sink)
+	_hello := studioUi.turn(win, uiview.chrome("hello", ""), sink)
 	assert win.started
 	assert support.shows(win, "height:5px")
-	_drag := studioUi.update(win, uiview.field("panelHeight", "333"), sink)
+	_drag := studioUi.turn(win, uiview.field("panelHeight", "333"), sink)
 	assert win.core.settings.panelHeight == 333
 	assert support.shows(win, "height:333px")
 }
@@ -189,17 +189,17 @@ test "o modo Vim: as teclas vão ao motor, que move o cursor e abre a linha de c
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
 	win.core.settings.vim = true
-	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	assert vim.modeName(win.core.vim) == "normal"
 	assert support.shows(win, "VIM NORMAL")
 	// O editor toma todas as teclas, e uma letra vira uma tecla do Vim.
-	_j := studioUi.update(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "j"), sink)
+	_j := studioUi.turn(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "j"), sink)
 	assert win.core.caret == 26
 	assert win.extra.selA == 26
-	_v := studioUi.update(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "v"), sink)
+	_v := studioUi.turn(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "v"), sink)
 	assert vim.modeName(win.core.vim) == "visual"
-	_esc := studioUi.update(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "Escape"), sink)
-	_colon := studioUi.update(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, ":"), sink)
+	_esc := studioUi.turn(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, "Escape"), sink)
+	_colon := studioUi.turn(win, uiview.editorKeyCmd("", win.core.caret, false, true, win.core.settings.keymap, ":"), sink)
 	assert win.core.focus == "vimCommand"
 	assert support.shows(win, "placeholder=\"" + uiview.vimMark() + "\"")
 	// Um atalho da IDE com Ctrl continua sendo da IDE.
@@ -210,10 +210,10 @@ test "o editor pinta as palavras na cor do tema, perto das linhas à vista" {
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	assert support.shows(win, ">func</span>")
 	assert support.shows(win, "data-keys=")
-	_view := studioUi.update(win, uiview.viewCmd(400, 460), sink)
+	_view := studioUi.turn(win, uiview.viewCmd(400, 460), sink)
 	assert win.extra.first == 400 && win.extra.last == 460
 }
 
@@ -221,13 +221,13 @@ test "o editor manda só o trecho que mudou, e o texto fica igual ao digitado" {
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_open := studioUi.update(win, uiview.act("open", folder + "/lib/util.hive"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/lib/util.hive"), sink)
 	assert support.shows(win, "return n * 2")
-	_typed := studioUi.update(win, uiview.editCmd(win.core.textSerial, 0, 0, "// a\n"), sink)
+	_typed := studioUi.turn(win, uiview.editCmd(win.core.textSerial, 0, 0, "// a\n"), sink)
 	assert support.docText(win) == "// a\nfunc dobro(n: Int): Int \{\n\treturn n * 2\n}\n"
 	assert win.core.caret == 5
 	// Uma edição sobre um texto que o programa já trocou não vale.
-	_stale := studioUi.update(win, uiview.editCmd(win.core.textSerial - 1, 0, 2, ""), sink)
+	_stale := studioUi.turn(win, uiview.editCmd(win.core.textSerial - 1, 0, 2, ""), sink)
 	assert support.docText(win) == "// a\nfunc dobro(n: Int): Int \{\n\treturn n * 2\n}\n"
 }
 
@@ -235,17 +235,17 @@ test "Ctrl+clique num nome vai para a definição, e o menu Editar abre e fecha"
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_open := studioUi.update(win, uiview.act("open", folder + "/main.hive"), sink)
+	_open := studioUi.turn(win, uiview.act("open", folder + "/main.hive"), sink)
 	text := support.docText(win)
 	if indexOf(text, "dobro(2)") is Result.Ok(at) {
-		_jump := studioUi.update(win, uiview.jumpCmd(at + 1), sink)
+		_jump := studioUi.turn(win, uiview.jumpCmd(at + 1), sink)
 		assert render.activePath(win.core) == folder + "/lib/util.hive"
 	} else {
 		assert false
 	}
-	_menu := studioUi.update(win, uiview.chrome("menu", "Editar"), sink)
+	_menu := studioUi.turn(win, uiview.chrome("menu", "Editar"), sink)
 	assert support.shows(win, "Selecionar tudo")
-	_undo := studioUi.update(win, uiview.chrome("client", "undo"), sink)
+	_undo := studioUi.turn(win, uiview.chrome("client", "undo"), sink)
 	assert win.extra.menu == ""
 }
 
@@ -253,13 +253,13 @@ test "o explorador anda pelo teclado e o menu do arquivo abre onde o mouse estav
 	folder := support.fixture()
 	sink := support.started(spawn(support.sink, 0))
 	mut win := support.window(folder)
-	_down := studioUi.update(win, uiview.treeCmd("ArrowDown"), sink)
+	_down := studioUi.turn(win, uiview.treeCmd("ArrowDown"), sink)
 	assert win.core.selected != ""
 	assert support.shows(win, "gap:5px")
-	_menu := studioUi.update(win, uiview.actText("context", folder + "/main.hive", "0,0"), sink)
+	_menu := studioUi.turn(win, uiview.actText("context", folder + "/main.hive", "0,0"), sink)
 	assert win.core.context.path == folder + "/main.hive"
 	assert support.shows(win, "data-anchor=\"Pointer\"")
 	assert support.shows(win, "Copiar caminho relativo")
-	_close := studioUi.update(win, uiview.act("closeContext", ""), sink)
+	_close := studioUi.turn(win, uiview.act("closeContext", ""), sink)
 	assert win.core.context.path == ""
 }

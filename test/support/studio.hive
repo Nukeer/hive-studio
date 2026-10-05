@@ -1,31 +1,14 @@
 // Apoio aos testes de test/studio.test.hive.
 
 import ../../studio
-import hive.ui
 import ../../lib/model
 import ../../lib/workspace
-import ../../lib/analysis
-import ../../lib/toolchain
 import ../../lib/render
 import ../../lib/settings
-import ../../lib/highlight
-import ../../lib/complete
-import ../../lib/keys
-import ../../lib/server
-import ../../lib/git
-import ../../lib/navigate
-import ../../lib/process
-import ../../lib/native.go
-import ../../lib/dialogs
-import ../../lib/i18n
-import ../../lib/search
+import ../../lib/uiview
 import ../../lib/vim
 import ../../lib/agents
-import ../../lib/todo
-import ../../lib/jsonview
-import ../../lib/markdown
-import ../../lib/pty.go
-import ../../lib/watch.go
+import ../../lib/git
 
 proc scratch(): Str {
 	folder := "./studio-test"
@@ -51,55 +34,199 @@ func event(kind: Str, act: Str, arg: Str, text: Str, caret: Int): model.Event {
 	return model.Event(kind, act, arg, text, caret, -1, 0, -1)
 }
 
-func hasRegion(frame: model.Frame, id: Str): Bool {
-	for each r in frame.regions {
-		if r.id == id {
-			return true
-		}
-	}
-	return false
+// O HTML da janela nativa para `state`, como o hive.ui a desenha.
+func page(state: model.State): Str {
+	return hive.ui.html(uiview.window(state, uiview.emptyChrome()))
 }
 
-// Manda um evento ao serviço, como a página faz, e lê o frame que volta.
-proc answer(db: Address, sent: model.Event): model.Frame {
-	answered := db(model.Cmd.Ui(encode(sent, hive.json.codec())))
-	if answered is Result.Ok(reply) {
-		if reply is model.Cmd.Reply(text) {
-			if model.Frame.decode(text, hive.json.codec()) is Result.Ok(frame) {
-				return frame
+func shows(state: model.State, text: Str): Bool {
+	return indexOf(page(state), text) is Result.Ok(_)
+}
+
+// A janela com o menu `name` da barra de título aberto.
+func menuPage(state: model.State, name: Str): Str {
+	mut extra := uiview.emptyChrome()
+	extra.menu = name
+	return hive.ui.html(uiview.window(state, extra))
+}
+
+// Um serviço que só recebe: o endereço que o trabalho em outra thread usa
+// para mandar de volta o que fez, ignorado nos testes.
+proc sink(count: mut Int, command: model.Cmd): model.Cmd {
+	count += 1
+	return command
+}
+
+proc address(): Address {
+	return started(spawn(sink, 0))
+}
+
+// A janela sobre um estado, já começada (sem os vigias do git e do disco).
+func window(state: model.State): studio.Win {
+	return studio.Win(state, uiview.emptyChrome(), true)
+}
+
+// O que um teste lê da janela depois de cada evento: o estado que a janela
+// mostra, e o HTML dela.
+type Seen {
+	text:          Str
+	serial:        Int
+	caret:         Int
+	vim:           Str
+	vimSerial:     Int
+	vimAck:        Int
+	vimPrompt:     Str
+	vimMessage:    Str
+	focus:         Str
+	side:          Bool
+	panel:         Bool
+	title:         Str
+	find:          Bool
+	marks:         Int[dyn]
+	markLength:    Int
+	markCurrent:   Int
+	selStart:      Int
+	selEnd:        Int
+	selected:      Str
+	tree:          Str[dyn]
+	agentShown:    Int
+	agentSessions: Int[dyn]
+	lens:          model.LensMark[dyn]
+	view:          Str
+	page:          Str
+}
+
+// O texto à vista veio do disco, e não do usuário: o editor o troca quieto.
+func quiet(state: model.State): Bool {
+	return state.textSerial == state.quietSerial
+}
+
+// O terminal de agente à vista agora (0 = nenhum).
+func agentShown(state: model.State): Int {
+	if studio.showingAgent(state) {
+		return agents.sessionOf(state.agents, state.agents.current).session
+	}
+	return 0
+}
+
+func seenOf(win: studio.Win): Seen {
+	state := win.core
+	text := studio.activeText(state)
+	layout := render.layoutOf(state)
+	inEditor := layout == "edit" || layout == "split"
+	mut mode := ""
+	mut selStart := state.caret
+	mut selEnd := state.caret
+	if state.settings.vim && inEditor {
+		mode = vim.modeName(state.vim)
+		span := vim.shown(text, state.caret, state.vim)
+		selStart = span.from
+		selEnd = span.to
+	}
+	// As ocorrências realçadas: as do Ctrl+F, ou as da busca do Vim.
+	mut Int[dyn] marks = []
+	mut markLength := len(state.find.text)
+	mut markCurrent := state.find.index
+	if inEditor && state.find.open {
+		marks = render.findMatches(render.searched(state), state.find)
+	} else if mode != "" {
+		marks = vim.highlights(text, state.vim)
+		markLength = vim.highlightLength(state.vim)
+		markCurrent = -1
+		if state.vim.prompt == "/" || state.vim.prompt == "?" {
+			markCurrent = vim.currentHighlight(marks, state.caret, state.vim.prompt == "?")
+		} else if indexOf(marks, state.caret) is Result.Ok(here) {
+			markCurrent = here
+		}
+	}
+	mut Int[dyn] sessions = []
+	for each s in state.agents.sessions {
+		if s.session != 0 {
+			append(sessions, s.session)
+		}
+	}
+	mut view := ""
+	if render.activeDoc(state) is Result.Ok(doc) {
+		view = doc.view
+	}
+	return Seen(
+		text: text,
+		serial: state.textSerial,
+		caret: state.caret,
+		vim: mode,
+		vimSerial: state.vim.serial,
+		vimAck: state.vim.acked,
+		vimPrompt: state.vim.prompt,
+		vimMessage: render.vimMessage(state),
+		focus: state.focus,
+		side: state.sideOpen,
+		panel: state.panelOpen,
+		title: studio.activeName(state),
+		find: state.find.open,
+		marks: marks,
+		markLength: markLength,
+		markCurrent: markCurrent,
+		selStart: selStart,
+		selEnd: selEnd,
+		selected: selectedName(state),
+		tree: state.tree | map(rowName),
+		agentShown: agentShown(state),
+		agentSessions: sessions,
+		lens: render.lensMarks(state),
+		view: view,
+		page: hive.ui.html(studio.view(win))
+	)
+}
+
+// A janela num serviço, como o programa a roda: cada mensagem passa por
+// `studio.turn`, e o que volta é o que a janela mostra depois dela. O
+// trabalho em outra thread (o realce do Error Lens, a visualização, o agente
+// que termina) manda o resultado de volta a este mesmo serviço.
+proc host(win: mut studio.Win, command: model.Cmd, self: Address): model.Cmd {
+	_turned := studio.turn(win, command, self)
+	return model.Cmd.Ui(encode(seenOf(win), hive.json.codec()))
+}
+
+proc serve(state: model.State): Address {
+	return started(spawn(host, window(state)))
+}
+
+proc reply(answered: Result<model.Cmd, hive.syslink.SyslinkError>): Seen {
+	if answered is Result.Ok(command) {
+		if command is model.Cmd.Ui(text) {
+			if Seen.decode(text, hive.json.codec()) is Result.Ok(seen) {
+				return seen
 			}
 		}
 	}
-	panic "o serviço não respondeu com um frame"
+	panic "a janela não respondeu com o que mostra"
 }
 
-// O frame depois de `sent`, sempre com o texto: quando nada mudou o frame não
-// o traz (a página já tem), e aqui ele é pedido de novo, como a página faria
-// se o tivesse perdido.
-proc ask(db: Address, sent: model.Event): model.Frame {
-	frame := answer(db, sent)
-	if frame.hasText {
-		return frame
-	}
-	return answer(db, event("resync", "", "", "", 0))
+// Manda um evento à janela, como o hive.ui faz, e lê o que ela mostra depois.
+proc ask(db: Address, sent: model.Event): Seen {
+	return reply(db(model.Cmd.Ui(encode(sent, hive.json.codec()))))
 }
 
-// Teclas do Vim, uma por evento, como a página manda.
-proc vimKeys(db: Address, keys: Str): model.Frame {
-	mut frame := ask(db, event("hello", "", "", "", 0))
+// O que a janela mostra agora, sem mandar nada que a mude.
+proc look(db: Address): Seen {
+	return ask(db, event("hello", "", "", "", 0))
+}
+
+// Teclas do Vim, uma por evento, como o editor manda.
+proc vimKeys(db: Address, keys: Str): Seen {
+	mut seen := look(db)
 	for each key in vim.tokens(keys) {
-		frame = ask(db, event("vim", "", "0 30", key, -1))
+		seen = ask(db, event("vim", "", "0 30", key, -1))
 	}
-	return frame
+	return seen
 }
 
-func regionOf(frame: model.Frame, id: Str): Str {
-	for each r in frame.regions {
-		if r.id == id {
-			return r.html
-		}
+proc treeKeys(db: Address, keys: Str): Seen {
+	mut seen := look(db)
+	for each key in vim.tokens(keys) {
+		seen = ask(db, event("tree", "", "", key, 0))
 	}
-	return ""
+	return seen
 }
 
 // Uma pasta só para os testes do explorador: `lib/`, `LEIAME.md` e `main.hive`,
@@ -118,27 +245,22 @@ proc explorerFolder(name: Str): Str {
 	return folder
 }
 
-// O nome da linha selecionada no explorador, lido do HTML da barra lateral.
-func selectedName(frame: model.Frame): Str {
-	html := regionOf(frame, "side")
-	if html is "{before} focus\"{row}</div>{after}" {
-		if row is "{head}<span class=\"nm{cls}\">{name}</span>{tail}" {
-			return name
+// O nome da linha selecionada no explorador.
+func selectedName(state: model.State): Str {
+	for each row in state.tree {
+		if row.entry.path == state.selected {
+			return row.entry.name
 		}
 	}
 	return ""
 }
 
-proc treeKeys(db: Address, keys: Str): model.Frame {
-	mut frame := ask(db, event("hello", "", "", "", 0))
-	for each key in vim.tokens(keys) {
-		frame = ask(db, event("tree", "", "", key, 0))
-	}
-	return frame
-}
-
 func rowName(row: model.TreeRow): Str {
 	return row.entry.name
+}
+
+func lineKind(line: git.DiffLine): Str {
+	return line.kind
 }
 
 // O endereço de um serviço que acabou de começar (spawn responde com um

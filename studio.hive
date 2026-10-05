@@ -1,10 +1,13 @@
-// Hive Studio — uma IDE simples para Hive, escrita em Hive.
+// Hive Studio — uma IDE simples para Hive, escrita em Hive, na janela nativa
+// do hive.ui.
 //
 //     hivec run studio.hive [pasta]
 //
-// O estado mora num serviço (`serve`, uma dobra sobre a caixa de mensagens).
-// A página, numa janela Chromium em modo aplicativo, manda eventos pelo
-// WebSocket e recebe de volta o frame já desenhado — ver lib/server.hive.
+// O estado é um só (`model.State`), dobrado por `step` a cada mensagem. A
+// janela (`ui.window`, no fim deste arquivo) desenha com lib/uiview.hive e
+// manda os eventos dos widgets, que `toMsg` traduz em mensagens. O trabalho
+// que roda em outra thread (git, hivec, o terminal, o vigia do disco, o Error
+// Lens) manda o resultado de volta à janela como `model.Cmd.Post`.
 
 import hive.ui
 import ./lib/model
@@ -16,7 +19,8 @@ import ./lib/settings
 import ./lib/highlight
 import ./lib/complete
 import ./lib/keys
-import ./lib/server
+import ./lib/host
+import ./lib/uiview
 import ./lib/git
 import ./lib/navigate
 import ./lib/process
@@ -48,7 +52,7 @@ proc gitRefresh(state: mut model.State): void {
 	git.refresh(state.root, state.git)
 }
 
-// Pede para a página focar um campo (`prompt`, `termInput`…) no próximo frame.
+// Pede para a janela focar um campo (`prompt`, `termInput`…) no próximo desenho.
 proc withFocus(state: mut model.State, target: Str): void {
 	state.focus = target
 	state.focusSerial = state.focusSerial + 1
@@ -71,7 +75,7 @@ proc watchTerminal(db: Address, session: Int): void {
 			async db(model.Cmd.Post(model.Msg.TermExited(session, native.code(session))))
 			return
 		}
-		server.pause(40)
+		host.pause(40)
 	}
 }
 
@@ -376,8 +380,8 @@ func targetFolder(state: model.State): Str {
 
 // ── documentos ───────────────────────────────────────────────────────────
 
-// Troca o texto de um documento refazendo o realce só das linhas que mudaram;
-// a página recebe só essas linhas (`patch`, sobre a versão anterior).
+// Troca o texto de um documento refazendo o realce só das linhas que mudaram
+// (`patch`, sobre a versão anterior).
 proc retext(doc: mut model.Doc, text: Str): void {
 	done := highlight.rehighlight(doc.hl, doc.text, text, model.language(doc.path))
 	doc.hl = done.result
@@ -566,7 +570,7 @@ proc contextAction(state: mut model.State, action: Str, path: Str, from: Address
 	} else if action == "terminal" {
 		update(state, model.Msg.ShowPane(model.Pane.TerminalPane()), from)
 		mut command := "cd \"" + native.absPath(here) + "\""
-		if server.isWindows() {
+		if host.isWindows() {
 			command = "cd /d \"" + replaceAll(native.absPath(here), "/", "\\") + "\""
 		}
 		update(state, model.Msg.TermSubmit(command), from)
@@ -589,12 +593,12 @@ proc contextAction(state: mut model.State, action: Str, path: Str, from: Address
 // Mostra o arquivo (ou a pasta) no gerenciador de arquivos do sistema.
 proc revealInSystem(path: Str): void {
 	abs := native.absPath(path)
-	if server.isWindows() {
-		async server.openWith("explorer.exe", ["/select," + replaceAll(abs, "/", "\\")])
+	if host.isWindows() {
+		async host.openWith("explorer.exe", ["/select," + replaceAll(abs, "/", "\\")])
 	} else if hive.file.exists("/usr/bin/open") {
-		async server.openWith("open", ["-R", abs])
+		async host.openWith("open", ["-R", abs])
 	} else {
-		async server.openWith("xdg-open", [workspace.parentOf(abs)])
+		async host.openWith("xdg-open", [workspace.parentOf(abs)])
 	}
 }
 
@@ -1192,7 +1196,7 @@ func vimActive(state: model.State): Bool {
 }
 
 // O documento ativo como o motor do Vim o vê. Um `caret` negativo é "o que o
-// estado já tem": a página só manda o dela quando o mudou por conta própria.
+// estado já tem": a janela só manda o dela quando o mudou por conta própria.
 // `view` é "primeira linha visível, quantas linhas cabem".
 proc vimEditor(state: mut model.State, caret: Int, view: Str): vim.Editor {
 	mut top := 0
@@ -1429,7 +1433,7 @@ proc watchAgent(db: Address, session: Int): void {
 		if !pty.alive(session) {
 			break
 		}
-		server.pause(300)
+		host.pause(300)
 	}
 	async db(model.Cmd.Post(model.Msg.AgentExited(session, pty.code(session))))
 }
@@ -1731,7 +1735,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 		if native.write(state.term.session, text + "\n") is Result.Error(why) {
 			state.term.log = capLog(state.term.log + "\n[não foi possível escrever no terminal: " + why + "]\n")
 		}
-		if !server.isWindows() {
+		if !host.isWindows() {
 			state.term.log = capLog(state.term.log + text + "\n")
 		}
 		mut Str[dyn] history = state.term.history
@@ -1851,7 +1855,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 			if len(title) > 40 {
 				title = complete.take(title, 40) + "…"
 			}
-			state.commit = model.CommitTab(commit.hash, commit.short + " " + title, render.commitPage(commit, state.words))
+			state.commit = model.CommitTab(commit.hash, commit.short + " " + title)
 			state.editorView = model.EditorView.CommitPage()
 			state.status = "commit {commit.short}"
 		} else if shown is Result.Error(why) {
@@ -1859,12 +1863,12 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 		}
 	} else if message is model.Msg.GitShowWork(path) {
 		commit := git.working(state.git, path)
-		state.commit = model.CommitTab("work:" + path, "± " + workspace.baseName(path), render.commitPage(commit, state.words))
+		state.commit = model.CommitTab("work:" + path, "± " + workspace.baseName(path))
 		state.editorView = model.EditorView.CommitPage()
 	} else if message is model.Msg.FocusCommit {
 		state.editorView = model.EditorView.CommitPage()
 	} else if message is model.Msg.CloseCommit {
-		state.commit = model.CommitTab("", "", "")
+		state.commit = model.CommitTab("", "")
 		state.editorView = model.EditorView.DocView()
 	} else if message is model.Msg.FindOpen(text) {
 		state.find.open = true
@@ -1970,7 +1974,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 		state.docs = kept
 		state.active = len(kept) - 1
 		state.entrypoint = ""
-		state.commit = model.CommitTab("", "", "")
+		state.commit = model.CommitTab("", "")
 		state.editorView = model.EditorView.DocView()
 		state.sideOpen = true
 		state.side = model.SideView.ExplorerSide()
@@ -2331,9 +2335,6 @@ proc update(state: mut model.State, message: model.Msg, from: Address): void {
 	} else if message is model.Msg.CompilerTyped(text) {
 		prefs.compiler = text
 		applySettings(state, prefs)
-	} else if message is model.Msg.BrowserTyped(text) {
-		prefs.browser = text
-		applySettings(state, prefs)
 	} else if message is model.Msg.StartRecording(action) {
 		state.recording = action
 	} else if message is model.Msg.CancelRecording {
@@ -2361,14 +2362,10 @@ proc update(state: mut model.State, message: model.Msg, from: Address): void {
 		state.output = ""
 		model.Diagnostic[dyn] cleared = []
 		state.diagnostics = cleared
-	} else if message is model.Msg.Connected {
-		state.clients = state.clients + 1
-	} else if message is model.Msg.Disconnected {
-		state.clients = state.clients - 1
 	}
 }
 
-// Um passo da dobra. Quando o documento ativo muda, a página precisa receber
+// Um passo da dobra. Quando o documento ativo muda, o editor precisa receber
 // o texto novo: é o `textSerial` que avisa.
 proc step(state: mut model.State, message: model.Msg, from: Address): void {
 	// O que precisa ser comparado depois: só isto, e não o estado inteiro.
@@ -2415,7 +2412,7 @@ proc step(state: mut model.State, message: model.Msg, from: Address): void {
 	}
 }
 
-// ── da página para uma mensagem ──────────────────────────────────────────
+// ── de um evento para uma mensagem ───────────────────────────────────────
 
 func numberOr(text: Str, fallback: Int): Int {
 	if hive.conv.sti(text) is Result.Ok(n) {
@@ -2788,8 +2785,6 @@ func fieldMsg(event: model.Event): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.SetTabSize(numberOr(event.text, 4)))
 	} else if a == "compiler" {
 		return Result.Ok(model.Msg.CompilerTyped(event.text))
-	} else if a == "browser" {
-		return Result.Ok(model.Msg.BrowserTyped(event.text))
 	} else if a == "termInput" {
 		return Result.Ok(model.Msg.TermTyped(event.text))
 	} else if a == "gitMessage" {
@@ -2852,103 +2847,9 @@ proc toMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> 
 	return Result.Error(false)
 }
 
-// ── o serviço ────────────────────────────────────────────────────────────
+// ── a janela ─────────────────────────────────────────────────────────────
 
-// Um turno do serviço: o estado é escrito no lugar, e o que o turno devolve é
-// a resposta de quem perguntou. `from` é o endereço do próprio serviço, para o
-// trabalho que ele começa em outra thread mandar o resultado de volta.
-proc serve(state: mut model.State, command: model.Cmd, from: Address): model.Cmd {
-	if command is model.Cmd.Ui(text) {
-		decoded := model.Event.decode(text, hive.json.codec())
-		if decoded is Result.Ok(hovered) {
-			if hovered.kind == "hover" {
-				mut ok := false
-				if hasDoc(state) {
-					ok = navigate.locate(render.activePath(state), activeText(state), hovered.caret) is Result.Ok(_)
-				}
-				return model.Cmd.Reply(encode(model.HoverReply(true, hovered.caret, ok), hive.json.codec()))
-			}
-		}
-		if decoded is Result.Ok(event) {
-			if event.kind == "resync" || event.kind == "hello" {
-				resynced(state)
-			} else if toMsg(state, event) is Result.Ok(message) {
-				step(state, message, from)
-			}
-		}
-		return reply(state)
-	} else if command is model.Cmd.Post(message) {
-		// As checagens periódicas (git, arquivos no disco) só redesenham quando algo mudou.
-		quiet := message is model.Msg.GitPoll || message is model.Msg.DiskPoll || message is model.Msg.LensDue(_)
-		if !quiet {
-			step(state, message, from)
-			state.pulse = state.pulse + 1
-			return command
-		}
-		wasGit := encode(state.git, hive.json.codec())
-		wasTree := encode(state.tree, hive.json.codec())
-		wasSerial := state.textSerial
-		wasStatus := state.status
-		wasDocs := docsMark(state)
-		step(state, message, from)
-		if encode(state.git, hive.json.codec()) != wasGit || state.textSerial != wasSerial || state.status != wasStatus ||
-			encode(state.tree, hive.json.codec()) != wasTree || docsMark(state) != wasDocs {
-			state.pulse = state.pulse + 1
-		}
-		return command
-	} else if command is model.Cmd.Render {
-		return reply(state)
-	} else if command is model.Cmd.Pulse {
-		return model.Cmd.PulseIs(state.pulse)
-	} else if command is model.Cmd.Clients {
-		return model.Cmd.ClientsAre(state.clients)
-	}
-	return command
-}
-
-// O que muda num documento quando o disco o muda (versão do texto, apagado),
-// sem comparar os textos inteiros.
-func docsMark(state: model.State): Str {
-	mut Str[dyn] parts = []
-	for each doc in state.docs {
-		append(parts, doc.path + "#{doc.version}#{doc.gone}")
-	}
-	return join(parts, "|")
-}
-
-// Manda o frame de agora e lembra o que a página passou a ter: o próximo frame
-// só leva o texto e o realce se eles mudarem.
-proc reply(state: mut model.State): model.Cmd {
-	frame := render.encodeFrame(state)
-	delivered(state)
-	return model.Cmd.Reply(frame)
-}
-
-proc delivered(state: mut model.State): void {
-	index := state.active
-	mut version := -1
-	mut path := ""
-	if state.docs bounds index {
-		version = state.docs[index].version
-		path = state.docs[index].path
-	}
-	state.clientSerial = state.textSerial
-	state.frameSeq = state.frameSeq + 1
-	state.clientHv = version
-	state.clientHvPath = path
-	state.clientView = render.previewKey(state)
-}
-
-// A página se perdeu (um frame chegou fora de ordem, outra janela…): o
-// próximo frame leva o texto e o realce inteiros.
-proc resynced(state: mut model.State): void {
-	state.clientSerial = -1
-	state.clientHv = -1
-	state.clientHvPath = ""
-	state.clientView = ""
-}
-
-// Sai do programa pouco depois, dando tempo para a página fechar a janela.
+// Sai do programa pouco depois, dando tempo para os terminais pararem.
 proc quitSoon(): void {
 	hive.task.sleep(300)
 	hive.term.exit(0)
@@ -2957,22 +2858,294 @@ proc quitSoon(): void {
 // Relê o git de tempos em tempos, para mudanças feitas fora do Hive Studio.
 proc watchGit(db: Address): void {
 	for ;; {
-		server.pause(4000)
+		host.pause(4000)
 		async db(model.Cmd.Post(model.Msg.GitPoll()))
 	}
 }
 
-func fallbackView(url: Str): hive.ui.View {
-	return ui.column([ui.gap(12), ui.pad(32)], [
-		ui.text([ui.size(ui.TextSize.Title())], "⬡ Hive Studio"),
-		ui.text([], "Nenhum navegador Chromium (Edge, Chrome, Brave) foi encontrado para abrir a janela."),
-		ui.link([], url, "Abrir o Hive Studio aqui"),
-		ui.text([ui.tone(ui.Tone.Muted())], "Ou indique o executável em Configurações → Navegador da janela.")
-	])
+// O estado da janela: o do Hive Studio e o que só esta janela lembra.
+// `started` diz se os vigias (git, disco) já foram postos para rodar — isso
+// espera a primeira mensagem, que é quando a janela passa a ter endereço.
+type Win {
+	core:    model.State
+	extra:   uiview.Chrome
+	started: Bool
 }
 
-proc fallbackUpdate(url: mut Str, message: model.Msg): model.Msg {
-	return message
+func view(win: Win): hive.ui.View {
+	return uiview.window(win.core, win.extra)
+}
+
+// Onde o cursor ficou depois de uma edição que só mandou o texto novo: no
+// fim do trecho que mudou (o que vem antes e depois dele é igual nos dois).
+func caretAfter(before: Str, after: Str): Int {
+	a := split(before, "")
+	b := split(after, "")
+	mut same := 0
+	for ; same < len(a) && same < len(b); same++ {
+		if a bounds same && b bounds same {
+			if a[same] != b[same] {
+				break
+			}
+		}
+	}
+	mut tail := 0
+	for ; tail < len(a) - same && tail < len(b) - same; tail++ {
+		i := len(a) - 1 - tail
+		j := len(b) - 1 - tail
+		if a bounds i && b bounds j {
+			if a[i] != b[j] {
+				break
+			}
+		}
+	}
+	return len(b) - tail
+}
+
+// O que só esta janela trata: os menus e a rolagem da vista realçada.
+proc chromeEvent(win: mut Win, what: Str, arg: Str, self: Address): void {
+	if what == "menu" {
+		win.extra.menu = arg
+	} else if what == "top" {
+		win.extra.top = numberOr(arg, 0)
+	} else if what == "client" {
+		// Um comando do menu Editar: o editor o faz (ver `ui.perform`).
+		win.extra.menu = ""
+		win.extra.client = arg
+		win.extra.clientSerial = win.extra.clientSerial + 1
+	} else if what == "probe" {
+		// Ctrl+mouse: sublinha o nome sob o mouse quando ele tem para onde ir.
+		at := numberOr(arg, -1)
+		win.extra.probeFrom = -1
+		win.extra.probeTo = -1
+		if at >= 0 && win.core.docs bounds win.core.active {
+			doc := win.core.docs[win.core.active]
+			span := native.wordAt(doc.text, at)
+			if span bounds 1 && navigate.locate(doc.path, doc.text, at) is Result.Ok(_) {
+				win.extra.probeFrom = span[0]
+				win.extra.probeTo = span[1]
+			}
+		}
+	} else if what == "gitFold" {
+		if arg == "staged" {
+			win.extra.hideStaged = !win.extra.hideStaged
+		} else if arg == "changes" {
+			win.extra.hideChanges = !win.extra.hideChanges
+		} else if arg == "log" {
+			win.extra.hideLog = !win.extra.hideLog
+		}
+	} else if what == "cutLine" {
+		cutLine(win, self)
+	} else if what == "pty" {
+		// Uma tecla no terminal de um agente: os bytes dela vão ao programa.
+		if arg is "{session}|{combo}" {
+			_typed := pty.write(numberOr(session, 0), pty.keys(combo))
+		}
+	} else if what == "ptyPaste" {
+		if arg is "{session}|{text}" {
+			_pasted := pty.write(numberOr(session, 0), text)
+		}
+	} else if what == "ptyFit" {
+		// O terminal tem o tamanho da caixa onde ele aparece.
+		if arg is "{session}|{cols},{rows}" {
+			_sized := pty.resize(numberOr(session, 0), numberOr(cols, 80), numberOr(rows, 24))
+		}
+	} else if what == "view" {
+		// As linhas do editor à vista: o realce vai só perto delas.
+		if arg is "{first},{last}" {
+			win.extra.first = numberOr(first, 0)
+			win.extra.last = numberOr(last, 60)
+		}
+	} else if what == "drag" {
+		// O puxador do painel: a altura acompanha o mouse, e fica ao soltar.
+		if arg is "{dy},{done}" {
+			if win.extra.dragBase < 0 {
+				win.extra.dragBase = win.core.settings.panelHeight
+			}
+			height := win.extra.dragBase - numberOr(dy, 0)
+			mut clamped := height
+			if clamped < 90 {
+				clamped = 90
+			}
+			win.extra.dragHeight = clamped
+			if done == "1" {
+				win.extra.dragBase = -1
+				step(win.core, model.Msg.SetPanelHeight(clamped), self)
+			}
+		}
+	}
+	// "screen": um terminal de agente mudou; o turno só redesenha.
+}
+
+// Um evento dos widgets, traduzido em mensagem.
+proc handle(win: mut Win, event: model.Event, self: Address): void {
+	if event.kind == "chrome" {
+		chromeEvent(win, event.act, event.arg, self)
+		return
+	}
+	// Qualquer outro clique fecha o menu aberto.
+	win.extra.menu = ""
+	// O cursor andou no editor: a cabeça vai ao Hive Studio, a âncora fica aqui.
+	if event.kind == "caret" {
+		win.extra.anchor = numberOr(event.arg, event.caret)
+		step(win.core, model.Msg.CaretAt(event.caret), self)
+		return
+	}
+	mut sent := event
+	if sent.kind == "edit" && sent.caret < 0 {
+		sent.caret = caretAfter(activeText(win.core), sent.text)
+	}
+	// Uma ação de menu vale onde o cursor está (ir para a definição, sugestões).
+	if sent.kind == "act" && sent.act == "action" {
+		sent.caret = win.core.caret
+	}
+	if toMsg(win.core, sent) is Result.Ok(message) {
+		step(win.core, message, self)
+	}
+}
+
+// Depois de cada turno: o commit da aba de commit (lido do git uma vez, quando
+// a aba muda) e a vista realçada, que volta a seguir o cursor quando ele, o
+// documento ou a busca mudam.
+proc follow(win: mut Win): void {
+	// A aba de commit: o commit é lido do git uma vez, quando ela muda.
+	if win.core.commit.key != win.extra.commit.hash && win.core.commit.key != "work:" + win.extra.commit.body {
+		key := win.core.commit.key
+		if key is "work:{path}" {
+			win.extra.commit = git.working(win.core.git, path)
+		} else if key != "" {
+			if git.show(win.core.git, key) is Result.Ok(commit) {
+				win.extra.commit = commit
+			}
+		}
+	}
+	mut path := ""
+	index := win.core.active
+	if win.core.docs bounds index {
+		path = win.core.docs[index].path
+	}
+	place(win)
+	if win.core.caret != win.extra.caret || path != win.extra.path || win.core.find.serial != win.extra.findSerial {
+		win.extra.top = 0
+		win.extra.caret = win.core.caret
+		win.extra.path = path
+		win.extra.findSerial = win.core.find.serial
+	}
+}
+
+// Onde o editor põe o cursor, quando o programa o move: o texto trocou (outro
+// arquivo, uma ida à definição), o Vim andou, ou a busca achou outra ocorrência.
+// Um texto relido do disco não mexe nele.
+proc place(win: mut Win): void {
+	core := win.core
+	extra := win.extra
+	mut anchor := core.caret
+	mut head := core.caret
+	mut moved := false
+	quiet := core.textSerial == core.quietSerial
+	if core.textSerial != extra.seenText {
+		win.extra.seenText = core.textSerial
+		moved = !quiet
+	}
+	if core.vim.serial != extra.seenVim {
+		win.extra.seenVim = core.vim.serial
+		moved = core.settings.vim
+	}
+	if core.settings.vim && moved {
+		span := vim.shown(render.searched(core), core.caret, core.vim)
+		anchor = span.from
+		head = span.to
+	}
+	findSerial := core.find.serial + core.vim.searchSerial
+	if findSerial != extra.seenFind {
+		win.extra.seenFind = findSerial
+		if core.find.open {
+			matches := render.findMatches(render.searched(core), core.find)
+			if matches bounds core.find.index {
+				anchor = matches[core.find.index]
+				head = anchor + len(core.find.text)
+				moved = true
+			}
+		}
+	}
+	if moved {
+		win.extra.selA = anchor
+		win.extra.selH = head
+		win.extra.selSerial = extra.selSerial + 1
+		win.extra.anchor = anchor
+	}
+}
+
+// Ctrl+X sem seleção: a linha do cursor sai do texto, com a quebra, e vai para
+// a área de transferência.
+proc cutLine(win: mut Win, self: Address): void {
+	if win.extra.anchor != win.core.caret {
+		return
+	}
+	text := activeText(win.core)
+	mut start := 0
+	mut line := ""
+	for each piece in split(text, "\n") {
+		end := start + len(piece)
+		if win.core.caret >= start && win.core.caret <= end {
+			line = piece
+			break
+		}
+		start = end + 1
+	}
+	mut cut := len(line)
+	if start + cut < len(text) {
+		cut = cut + 1
+	}
+	win.core.vim.clip = line + "\n"
+	win.core.vim.clipSerial = win.core.vim.clipSerial + 1
+	step(win.core, model.Msg.EditAt(native.splice(text, start, cut, ""), start), self)
+	win.extra.selA = start
+	win.extra.selH = start
+	win.extra.selSerial = win.extra.selSerial + 1
+	win.extra.anchor = start
+}
+
+// Os terminais dos agentes: quando algum recebe saída, a janela redesenha (no
+// máximo uma vez a cada 30 ms).
+proc watchScreens(self: Address): void {
+	mut seen := -1
+	for ;; {
+		now := pty.pulse()
+		if now != seen {
+			seen = now
+			async self(uiview.chrome("screen", ""))
+		}
+		host.pause(30)
+	}
+}
+
+proc turn(win: mut Win, command: model.Cmd, self: Address): model.Cmd {
+	if !win.started {
+		win.started = true
+		async watchGit(self)
+		async watchDocs(self)
+		async watchScreens(self)
+	}
+	if command is model.Cmd.Ui(text) {
+		if model.Event.decode(text, hive.json.codec()) is Result.Ok(event) {
+			handle(win, event, self)
+		}
+	} else if command is model.Cmd.Post(message) {
+		step(win.core, message, self)
+	}
+	follow(win)
+	return command
+}
+
+proc initial(folder: Str): Win {
+	prefs := settings.load()
+	mut start := model.initial(folder, prefs)
+	openRoot(start, folder)
+	watchFolders(start)
+	mut extra := uiview.emptyChrome()
+	extra.e2e = hive.env.get("HIVE_E2E") is Result.Ok("1")
+	return Win(start, extra, false)
 }
 
 proc main(): void {
@@ -2981,37 +3154,8 @@ proc main(): void {
 	if args is [first, ...rest] {
 		folder = first
 	}
-	prefs := settings.load()
-	mut start := model.initial(folder, prefs)
-	openRoot(start, folder)
-	watchFolders(start)
-	spawned := spawn(serve, start)
-	if spawned is Result.Ok(db) {
-		open(db, prefs)
-	} else if spawned is Result.Error(why) {
-		panic "o serviço do Hive Studio não começou: " + why.message
-	}
-}
-
-// A página, o WebSocket e a janela, ligados ao serviço do estado em `db`.
-proc open(db: Address, prefs: settings.Settings): void {
-	token := hive.crypto.randomHex(16)
-	port := server.freePort()
-	async hive.net.httpServe(port, server.page(token, port + 1, _))
-	async hive.net.wsServe(port + 1, server.client(db, token, _))
-	hive.task.sleep(150)
-
-	url := "http://127.0.0.1:{port}/?token={token}"
-	browser := server.launch(url, settings.folder() + "/janela", prefs.browser)
-	if browser == "" {
-		// Sem Chromium conhecido: a janela do próprio hive.ui (que cai numa aba
-		// do navegador padrão) mostra o endereço da IDE.
-		_fallback := spawn(ui.window("Hive Studio", fallbackView, fallbackUpdate), url)
-	}
-	hive.term.status("Hive Studio em {url} ({browser})")
-	async watchGit(db)
-	async watchDocs(db)
-	for ;; {
-		server.pause(60000)
+	start := initial(folder)
+	if spawn(ui.window("Hive Studio", view, turn), start) is Result.Error(why) {
+		panic "a janela do Hive Studio não abriu: " + why.message
 	}
 }

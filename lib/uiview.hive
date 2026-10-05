@@ -1,8 +1,7 @@
-// A janela desenhada só com os widgets do hive.ui (ver studioui.hive).
+// A janela do Hive Studio, desenhada só com os widgets do hive.ui.
 //
-// O estado é o mesmo do Hive Studio (`model.State`), e cada clique manda à
-// dobra o mesmo evento que a página própria (assets/shell.html) mandaria:
-// `studio.toMsg` o traduz como sempre. Tudo aqui é `func` — desenhar nunca
+// O estado é o do Hive Studio (`model.State`), e cada clique manda um evento
+// (`model.Event`) que `studio.toMsg` traduz em mensagem. Tudo aqui é `func` — desenhar nunca
 // altera o estado — e as cores vêm do tema escolhido, pintadas em cada caixa,
 // porque o hive.ui não aceita folha de estilo própria.
 
@@ -78,7 +77,7 @@ func emptyChrome(): Chrome {
 		0, 60, 0, 0, 0, 0, -1, -1, -1, -1, 0, noCommit(), false)
 }
 
-// ── eventos: os mesmos que a página própria manda ────────────────────────
+// ── eventos ──────────────────────────────────────────────────────────────
 
 func event(kind: Str, act: Str, arg: Str, text: Str, caret: Int): model.Cmd {
 	return model.Cmd.Ui(encode(model.Event(kind, act, arg, text, caret, -1, 0, -1), hive.json.codec()))
@@ -730,6 +729,8 @@ func gitColor(t: theme.Theme, kind: Str): Str {
 		return t.gitMod
 	} else if css == "g-del" {
 		return t.danger
+	} else if kind == "ignored" {
+		return t.gutter
 	}
 	return t.text
 }
@@ -765,8 +766,8 @@ func checked(state: model.State, text: Str, name: Str, on: Bool): Entry {
 	return Entry(mark + tx(state, text), keys.keysFor(state.settings.keymap, name), action(name), true)
 }
 
-// Um item que a página resolve no editor (desfazer, copiar…): o programa
-// só passa o pedido à ponte.
+// Um item que o editor resolve sozinho (desfazer, copiar…): o programa só
+// passa o pedido a ele (`ui.perform`).
 func clientItem(state: model.State, text: Str, command: Str, hint: Str, enabled: Bool): Entry {
 	return Entry(tx(state, text), hint, chrome("client", command), enabled)
 }
@@ -1127,10 +1128,14 @@ func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.Vi
 		if row.open {
 			chevron = "⌄"
 		}
-		kind := git.folderKind(state.git, render.relPath(state, entry.path))
+		folderRel := render.relPath(state, entry.path)
+		mut kind := git.folderKind(state.git, folderRel)
 		mut dot := ui.none()
 		if kind != "" {
 			dot = label(gitColor(t, kind), "•")
+		} else if git.ignored(state.git, folderRel) {
+			// Fora do repositório (.gitignore): um cinza mais escuro.
+			kind = "ignored"
 		}
 		return ui.row(box, [
 			indent,
@@ -1151,9 +1156,13 @@ func treeRow(state: model.State, t: theme.Theme, row: model.TreeRow): hive.ui.Vi
 			badge = small(gitColor(t, kind), git.badge(kind, file))
 		}
 	}
+	mut kind := render.gitKindOf(state, entry.path)
+	if kind == "" && git.ignored(state.git, rel) {
+		kind = "ignored"
+	}
 	return ui.row(box, [
 		indent, spaceOf(20), fileIcon(entry.name),
-		plainLink(gitColor(t, render.gitKindOf(state, entry.path)), entry.name, act("open", entry.path), entry.path),
+		plainLink(gitColor(t, kind), entry.name, act("open", entry.path), entry.path),
 		marker, ui.spacer(), badge, more
 	])
 }
@@ -1228,7 +1237,7 @@ func contextMenu(state: model.State, t: theme.Theme): hive.ui.View {
 	for each entry in items {
 		append(rows, menuRow(t, entry))
 	}
-	// Onde o mouse estava, sem escurecer a página; um clique fora o fecha.
+	// Onde o mouse estava, sem escurecer a janela; um clique fora o fecha.
 	return ui.overlay([ui.anchor(ui.Anchor.Pointer()), ui.onDismiss(act("closeContext", ""))],
 		ui.column([ui.width(380), ui.pad(6), ui.gap(1), fill(t.side), tone(t.text)], rows))
 }
@@ -1598,7 +1607,7 @@ func tabStrip(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.row([ui.gap(1), fill(t.tabStrip), ui.scroll(ui.Axis.Horizontal())], items)
 }
 
-// Como o documento aparece: `edit` (o editor, colorido pela ponte), `split`
+// Como o documento aparece: `edit` (o editor colorido), `split`
 // (o editor e a vista ao lado) ou `preview` (no código, só a vista realçada,
 // de nomes clicáveis).
 func modeOf(doc: model.Doc): Str {
@@ -1645,8 +1654,7 @@ func breadcrumb(state: model.State, t: theme.Theme): hive.ui.View {
 
 // ── o código realçado ────────────────────────────────────────────────────
 //
-// O realce é o mesmo do editor da página própria (lib/highlight): o HTML de
-// cada linha é lido de volta em pedaços com a classe de cada um, e cada
+// O realce é o do editor (lib/highlight): o HTML de cada linha é lido de volta em pedaços com a classe de cada um, e cada
 // pedaço vira um texto na cor que o tema dá àquela classe.
 
 type Token {
@@ -2205,11 +2213,11 @@ func diffCode(t: theme.Theme, file: git.DiffFile): hive.ui.View {
 	return ui.code([ui.readOnly(true), ui.radius(6), ui.ring(false), ui.border(1), ui.borderTone(hex(t.border)), fill(t.editor), tone(t.text), ui.height(minInt(len(file.lines), 40) * 20 + 20)], join(text, "\n"), runs)
 }
 
-// ── (antes) Markdown, JSON e commit: o HTML da página própria ────────────
+// ── Markdown, JSON e commit ──────────────────────────────────────────────
 //
-// O preview do Markdown, a árvore do JSON e a aba de commit são o mesmo HTML
-// que o Hive Studio monta para a página própria (`doc.view`, `commit.html`).
-// Aqui fica só a caixa (de recuo 15) sobre a qual a ponte o mostra.
+// O preview do Markdown e a árvore do JSON chegam como HTML simples
+// (`doc.view`, de lib/markdown.hive e lib/jsonview.hive), lido aqui de volta
+// em widgets; a aba de commit vem do git (`git.show`).
 
 func numberOr(text: Str, fallback: Int): Int {
 	if hive.conv.sti(text) is Result.Ok(n) {
@@ -2469,8 +2477,6 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Salvar antes de rodar"), "", check(state, t, "saveBeforeRun", "Salvar arquivos antes de Check, Run, Test e Build", prefs.saveBeforeRun)),
 		setting(t, tx(state, "Compilador"), tx(state, "Caminho do hivec. A variável HIVEC, se existir, tem prioridade."),
 			inputField(t, [ui.onInput(field("compiler", _)), ui.placeholder("hivec")], prefs.compiler)),
-		setting(t, tx(state, "Navegador da janela"), tx(state, "Executável Chromium (Edge, Chrome, Brave) usado para a janela. Vazio = automático. Vale na próxima abertura."),
-			inputField(t, [ui.onInput(field("browser", _)), ui.placeholder(tx(state, "automático"))], prefs.browser)),
 		section(t, tx(state, "Atalhos de teclado")),
 		small(t.muted, tx(state, "Clique em Gravar e pressione a combinação. Uma tecla já usada sai da outra ação. Esc cancela.")),
 		button(t, tx(state, "Restaurar todos os padrões"), act("resetKeys", ""), true)

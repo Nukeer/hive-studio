@@ -1,7 +1,7 @@
-// Testes de ponta a ponta da janela do hive.ui (studioui): o executável de
+// Testes de ponta a ponta da janela do Hive Studio: o executável de
 // verdade, num Chromium headless dirigido pelo DevTools Protocol.
 //
-//   node tools/e2e/run.mjs ./studioui[.exe] [cenário…]
+//   node tools/e2e/run.mjs ./studio[.exe] [cenário…]
 //
 // Cada cenário roda com um programa e um navegador novos, numa pasta de
 // projeto e numa pasta de configurações temporárias (APPDATA), e diz PASS ou
@@ -156,7 +156,7 @@ async function runScenario(exe, browser, scenario, port) {
 
 const [exeArg, ...wanted] = process.argv.slice(2);
 if (!exeArg) {
-  console.log("uso: node tools/e2e/run.mjs <studioui[.exe]> [cenário…]");
+  console.log("uso: node tools/e2e/run.mjs <studio[.exe]> [cenário…]");
   process.exit(2);
 }
 const exe = resolve(exeArg);

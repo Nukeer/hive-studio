@@ -1,11 +1,11 @@
-// Apoio aos testes de test/studioui.test.hive: um arquivo `.test.hive`
+// Apoio aos testes de test/studioui.test.hive (a janela de studio.hive): um arquivo `.test.hive`
 // importado por test/suite.hive só pode ter imports e blocos `test`.
 
-import ../../studioui as studioUi
 import ../../studio
 import ../../lib/model
 import ../../lib/settings
 import ../../lib/uiview
+import ../../lib/agents
 
 // Uma pasta de projeto de mentira, escrita pelo próprio teste.
 proc fixture(): Str {
@@ -27,10 +27,10 @@ proc fixture(): Str {
 
 // A janela sobre a pasta, com as configurações padrão (e não as do usuário,
 // para os textos serem os de pt-BR), e sem os vigias.
-proc window(folder: Str): studioUi.Win {
+proc window(folder: Str): studio.Win {
 	mut core := model.initial(folder, settings.defaults())
 	studio.openRoot(core, folder)
-	return studioUi.Win(core, uiview.emptyChrome(), true)
+	return studio.Win(core, uiview.emptyChrome(), true)
 }
 
 // Um serviço que só recebe: o endereço que o trabalho em outra thread usa
@@ -41,23 +41,23 @@ proc sink(count: mut Int, command: model.Cmd): model.Cmd {
 }
 
 // O HTML que o hive.ui manda à janela agora.
-func page(win: studioUi.Win): Str {
-	return hive.ui.html(studioUi.view(win))
+func page(win: studio.Win): Str {
+	return hive.ui.html(studio.view(win))
 }
 
-func shows(win: studioUi.Win, text: Str): Bool {
+func shows(win: studio.Win, text: Str): Bool {
 	return indexOf(page(win), text) is Result.Ok(_)
 }
 
 // O texto do documento aberto (o primeiro), ou "".
-func docText(win: studioUi.Win): Str {
+func docText(win: studio.Win): Str {
 	if win.core.docs bounds 0 {
 		return win.core.docs[0].text
 	}
 	return ""
 }
 
-func docDirty(win: studioUi.Win): Bool {
+func docDirty(win: studio.Win): Bool {
 	if win.core.docs bounds 0 {
 		return model.dirty(win.core.docs[0])
 	}
@@ -72,4 +72,12 @@ func started(spawned: Result<Address, hive.syslink.SyslinkError>): Address {
 	} else if spawned is Result.Error(why) {
 		panic "o serviço não começou: " + why.message
 	}
+}
+
+// O terminal de agente à vista agora (0 = nenhum).
+func agentShown(state: model.State): Int {
+	if studio.showingAgent(state) {
+		return agents.sessionOf(state.agents, state.agents.current).session
+	}
+	return 0
 }

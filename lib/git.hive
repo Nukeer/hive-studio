@@ -80,6 +80,7 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 	info.behind = 0
 	info.files = noFiles
 	info.log = noLog
+	info.ignored = noLog
 	top := process.run("git", ["rev-parse", "--show-toplevel"], root)
 	if top.code != 0 {
 		return
@@ -97,6 +98,7 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 		}
 	}
 	info.files = files
+	info.ignored = ignoredIn(root)
 	history := process.run("git", ["log", "--oneline", "--no-color", "-15"], root)
 	if history.code == 0 {
 		mut Str[dyn] log = []
@@ -107,6 +109,39 @@ proc refresh(root: Str, info: mut model.GitInfo): void {
 		}
 		info.log = log
 	}
+}
+
+// O que o .gitignore deixa de fora, debaixo de `root` e relativo a ela. Uma
+// pasta ignorada inteira (node_modules/, dist/) vem como uma linha só.
+proc ignoredIn(root: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	listed := process.run("git", ["-c", "core.quotepath=false", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root)
+	if listed.code != 0 {
+		return found
+	}
+	for each line in split(replaceAll(listed.text, "\r", ""), "\n") {
+		if line != "" {
+			append(found, line)
+		}
+	}
+	return found
+}
+
+// Se `rel` (relativo à pasta aberta) é ignorado pelo git: ele mesmo, ou uma
+// pasta acima dele.
+func ignored(info: model.GitInfo, rel: Str): Bool {
+	if rel == "" {
+		return false
+	}
+	for each entry in info.ignored {
+		if entry == rel || entry == rel + "/" {
+			return true
+		}
+		if entry is "{folder}/" && startsWith(rel, entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func kindOf(file: model.GitFile): Str {

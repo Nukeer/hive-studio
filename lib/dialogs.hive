@@ -7,13 +7,13 @@ import ./model
 import ./process
 import ./settings
 import ./assets
-import ./server
+import ./host
 
 // O caminho escolhido; `Error("")` quando a pessoa cancela e `Error(motivo)`
 // quando não há seletor nenhum.
 proc pick(mode: Str, start: Str, title: Str): Result<Str, Str> {
 	folder := mode == "folder"
-	if server.isWindows() {
+	if host.isWindows() {
 		if hive.file.makeDir(settings.folder()) is Result.Error(why) {
 			return Result.Error(why.message)
 		}
@@ -73,7 +73,7 @@ proc pickAsync(db: Address, mode: Str, start: Str, title: Str): void {
 
 // Abre um endereço no navegador padrão do sistema.
 proc openUrl(url: Str): void {
-	if server.isWindows() {
+	if host.isWindows() {
 		_opened := process.run("rundll32", ["url.dll,FileProtocolHandler", url], "")
 	} else if hive.file.exists("/usr/bin/open") {
 		_opened := process.run("open", [url], "")

@@ -440,7 +440,7 @@ func highlightText(text: Str, lang: Str): Highlighted {
 	return Highlighted(len(lines), open)
 }
 
-// O HTML de todas as linhas de um texto (ao abrir, ou quando a página pede tudo).
+// O HTML de todas as linhas de um texto.
 func htmlLines(text: Str, lang: Str): Str[dyn] {
 	mut Str[dyn] out = []
 	mut carry := 0
