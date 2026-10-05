@@ -35,7 +35,11 @@ test "o mesmo arquivo, escrito de jeitos diferentes" {
 	}
 	full := native.absPath("./same-test/lib/a.hive")
 	assert native.sameFile("./same-test/lib/a.hive", full)
-	assert native.sameFile("same-test\\lib\\a.hive", "./same-test/lib/a.hive")
+	// Só no Windows a contrabarra separa pastas; no Linux e no macOS ela é
+	// parte do nome, e `same-test\lib\a.hive` é outro arquivo.
+	if hive.env.get("OS") is Result.Ok("Windows_NT") {
+		assert native.sameFile("same-test\\lib\\a.hive", "./same-test/lib/a.hive")
+	}
 	assert !native.sameFile("./same-test/lib/a.hive", "./same-test/lib")
 	assert !native.sameFile("./same-test/nada.hive", "./same-test/nada.hive")
 	assert native.inside("./same-test", full) == "lib/a.hive"
