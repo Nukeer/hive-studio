@@ -17,10 +17,15 @@ type Settings {
 	codexCommand:    Str -- JSON as codex_command; Default as "codex";
 	opencodeCommand: Str -- JSON as opencode_command; Default as "opencode";
 	errorLens:     Bool -- JSON as error_lens; Default as true;
+	// Procurar uma versão nova ao abrir (no máximo uma vez por dia), a
+	// versão que o usuário mandou ignorar e quando foi a última procura.
+	autoUpdate:      Bool -- JSON as auto_update; Default as true;
+	skipVersion:     Str  -- JSON as skip_version; Default as "";
+	lastUpdateCheck: Int  -- JSON as last_update_check; Default as 0;
 }
 
 func defaults(): Settings {
-	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", 260, "pt-BR", false, "claude", "codex", "opencode", true)
+	return Settings("Hive Dark", true, false, true, "hivec", 14, 4, true, "", 260, "pt-BR", false, "claude", "codex", "opencode", true, true, "", 0)
 }
 
 func envOr(name: Str, fallback: Str): Str {

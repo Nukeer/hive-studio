@@ -4,6 +4,7 @@
 import ./settings
 import ./i18n
 import ./highlight
+import ./update
 
 // Um item do explorador: arquivo ou pasta.
 type Entry {
@@ -293,6 +294,21 @@ type SideView {
 	TodoSide
 }
 
+// A atualização automática. `phase`: "" (nada a mostrar), "checking",
+// "latest" (já é a mais nova), "available", "downloading", "ready" (o
+// binário novo já está no lugar; falta reiniciar) ou "failed". `open` diz se
+// o diálogo está na tela; `manual`, se quem pediu a procura foi o usuário.
+// `notes` são as notas do release já em HTML, para o preview do Markdown.
+type UpdateState {
+	phase:   Str
+	offer:   update.Offer
+	notes:   Str
+	message: Str
+	open:    Bool
+	manual:  Bool
+	exe:     Str
+}
+
 type EditorView {
 	DocView
 	SettingsView
@@ -452,6 +468,17 @@ type Msg {
 	AgentExited      { session: Int, code: Int }
 	AgentCommand     { agent: Str, text: Str }
 	DiskPoll
+	UpdateCheck      { manual: Bool }
+	UpdatePoll
+	UpdateChecked    { result: update.Check }
+	UpdateShow
+	UpdateClose
+	UpdateSkip
+	UpdateInstall
+	UpdateInstalled  { exe: Str }
+	UpdateFailed     { reason: Str }
+	UpdateRestart
+	UpdatePage
 }
 
 type State {
@@ -514,6 +541,7 @@ type State {
 	todos:         Todo[dyn]
 	todoScanned:   Bool
 	todoScanning:  Bool
+	update:        UpdateState
 }
 
 // ── os eventos dos widgets ───────────────────────────────────────────────
@@ -604,7 +632,8 @@ func initial(root: Str, prefs: settings.Settings): State {
 		lensAgain: false,
 		todos: [],
 		todoScanned: false,
-		todoScanning: false
+		todoScanning: false,
+		update: UpdateState("", update.noOffer(), "", "", false, false, "")
 	)
 }
 

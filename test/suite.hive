@@ -22,5 +22,6 @@ import ./studioui.test as studioUiTest
 import ./theme.test as themeTest
 import ./todo.test as todoTest
 import ./toolchain.test as toolchainTest
+import ./update.test as updateTest
 import ./vim.test as vimTest
 import ./workspace.test as workspaceTest

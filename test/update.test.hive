@@ -1,0 +1,122 @@
+// Testes de lib/update.hive.
+
+import ../lib/update
+import ../lib/selfupdate.go
+
+test "versões se comparam número a número, e o sufixo vem antes" {
+	assert update.newer("v0.3.0", "v0.2.0")
+	assert update.newer("v0.2.10", "v0.2.9")
+	assert update.newer("v1.0.0", "v0.99.99")
+	assert update.newer("v0.2.0", "v0.2.0-dev")
+	assert update.newer("0.2.1", "v0.2.0")
+	assert !update.newer("v0.2.0", "v0.2.0")
+	assert !update.newer("v0.1.3", "v0.2.0")
+	assert !update.newer("v0.2.0-dev", "v0.2.0")
+	assert update.newer("v0.2.0-rc.2", "v0.2.0-rc.1")
+	assert !update.newer("nightly", "v0.2.0")
+	assert !update.newer("v0.3.0", "algo")
+}
+
+test "um build de desenvolvimento não procura sozinho" {
+	assert update.isDev("v0.2.0-dev")
+	assert update.isDev("")
+	assert !update.isDev("v0.2.0")
+	day := update.interval()
+	assert update.automatic("v0.2.0", true)
+	assert !update.automatic("v0.2.0", false)
+	assert !update.automatic("v0.2.0-dev", true)
+	assert update.due("v0.2.0", true, 0, day)
+	assert !update.due("v0.2.0", true, 100, 100 + day - 1)
+	assert update.due("v0.2.0", true, 100, 100 + day)
+	assert !update.due("v0.2.0", false, 0, day)
+	assert !update.due("v0.2.0-dev", true, 0, day)
+}
+
+test "o binário de cada plataforma tem o nome do release" {
+	assert update.assetName("windows/amd64") == "hive-studio-windows-amd64.exe"
+	assert update.assetName("windows/arm64") == "hive-studio-windows-arm64.exe"
+	assert update.assetName("linux/arm64") == "hive-studio-linux-arm64"
+	assert update.assetName("darwin/arm64") == "hive-studio-darwin-arm64"
+}
+
+func releaseJson(): Str {
+	return `\{
+		"tag_name": "v0.3.0",
+		"html_url": "https://github.com/Nukeer/hive-studio/releases/tag/v0.3.0",
+		"body": null,
+		"draft": false,
+		"assets": [
+			\{"name": "hive-studio-linux-amd64", "browser_download_url": "https://x/linux"},
+			\{"name": "hive-studio-windows-amd64.exe", "browser_download_url": "https://x/windows"},
+			\{"name": "SHA256SUMS", "browser_download_url": "https://x/sums"},
+			\{"name": "SHA256SUMS.sig", "browser_download_url": "https://x/sig"}
+		]
+	}`
+}
+
+test "o release do GitHub vira uma oferta para esta plataforma" {
+	if update.Release.decode(releaseJson(), hive.json.codec()) is Result.Ok(release) {
+		assert release.notes == ""
+		if update.decide(release, "v0.2.0", "windows/amd64") is update.Check.Found(offer) {
+			assert offer.tag == "v0.3.0"
+			assert offer.asset == "hive-studio-windows-amd64.exe"
+			assert offer.binary == "https://x/windows"
+			assert offer.sums == "https://x/sums"
+			assert offer.signature == "https://x/sig"
+		} else {
+			assert false
+		}
+		assert update.decide(release, "v0.3.0", "windows/amd64") == update.Check.UpToDate("v0.3.0")
+		if update.decide(release, "v0.2.0", "darwin/arm64") is update.Check.Failed(reason) {
+			assert reason == "o release v0.3.0 não tem hive-studio-darwin-arm64"
+		} else {
+			assert false
+		}
+	} else {
+		assert false
+	}
+}
+
+test "um release sem assinatura não é oferecido" {
+	unsigned := replaceAll(releaseJson(), ",\n\t\t\t\{\"name\": \"SHA256SUMS.sig\", \"browser_download_url\": \"https://x/sig\"}", "")
+	if update.Release.decode(unsigned, hive.json.codec()) is Result.Ok(release) {
+		assert len(release.assets) == 3
+		assert update.decide(release, "v0.2.0", "linux/amd64") == update.Check.Failed("o release v0.3.0 não é assinado (falta SHA256SUMS.sig)")
+	} else {
+		assert false
+	}
+}
+
+// Uma chave só destes testes (a privada não existe mais) e a assinatura que
+// ela fez de `testSums()`, com o mesmo comando do passo "Assinar" do CI:
+// openssl pkeyutl -sign -rawin | base64 -w0.
+func testKey(): Str {
+	return "63j+T/94lqlVwPmcFrD/GfgeE1yBWYrLojSk6esfB3Q="
+}
+
+func testSums(): Str {
+	return "aaaa  hive-studio-linux-amd64\n"
+}
+
+func testSignature(): Str {
+	return "a3djsioX/p9QTVOyV57BokBoX+pyDuDHjTx1ajunPnJn8Q3abTq2cZP+RUwDb1GoxyEJESAsrE0jhqLjURuqCQ==\n"
+}
+
+test "a assinatura do SHA256SUMS confere só com a chave certa e o texto intacto" {
+	assert selfupdate.verifyWith(testKey(), testSums(), testSignature())
+	assert !selfupdate.verifyWith(testKey(), "bbbb  hive-studio-linux-amd64\n", testSignature())
+	assert !selfupdate.verifyWith(testKey(), testSums(), "a3djsioX/p9QTVOyV57BokBoX+pyDuDHjTx1ajunPnJn8Q3abTq2cZP+RUwDb1GoxyEJESAsrE0jhqLjURuqCg==")
+	assert !selfupdate.verifyWith(testKey(), testSums(), "")
+	assert !selfupdate.verifyWith(testKey(), testSums(), "não é base64")
+	assert !selfupdate.verifyWith("curta", testSums(), testSignature())
+	// A chave de teste não é uma das do Hive Studio.
+	assert !update.signed(testSums(), testSignature())
+}
+
+test "o hash de um binário sai do SHA256SUMS" {
+	sums := "4765a069daded0dae413662d4dff61bb9e53643e663837dee7fef11c75c7bfb8  hive-studio-darwin-amd64\r\ne2146a227d5ada687a4289086d20de71fff121f36e4c85567441f680b2c405ca  hive-studio-windows-amd64.exe\n"
+	assert update.sumFor(sums, "hive-studio-windows-amd64.exe") == Result.Ok("e2146a227d5ada687a4289086d20de71fff121f36e4c85567441f680b2c405ca")
+	assert update.sumFor(sums, "hive-studio-darwin-amd64") == Result.Ok("4765a069daded0dae413662d4dff61bb9e53643e663837dee7fef11c75c7bfb8")
+	assert update.sumFor(sums, "hive-studio-linux-amd64") == Result.Error(false)
+	assert update.sumFor("nada  hive-studio-linux-amd64", "hive-studio-linux-amd64") == Result.Error(false)
+}

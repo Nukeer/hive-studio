@@ -869,6 +869,7 @@ func menuEntries(state: model.State, name: Str): Entry[dyn] {
 			item(state, "Documentação do Hive", "docs", true),
 			item(state, "Atalhos de teclado", "settings", true),
 			gap(),
+			item(state, "Procurar atualizações…", "checkUpdates", true),
 			item(state, "Sobre o Hive Studio", "about", true)
 		]
 	}
@@ -2030,12 +2031,20 @@ func codeBlock(t: theme.Theme, html: Str): hive.ui.View {
 
 // O preview do Markdown, bloco a bloco, a partir do HTML de lib/markdown.
 func markdownView(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.View {
+	return ui.column([ui.grow(1), ui.gap(12), ui.pad(28), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
+		ui.column([ui.gap(12)], markdownBlocks(t, doc.view))
+	])
+}
+
+// Os blocos de um HTML de lib/markdown: o preview de um .md e as notas de
+// um release.
+func markdownBlocks(t: theme.Theme, source: Str): hive.ui.View[dyn] {
 	mut hive.ui.View[dyn] blocks = []
 	mut Str[dyn] pre = []
 	mut inPre := false
 	mut ordered := false
 	mut number := 0
-	mut html := doc.view
+	mut html := source
 	if html is "<div class=\"md\">{inner}</div>" {
 		html = inner
 	}
@@ -2082,9 +2091,7 @@ func markdownView(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.V
 			append(blocks, mdTable(t, rows))
 		}
 	}
-	return ui.column([ui.grow(1), ui.gap(12), ui.pad(28), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
-		ui.column([ui.gap(12)], blocks)
-	])
+	return blocks
 }
 
 func mdTable(t: theme.Theme, html: Str): hive.ui.View {
@@ -2463,6 +2470,9 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 			ui.select(plus(fieldLook(t), [ui.onChoose(field("tabSize", _)), fill(t.input), tone(t.text)]), ["2", "4", "8"], "{prefs.tabSize}")),
 		setting(t, tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
 			check(state, t, "vim", "Usar as teclas do Vim no editor", prefs.vim)),
+		section(t, tx(state, "Atualizações")),
+		setting(t, tx(state, "Atualização automática"), tx(state, "Ao abrir, e a cada seis horas com a janela aberta, procura uma versão nova nos releases do GitHub e mostra o que mudou. Nada é instalado sem você pedir."),
+			check(state, t, "autoUpdate", "Procurar atualizações ao abrir", prefs.autoUpdate)),
 		section(t, tx(state, "Explorador")),
 		setting(t, tx(state, "Arquivos ocultos"), "", check(state, t, "showHidden", "Incluir ocultos e artefatos de build na busca e no TODO", prefs.showHidden)),
 		section(t, tx(state, "Agentes")),
@@ -2833,6 +2843,19 @@ func statusClick(t: theme.Theme, text: Str, message: model.Cmd, tip: Str): hive.
 	return ui.link([ui.on(message), tone(t.statusFg), ui.size(ui.TextSize.Caption()), ui.hint(tip), ui.hover(hex("#00000022")), ui.radius(3)], "#", text)
 }
 
+// O selo de atualização na barra de status: nas cores invertidas da barra,
+// para saltar aos olhos em qualquer tema (em vários o destaque é a própria
+// cor da barra).
+func updateBadge(state: model.State, t: theme.Theme): hive.ui.View {
+	mut text := "⬆ " + tx(state, "Atualização disponível") + " · " + state.update.offer.tag
+	if state.update.phase == "downloading" {
+		text = "⬇ " + tx(state, "Baixando") + " " + state.update.offer.tag + "…"
+	} else if state.update.phase == "ready" {
+		text = "⟳ " + tx(state, "Reinicie para usar") + " " + state.update.offer.tag
+	}
+	return ui.link([ui.on(act("updateShow", "")), fill(t.statusFg), tone(t.statusBg), ui.size(ui.TextSize.Caption()), ui.hint(tx(state, "Atualização do Hive Studio")), ui.radius(10), ui.pad(2)], "#", " " + text + " ")
+}
+
 func statusBar(state: model.State, t: theme.Theme): hive.ui.View {
 	mut hive.ui.View[dyn] items = [
 		statusText(t, "⬡ Hive"),
@@ -2840,6 +2863,9 @@ func statusBar(state: model.State, t: theme.Theme): hive.ui.View {
 	]
 	if state.git.repo {
 		append(items, statusClick(t, "⑂ " + state.git.branch, act("side", "git"), tx(state, "Controle de código")))
+	}
+	if state.update.phase == "available" || state.update.phase == "downloading" || state.update.phase == "ready" {
+		append(items, updateBadge(state, t))
 	}
 	append(items, statusText(t, state.status))
 	append(items, ui.spacer())
@@ -2885,6 +2911,71 @@ func statusBar(state: model.State, t: theme.Theme): hive.ui.View {
 
 // ── janelas por cima ─────────────────────────────────────────────────────
 
+// O diálogo da atualização, conforme a fase em que ela está.
+func updateDialog(state: model.State, t: theme.Theme): hive.ui.View {
+	u := state.update
+	close := act("updateClose", "")
+	current := version.current()
+	if u.phase == "checking" {
+		return dialog(t, [strong(t.text, tx(state, "Procurando atualizações…")), small(t.muted, tx(state, "Versão") + " " + current),
+			ui.row([ui.justify(ui.Justify.Center())], [button(t, tx(state, "Fechar"), close, true)])], close)
+	}
+	if u.phase == "latest" {
+		return dialog(t, [strong(t.text, tx(state, "O Hive Studio está atualizado")),
+			small(t.muted, tx(state, "Você tem a versão") + " " + current + "; " + tx(state, "a mais recente publicada é") + " " + u.message + "."),
+			ui.row([ui.justify(ui.Justify.Center())], [button(t, tx(state, "Fechar"), close, true)])], close)
+	}
+	if u.phase == "failed" {
+		return dialog(t, [strong(t.text, tx(state, "Não foi possível atualizar")), small(t.muted, u.message),
+			ui.row([ui.gap(8), ui.justify(ui.Justify.Center())], [
+				button(t, tx(state, "Fechar"), close, true),
+				primary(t, tx(state, "Abrir a página dos releases"), act("updatePage", ""), true)
+			])], close)
+	}
+	if u.phase == "downloading" {
+		return dialog(t, [strong(t.text, tx(state, "Baixando") + " Hive Studio " + u.offer.tag + "…"),
+			small(t.muted, tx(state, "Pode continuar trabalhando; o binário só entra no lugar depois de conferido.")),
+			ui.row([ui.justify(ui.Justify.Center())], [button(t, tx(state, "Fechar"), close, true)])], close)
+	}
+	if u.phase == "ready" {
+		mut restart := tx(state, "Reiniciar agora")
+		mut detail := tx(state, "A versão nova já está no lugar e abre na próxima vez.")
+		if model.anyDirty(state.docs) {
+			restart = tx(state, "Salvar e reiniciar")
+			detail = detail + " " + tx(state, "Há arquivos com alterações por salvar.")
+		}
+		if u.message != "" {
+			detail = u.message
+		}
+		return dialog(t, [strong(t.text, "Hive Studio " + u.offer.tag + " " + tx(state, "instalado")), small(t.muted, detail),
+			ui.row([ui.gap(8), ui.justify(ui.Justify.Center())], [
+				button(t, tx(state, "Depois"), close, true),
+				primary(t, restart, act("updateRestart", ""), true)
+			])], close)
+	}
+	mut notes := markdownBlocks(t, u.notes)
+	if len(notes) == 0 {
+		notes = [label(t.muted, tx(state, "Sem notas para esta versão."))]
+	}
+	return ui.overlay([ui.onDismiss(close)], ui.column([ui.width(820), ui.gap(12), ui.pad(24), fill(t.panel), tone(t.text)], [
+		ui.row([ui.gap(12), ui.align(ui.Align.Center())], [
+			logo(40),
+			ui.column([ui.gap(2)], [
+				strong(t.text, "Hive Studio " + u.offer.tag + " " + tx(state, "disponível")),
+				small(t.muted, tx(state, "Você tem a versão") + " " + current + ". " + tx(state, "O que mudou:"))
+			])
+		]),
+		ui.column([ui.height(460), ui.gap(12), ui.pad(20), fill(t.editor), ui.radius(6), ui.scroll(ui.Axis.Vertical())], notes),
+		ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+			button(t, tx(state, "Ignorar esta versão"), act("updateSkip", ""), true),
+			button(t, tx(state, "Ver no GitHub"), act("updatePage", ""), true),
+			ui.spacer(),
+			button(t, tx(state, "Agora não"), close, true),
+			primary(t, tx(state, "Atualizar agora"), act("updateInstall", ""), true)
+		])
+	]))
+}
+
 func dialog(t: theme.Theme, children: hive.ui.View[], dismiss: model.Cmd): hive.ui.View {
 	return ui.overlay([ui.onDismiss(dismiss)], ui.column([ui.width(480), ui.gap(10), ui.pad(20), fill(t.panel), tone(t.text)], children))
 }
@@ -2910,7 +3001,10 @@ func overlays(state: model.State, t: theme.Theme): hive.ui.View {
 			label(t.text, tx(state, "Uma IDE para Hive, escrita em Hive.")),
 			small(t.muted, tx(state, "Versão") + " " + version.current() + " · hive.ui"),
 			small(t.muted, tx(state, "Configurações em") + " " + settings.path()),
-			ui.row([ui.justify(ui.Justify.Center())], [button(t, tx(state, "Fechar"), act("closeAbout", ""), true)])
+			ui.row([ui.gap(8), ui.justify(ui.Justify.Center())], [
+				button(t, tx(state, "Procurar atualizações…"), action("checkUpdates"), true),
+				button(t, tx(state, "Fechar"), act("closeAbout", ""), true)
+			])
 		], act("closeAbout", ""))
 	}
 	if state.closing != "" {
@@ -2937,6 +3031,9 @@ func overlays(state: model.State, t: theme.Theme): hive.ui.View {
 				button(t, tx(state, "Cancelar"), act("gitCancel", ""), true),
 				danger(t, tx(state, "Descartar"), act("gitDiscard", state.git.confirm))
 			], act("gitCancel", ""))
+	}
+	if state.update.open {
+		return updateDialog(state, t)
 	}
 	if state.peekFile != "" {
 		mut hive.ui.View[dyn] lines = []

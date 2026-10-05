@@ -35,6 +35,8 @@ import ./lib/jsonview
 import ./lib/markdown
 import ./lib/pty.go
 import ./lib/watch.go
+import ./lib/update as updater
+import ./lib/version
 
 // ── explorador ───────────────────────────────────────────────────────────
 //
@@ -829,6 +831,8 @@ proc toggleSetting(state: mut model.State, name: Str): void {
 		prefs.vim = !prefs.vim
 	} else if name == "errorLens" {
 		prefs.errorLens = !prefs.errorLens
+	} else if name == "autoUpdate" {
+		prefs.autoUpdate = !prefs.autoUpdate
 	}
 	applySettings(state, prefs)
 	if name == "showHidden" {
@@ -1536,6 +1540,151 @@ proc updateAgents(state: mut model.State, message: model.Msg, from: Address): Bo
 	return true
 }
 
+// ── atualização automática ───────────────────────────────────────────────
+
+// Procura o último release numa thread própria.
+proc updateCheckWorker(window: Address, current: Str): void {
+	async window(model.Cmd.Post(model.Msg.UpdateChecked(updater.check(current))))
+}
+
+// Baixa, confere e põe o binário novo no lugar, numa thread própria.
+proc updateInstallWorker(window: Address, offer: updater.Offer): void {
+	installed := updater.install(offer)
+	if installed is Result.Ok(exe) {
+		async window(model.Cmd.Post(model.Msg.UpdateInstalled(exe)))
+	} else if installed is Result.Error(why) {
+		async window(model.Cmd.Post(model.Msg.UpdateFailed(why)))
+	}
+}
+
+func updateBusy(state: model.State): Bool {
+	return state.update.phase == "checking" || state.update.phase == "downloading" || state.update.phase == "ready"
+}
+
+// Salva o que estiver por salvar, abre a versão nova na mesma pasta e sai.
+proc updateRestart(state: mut model.State, from: Address): void {
+	if model.anyDirty(state.docs) {
+		saveAll(state)
+	}
+	if model.anyDirty(state.docs) {
+		state.update.message = render.tx(state, "Não foi possível salvar tudo; salve os arquivos e tente de novo.")
+		return
+	}
+	if updater.relaunch(state.update.exe, state.root) is Result.Error(why) {
+		state.update.phase = "failed"
+		state.update.message = render.tx(state, "A versão nova foi instalada, mas não abriu:") + " " + why
+		return
+	}
+	update(state, model.Msg.Quit(), from)
+}
+
+// Com a janela aberta, procura de novo de tempos em tempos; o `due` diz se
+// já passou o intervalo desde a última procura.
+proc watchUpdates(db: Address): void {
+	for ;; {
+		host.pause(3600000)
+		async db(model.Cmd.Post(model.Msg.UpdatePoll()))
+	}
+}
+
+proc startUpdateCheck(state: mut model.State, manual: Bool, from: Address): void {
+	state.update.phase = "checking"
+	state.update.manual = manual
+	mut prefs := state.settings
+	prefs.lastUpdateCheck = hive.time.now()
+	applySettings(state, prefs)
+	async updateCheckWorker(from, version.current())
+}
+
+proc updateSelf(state: mut model.State, message: model.Msg, from: Address): Bool {
+	if message is model.Msg.UpdateCheck(manual) {
+		// Ao abrir (manual falso) a procura é sempre feita, se estiver ligada.
+		if manual {
+			state.about = false
+			state.update.open = true
+		}
+		if updateBusy(state) {
+			return true
+		}
+		if manual || updater.automatic(version.current(), state.settings.autoUpdate) {
+			startUpdateCheck(state, manual, from)
+		}
+	} else if message is model.Msg.UpdatePoll {
+		if !updateBusy(state) && !state.update.open && updater.due(version.current(), state.settings.autoUpdate, state.settings.lastUpdateCheck, hive.time.now()) {
+			startUpdateCheck(state, false, from)
+		}
+	} else if message is model.Msg.UpdateChecked(result) {
+		if result is updater.Check.Found(offer) {
+			// Uma versão que o usuário já dispensou nesta sessão ("Agora não")
+			// não volta a abrir o diálogo sozinha; o selo na barra fica.
+			known := state.update.offer.tag == offer.tag
+			state.update.offer = offer
+			state.update.notes = markdown.render(offer.notes)
+			if !state.update.manual && offer.tag == state.settings.skipVersion {
+				state.update.phase = ""
+			} else {
+				state.update.phase = "available"
+				state.update.open = state.update.manual || !known
+				state.status = "Hive Studio {offer.tag} " + render.tx(state, "disponível")
+			}
+		} else if result is updater.Check.UpToDate(tag) {
+			state.update.phase = "latest"
+			state.update.message = tag
+		} else if result is updater.Check.Failed(reason) {
+			state.update.phase = "failed"
+			state.update.message = reason
+		}
+		// Uma procura sozinha, ao abrir, só aparece quando há o que oferecer.
+		if !state.update.manual && state.update.phase != "available" {
+			state.update.phase = ""
+		}
+	} else if message is model.Msg.UpdateShow {
+		state.update.open = state.update.phase != ""
+	} else if message is model.Msg.UpdateClose {
+		state.update.open = false
+		// Uma instalação que falhou volta a ser oferecida, para tentar de novo.
+		if state.update.phase == "failed" && state.update.offer.tag != "" {
+			state.update.phase = "available"
+		} else if state.update.phase == "latest" || state.update.phase == "failed" {
+			state.update.phase = ""
+		}
+	} else if message is model.Msg.UpdateSkip {
+		mut prefs := state.settings
+		prefs.skipVersion = state.update.offer.tag
+		applySettings(state, prefs)
+		state.update.phase = ""
+		state.update.open = false
+	} else if message is model.Msg.UpdateInstall {
+		if state.update.offer.tag != "" && !updateBusy(state) {
+			state.update.phase = "downloading"
+			state.update.open = true
+			async updateInstallWorker(from, state.update.offer)
+		}
+	} else if message is model.Msg.UpdateInstalled(exe) {
+		state.update.phase = "ready"
+		state.update.exe = exe
+		state.update.open = true
+		state.status = "Hive Studio {state.update.offer.tag} " + render.tx(state, "instalado; reinicie para usar")
+	} else if message is model.Msg.UpdateFailed(reason) {
+		state.update.phase = "failed"
+		state.update.message = reason
+		state.update.open = true
+	} else if message is model.Msg.UpdateRestart {
+		if state.update.phase == "ready" {
+			updateRestart(state, from)
+		}
+	} else if message is model.Msg.UpdatePage {
+		mut page := state.update.offer.page
+		if page == "" {
+			page = updater.releasesPage()
+		}
+		async dialogs.openUrl(page)
+	} else {
+		return false
+	}
+	return true
+}
+
 // ── o explorador pelo teclado ────────────────────────────────────────────
 
 // A linha selecionada da árvore, ou -1.
@@ -2032,7 +2181,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 }
 
 proc update(state: mut model.State, message: model.Msg, from: Address): void {
-	if updateTools(state, message, from) || updateVim(state, message, from) || updateAgents(state, message, from) {
+	if updateTools(state, message, from) || updateVim(state, message, from) || updateAgents(state, message, from) || updateSelf(state, message, from) {
 		return
 	}
 	mut prefs := state.settings
@@ -2496,6 +2645,8 @@ proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Ms
 		return Result.Ok(model.Msg.Quit())
 	} else if action == "about" {
 		return Result.Ok(model.Msg.ShowAbout())
+	} else if action == "checkUpdates" {
+		return Result.Ok(model.Msg.UpdateCheck(true))
 	} else if action == "docs" {
 		return Result.Ok(model.Msg.OpenDocs())
 	} else if action == "pin" {
@@ -2545,6 +2696,8 @@ func escapeKind(state: model.State): Str {
 		return "dialog"
 	} else if state.git.confirm != "" {
 		return "confirm"
+	} else if state.update.open {
+		return "update"
 	} else if state.peekFile != "" {
 		return "peek"
 	} else if len(state.suggestions) > 0 {
@@ -2564,6 +2717,8 @@ func escapeFor(kind: Str): Result<model.Msg, Bool> {
 		return Result.Ok(model.Msg.CancelRecording())
 	} else if kind == "about" {
 		return Result.Ok(model.Msg.CloseAbout())
+	} else if kind == "update" {
+		return Result.Ok(model.Msg.UpdateClose())
 	} else if kind == "palette" {
 		return Result.Ok(model.Msg.PaletteClose())
 	} else if kind == "dialog" {
@@ -2651,6 +2806,18 @@ proc clickMsg(state: mut model.State, event: model.Event): Result<model.Msg, Boo
 		return actionMsg(state, arg, event.caret)
 	} else if a == "closeAbout" {
 		return Result.Ok(model.Msg.CloseAbout())
+	} else if a == "updateShow" {
+		return Result.Ok(model.Msg.UpdateShow())
+	} else if a == "updateClose" {
+		return Result.Ok(model.Msg.UpdateClose())
+	} else if a == "updateSkip" {
+		return Result.Ok(model.Msg.UpdateSkip())
+	} else if a == "updateInstall" {
+		return Result.Ok(model.Msg.UpdateInstall())
+	} else if a == "updateRestart" {
+		return Result.Ok(model.Msg.UpdateRestart())
+	} else if a == "updatePage" {
+		return Result.Ok(model.Msg.UpdatePage())
 	} else if a == "panelMax" {
 		return Result.Ok(model.Msg.TogglePanelMax())
 	} else if a == "termSubmit" {
@@ -3126,6 +3293,12 @@ proc turn(win: mut Win, command: model.Cmd, self: Address): model.Cmd {
 		async watchGit(self)
 		async watchDocs(self)
 		async watchScreens(self)
+		// Ao abrir, uma procura por versão nova (se estiver ligada e não for
+		// um build de desenvolvimento), e outra de tempos em tempos.
+		if !win.extra.e2e {
+			async self(model.Cmd.Post(model.Msg.UpdateCheck(false)))
+			async watchUpdates(self)
+		}
 	}
 	if command is model.Cmd.Ui(text) {
 		if model.Event.decode(text, hive.json.codec()) is Result.Ok(event) {
@@ -3139,6 +3312,7 @@ proc turn(win: mut Win, command: model.Cmd, self: Address): model.Cmd {
 }
 
 proc initial(folder: Str): Win {
+	updater.cleanup()
 	prefs := settings.load()
 	mut start := model.initial(folder, prefs)
 	openRoot(start, folder)
