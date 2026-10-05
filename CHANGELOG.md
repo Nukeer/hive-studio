@@ -1,6 +1,6 @@
 # Changelog
 
-## Não lançado
+## v0.2.1
 
 ### Atualização automática
 

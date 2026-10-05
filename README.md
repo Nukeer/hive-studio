@@ -297,12 +297,12 @@ carimba a versão em `lib/version.hive`, compila para Linux, macOS e Windows
 `SHA256SUMS`. As notas do release são a seção da versão no `CHANGELOG.md`. O
 `hivec` usado no CI está fixado por tag e digest em `.github/hivec.txt`.
 
-Para publicar uma versão (a 0.2.0, por exemplo), com a seção dela no
+Para publicar uma versão (a 0.2.1, por exemplo), com a seção dela no
 `CHANGELOG.md` e o merge feito na `main`:
 
 ```
-git tag v0.2.0
-git push origin main v0.2.0
+git tag v0.2.1
+git push origin main v0.2.1
 ```
 
 ### Atualização automática
