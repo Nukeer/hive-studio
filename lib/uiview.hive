@@ -932,10 +932,15 @@ func toolButton(state: model.State, t: theme.Theme, text: Str, command: Str, rea
 		ui.hint(tx(state, command) + render.keyHint(state, command))]), text)
 }
 
+// O ícone do Hive Studio (assets/icon.png, o mesmo da janela e do .exe).
+func logo(side: Int): hive.ui.View {
+	return ui.image([ui.width(side), ui.height(side)], "/_hive/icon", "Hive Studio")
+}
+
 func titleBar(state: model.State, t: theme.Theme, open: Str): hive.ui.View {
 	idle := state.running == ""
 	ready := idle && render.targetOf(state) != ""
-	mut hive.ui.View[dyn] items = [label(t.accent, "⬡")]
+	mut hive.ui.View[dyn] items = [logo(18)]
 	for each name in menuNames() {
 		mut color := t.text
 		mut next := name
@@ -1630,7 +1635,7 @@ func breadcrumb(state: model.State, t: theme.Theme): hive.ui.View {
 			append(items, small(t.muted, "📌 " + tx(state, "entrada")))
 		}
 		append(items, ui.spacer())
-		if model.hasPreview(doc.path) {
+		if model.hasPreview(doc.path) && !model.isPicture(doc.path) {
 			append(items, modeSwitch(state, t, doc))
 		}
 		return ui.row([ui.gap(12), ui.pad(6), ui.align(ui.Align.Center()), fill(t.editor)], items)
@@ -1975,11 +1980,17 @@ func mdInline(t: theme.Theme, html: Str, attrs: hive.ui.Attr[]): hive.ui.View {
 	mut hive.ui.View[dyn] pieces = []
 	mut rest := html
 	for ;; {
-		if rest is "{before}<img src=\"{src}\" alt=\"{alt}\">{after}" {
+		if rest is "{before}<img src=\"{src}\" alt=\"{alt}\"{extra}>{after}" {
 			if before != "" {
 				append(pieces, ui.text(attrs, stripTags(before)))
 			}
-			append(pieces, ui.image([], src, unescape(alt)))
+			mut hive.ui.Attr[dyn] look = []
+			if extra is " width=\"{wide}\"" {
+				if hive.conv.sti(wide) is Result.Ok(n) {
+					append(look, ui.width(n))
+				}
+			}
+			append(pieces, ui.image(look, src, unescape(alt)))
 			rest = after
 		} else {
 			break
@@ -2208,12 +2219,45 @@ func numberOr(text: Str, fallback: Int): Int {
 }
 
 func previewOf(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome): hive.ui.View {
-	if model.isMarkdown(doc.path) {
+	if model.isImage(doc.path) {
+		return imageView(state, t, doc)
+	} else if model.isMarkdown(doc.path) {
 		return markdownView(state, t, doc)
 	} else if model.isJson(doc.path) {
 		return jsonView(state, t, doc, extra)
 	}
 	return codeView(state, t, doc, extra.top)
+}
+
+// Uma imagem (PNG, JPEG, GIF, WebP, SVG) no meio, sobre um fundo quadriculado
+// de tom neutro, com o nome e o tamanho embaixo.
+func imageView(state: model.State, t: theme.Theme, doc: model.Doc): hive.ui.View {
+	mut src := ""
+	if doc.view is "{head}<img src=\"{found}\" alt=\"{tail}" {
+		src = found
+	}
+	mut shown := ui.image([], src, doc.name)
+	if src == "" {
+		shown = label(t.muted, tx(state, "Não foi possível mostrar a imagem (até 8 MB)."))
+	}
+	return ui.column([ui.grow(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [
+		ui.column([ui.grow(1), ui.pad(24), ui.gap(12), ui.align(ui.Align.Center()), ui.justify(ui.Justify.Center())], [
+			ui.column([ui.pad(12), fill(t.panel), ui.radius(6)], [shown]),
+			small(t.muted, doc.name + "  ·  " + sizeLabel(doc.path))
+		])
+	])
+}
+
+func sizeLabel(path: Str): Str {
+	if hive.file.size(path) is Result.Ok(bytes) {
+		if bytes >= 1048576 {
+			return "{bytes / 1048576}.{bytes % 1048576 * 10 / 1048576} MB"
+		} else if bytes >= 1024 {
+			return "{bytes / 1024} KB"
+		}
+		return "{bytes} B"
+	}
+	return ""
 }
 
 // ── editor ───────────────────────────────────────────────────────────────
@@ -2270,9 +2314,12 @@ func docBody(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome):
 	if mode == "preview" {
 		return previewOf(state, t, doc, extra)
 	} else if mode == "split" {
+		// Metade cada: sem `width(1)`, a coluna não fica mais estreita que a
+		// linha mais comprida dela (um bloco de código do preview), e o editor
+		// fica com o resto.
 		return ui.row([ui.grow(1), ui.gap(1), fill(t.border)], [
-			ui.column([ui.grow(1)], [codeEditor(state, t, doc, extra)]),
-			ui.column([ui.grow(1)], [previewOf(state, t, doc, extra)])
+			ui.column([ui.grow(1), ui.width(1)], [codeEditor(state, t, doc, extra)]),
+			ui.column([ui.grow(1), ui.width(1)], [previewOf(state, t, doc, extra)])
 		])
 	}
 	return ui.column([ui.grow(1)], [codeEditor(state, t, doc, extra)])
@@ -2289,7 +2336,7 @@ func welcome(state: model.State, t: theme.Theme): hive.ui.View {
 		]))
 	}
 	mut hive.ui.View[dyn] all = [
-		ui.text([tone(t.accent), ui.size(ui.TextSize.Title())], "⬡"),
+		logo(96),
 		ui.text([tone(t.text), ui.size(ui.TextSize.Title()), ui.heading(1)], "Hive Studio"),
 		label(t.muted, tx(state, "Abra um arquivo no explorador para começar.")),
 		ui.row([ui.height(12)], [])
@@ -2409,7 +2456,7 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 		setting(t, tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
 			check(state, t, "vim", "Usar as teclas do Vim no editor", prefs.vim)),
 		section(t, tx(state, "Explorador")),
-		setting(t, tx(state, "Arquivos ocultos"), "", check(state, t, "showHidden", "Mostrar arquivos ocultos e artefatos de build", prefs.showHidden)),
+		setting(t, tx(state, "Arquivos ocultos"), "", check(state, t, "showHidden", "Incluir ocultos e artefatos de build na busca e no TODO", prefs.showHidden)),
 		section(t, tx(state, "Agentes")),
 		small(t.muted, tx(state, "Programas que rodam no painel AGENTE, num terminal de verdade, na pasta aberta. Cada um usa o próprio login (a sua assinatura); o Hive Studio não vê nem guarda credenciais.")),
 		setting(t, agents.labelOf("claude"), tx(state, "Comando (com argumentos, se precisar)."),
@@ -2852,7 +2899,7 @@ func overlays(state: model.State, t: theme.Theme): hive.ui.View {
 	}
 	if state.about {
 		return dialog(t, [
-			ui.text([tone(t.accent), ui.size(ui.TextSize.Title())], "⬡"),
+			logo(64),
 			strong(t.text, "Hive Studio"),
 			label(t.text, tx(state, "Uma IDE para Hive, escrita em Hive.")),
 			small(t.muted, tx(state, "Versão") + " " + version.current() + " · hive.ui"),
@@ -2935,7 +2982,9 @@ func palette(state: model.State, t: theme.Theme): hive.ui.View {
 		}
 		append(items, ui.row(box, [fileIcon(name), clickable(t.text, name, act("paletteAccept", "{i}"), rel), small(t.muted, render.folderOf(rel))]))
 	}
-	if len(found) == 0 {
+	if len(render.trimPalette(state.palette.text)) < render.paletteMinimum() {
+		append(items, empty(t, tx(state, "Digite ao menos 3 letras do nome")))
+	} else if len(found) == 0 {
 		append(items, empty(t, tx(state, "Nenhum arquivo encontrado")))
 	}
 	return ui.overlay([ui.onDismiss(act("escape", ""))], ui.column([ui.width(620), ui.gap(8), ui.pad(12), fill(t.panel), tone(t.text)], [

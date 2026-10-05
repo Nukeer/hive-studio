@@ -6,6 +6,7 @@ package native
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -510,4 +512,245 @@ func WordAt(text string, at int) []int {
 		to++
 	}
 	return []int{from, to}
+}
+
+// QuickOpen são os arquivos do Ctrl+P que casam com `wanted`, como posições
+// em `files`, dos melhores para os piores — até `limit`: o nome começa com a
+// busca, o nome a contém, o caminho tem todas as palavras, as letras aparecem
+// na ordem (só olhado enquanto há lugar). Em Go porque passa por milhares de
+// caminhos a cada tecla.
+func QuickOpen(files []string, wanted string, limit int) []int {
+	found := []int{}
+	q := strings.ToLower(strings.ReplaceAll(wanted, "\\", "/"))
+	if q == "" {
+		for i := 0; i < len(files) && i < limit; i++ {
+			found = append(found, i)
+		}
+		return found
+	}
+	var words []string
+	for _, w := range strings.Split(q, " ") {
+		if w != "" {
+			words = append(words, w)
+		}
+	}
+	squeezed := []rune(strings.ReplaceAll(q, " ", ""))
+	groups := [4][]int{}
+	count := 0
+	for i, file := range files {
+		path := strings.ToLower(file)
+		name := path
+		if at := strings.LastIndexAny(path, "/\\"); at >= 0 {
+			name = path[at+1:]
+		}
+		rank := 0
+		switch {
+		case strings.HasPrefix(name, q):
+			rank = 1
+		case strings.Contains(name, q):
+			rank = 2
+		case containsAll(path, words):
+			rank = 3
+		case count < limit && subsequence(path, squeezed):
+			rank = 4
+		}
+		if rank > 0 {
+			groups[rank-1] = append(groups[rank-1], i)
+			count++
+		}
+	}
+	for _, group := range groups {
+		for _, i := range group {
+			if len(found) >= limit {
+				return found
+			}
+			found = append(found, i)
+		}
+	}
+	return found
+}
+
+func containsAll(text string, words []string) bool {
+	for _, w := range words {
+		if !strings.Contains(text, w) {
+			return false
+		}
+	}
+	return true
+}
+
+func subsequence(text string, wanted []rune) bool {
+	k := 0
+	for _, r := range text {
+		if k < len(wanted) && wanted[k] == r {
+			k++
+		}
+	}
+	return k >= len(wanted)
+}
+
+// AllFiles são os arquivos debaixo de `root`, como caminhos relativos com
+// barras normais, em ordem — no máximo `limit`. As pastas são abertas por
+// camadas (as mais rasas primeiro), sem entrar em node_modules, .git, dist e
+// *.hive-build; os ocultos (ponto na frente, *.exe, *.exe~) só com `showHidden`.
+// Em Go porque um projeto grande tem milhares de pastas.
+func AllFiles(root string, showHidden bool, limit int) []string {
+	return walk(root, limit, func(name string, folder bool) bool {
+		if !showHidden && hiddenName(name) {
+			return true
+		}
+		return folder && skippedFolder(name)
+	})
+}
+
+// EveryFile são todos os arquivos debaixo de `root`, ocultos e de build
+// inclusive — só a pasta .git fica de fora. É a lista do Ctrl+P.
+func EveryFile(root string, limit int) []string {
+	return walk(root, limit, func(name string, folder bool) bool {
+		return folder && name == ".git"
+	})
+}
+
+// walk abre as pastas por camadas (as mais rasas primeiro) e devolve os
+// arquivos em ordem, no máximo `limit`; `skip` diz o que pular.
+func walk(root string, limit int, skip func(name string, folder bool) bool) []string {
+	found := []string{}
+	pending := []string{""}
+	for next := 0; next < len(pending) && len(found) < limit; next++ {
+		current := pending[next]
+		entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(current)))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			rel := name
+			if current != "" {
+				rel = current + "/" + name
+			}
+			folder := entry.IsDir()
+			if entry.Type()&os.ModeSymlink != 0 {
+				folder = IsDir(filepath.Join(root, filepath.FromSlash(rel)))
+			}
+			if skip(name, folder) {
+				continue
+			}
+			if folder {
+				pending = append(pending, rel)
+			} else if len(found) < limit {
+				found = append(found, rel)
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+func hiddenName(name string) bool {
+	return strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".hive-build") || strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".exe~")
+}
+
+func skippedFolder(name string) bool {
+	return name == "node_modules" || name == ".git" || name == "dist" || strings.HasSuffix(name, ".hive-build")
+}
+
+// SameFile diz se os dois caminhos levam ao mesmo arquivo, escritos como for:
+// barras trocadas, maiúsculas, o nome curto do Windows (FELIPE~1) ou o longo.
+func SameFile(a string, b string) bool {
+	x, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	y, err := os.Stat(b)
+	return err == nil && os.SameFile(x, y)
+}
+
+// Inside é o caminho de `path` a partir de `root`, com barras normais, quando
+// ele está debaixo dela (nomes curtos e longos do Windows contam igual); ""
+// quando não está.
+func Inside(root string, path string) string {
+	r, err := resolved(root)
+	if err != nil {
+		return ""
+	}
+	p, err := resolved(path)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(r, p)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+// resolved é o caminho absoluto, com os nomes como estão no disco.
+func resolved(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
+// A imagem que cabe numa página: até 8 MB.
+const imageLimit = 8 << 20
+
+var images = struct {
+	sync.Mutex
+	byPath map[string][2]string
+}{byPath: map[string][2]string{}}
+
+// ImageData é a imagem em `path` como data URL (PNG, JPEG, GIF, WebP, SVG),
+// para a janela mostrar sem servir o arquivo; "" quando não é uma imagem, não
+// dá para ler ou passa de 8 MB. Guardada até o arquivo mudar.
+func ImageData(path string) string {
+	kind := imageKind(path)
+	if kind == "" {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() > imageLimit {
+		return ""
+	}
+	stamp := strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+	images.Lock()
+	cached, ok := images.byPath[path]
+	images.Unlock()
+	if ok && cached[0] == stamp {
+		return cached[1]
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	data := "data:" + kind + ";base64," + base64.StdEncoding.EncodeToString(body)
+	images.Lock()
+	images.byPath[path] = [2]string{stamp, data}
+	images.Unlock()
+	return data
+}
+
+// SvgData é um SVG ainda não salvo (o texto do editor) como data URL.
+func SvgData(text string) string {
+	if len(text) > imageLimit {
+		return ""
+	}
+	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(text))
+}
+
+func imageKind(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	}
+	return ""
 }

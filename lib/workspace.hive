@@ -92,10 +92,6 @@ func parentOf(path: Str): Str {
 	return "."
 }
 
-func isHidden(name: Str): Bool {
-	return name is ".{rest}" || name is "{stem}.hive-build" || name is "{stem}.exe" || name is "{stem}.exe~"
-}
-
 func isHive(path: Str): Bool {
 	return path is "{stem}.hive"
 }
@@ -107,9 +103,9 @@ func entryOrder(a: model.Entry, b: model.Entry): Bool {
 	return a.name < b.name
 }
 
-// O conteúdo de uma pasta: pastas primeiro; ocultos e artefatos de build
-// ficam fora a menos que `showHidden` peça.
-func listEntries(folder: Str, showHidden: Bool): Result<model.Entry[dyn], Str> {
+// O conteúdo de uma pasta: pastas primeiro, e tudo o que há nela — ocultos e
+// artefatos de build inclusive —, menos a pasta .git.
+func listEntries(folder: Str): Result<model.Entry[dyn], Str> {
 	listed := hive.file.list(folder)
 	if listed is Result.Error(why) {
 		return Result.Error(why.message)
@@ -117,7 +113,7 @@ func listEntries(folder: Str, showHidden: Bool): Result<model.Entry[dyn], Str> {
 	mut model.Entry[dyn] found = []
 	if listed is Result.Ok(names) {
 		for each name in names {
-			if showHidden || !isHidden(name) {
+			if name != ".git" {
 				path := joinPath(folder, name)
 				append(found, model.Entry(name, path, native.isDir(path)))
 			}
@@ -131,13 +127,13 @@ func isExpanded(expanded: Str[], path: Str): Bool {
 }
 
 // As linhas visíveis da árvore: cada pasta expandida mostra seus filhos logo abaixo.
-proc buildTree(folder: Str, depth: Int, expanded: mut Str[dyn], showHidden: Bool, rows: mut model.TreeRow[dyn]): void {
-	if listEntries(folder, showHidden) is Result.Ok(entries) {
+proc buildTree(folder: Str, depth: Int, expanded: mut Str[dyn], rows: mut model.TreeRow[dyn]): void {
+	if listEntries(folder) is Result.Ok(entries) {
 		for each entry in entries {
 			open := entry.folder && isExpanded(expanded, entry.path)
 			append(rows, model.TreeRow(entry, depth, open))
 			if open {
-				buildTree(entry.path, depth + 1, expanded, showHidden, rows)
+				buildTree(entry.path, depth + 1, expanded, rows)
 			}
 		}
 	}

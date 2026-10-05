@@ -23,7 +23,8 @@ type TextEdit {
 
 func builtins(): Str[dyn] {
 	return ["len", "bytes", "append", "prepend", "drop", "join", "split", "replaceFirst", "replaceAll",
-		"indexOf", "row", "column", "toTable", "map", "filter", "filterMap", "sort", "encode", "spawn", "at", "kill"]
+		"indexOf", "row", "column", "toTable", "map", "filter", "filterMap", "sort", "encode", "spawn", "at", "kill",
+		"hide", "reveal", "bypass", "Secret", "SecretError"]
 }
 
 func modules(): Str[dyn] {
@@ -44,7 +45,7 @@ func members(module: Str): Str[dyn] {
 	} else if module == "json" {
 		return ["codec", "JsonValue", "JsonError"]
 	} else if module == "crypto" {
-		return ["sha256", "sha512", "hmacSha256", "encrypt", "decrypt", "base64Encode", "base64Decode", "randomHex", "jwtCodec", "jwtDecode", "jwtHeader", "CryptoError", "JwtError"]
+		return ["sha256", "sha512", "hmacSha256", "encrypt", "decrypt", "base64Encode", "base64Decode", "randomHex", "randomSecret", "jwtCodec", "jwtDecode", "jwtHeader", "CryptoError", "JwtError"]
 	} else if module == "net" {
 		return ["httpRequest", "httpServe", "wsConnect", "wsServe", "wsSend", "wsReceive", "wsRequest", "wsClose",
 			"socketConnect", "socketServe", "socketSend", "socketReceive", "socketReceiveLine", "socketPeer", "socketClose",
@@ -56,14 +57,20 @@ func members(module: Str): Str[dyn] {
 	} else if module == "time" {
 		return ["now", "timezone", "timezoneOffset", "format", "dateFrom", "dateTimeFrom", "year", "month", "day", "weekday", "lastDayOfMonth", "hour", "minute", "second", "millisecond"]
 	} else if module == "env" {
-		return ["get", "EnvironmentError"]
+		return ["get", "getSecret", "EnvironmentError"]
 	} else if module == "sql" {
 		return ["run", "raw", "connect", "pool", "close", "DatabaseDriver", "SqlConnection", "SqlError", "Fragment"]
 	} else if module == "ui" {
 		return ["window", "webview", "html", "page", "row", "column", "spacer", "spinner", "none", "overlay", "text", "image", "link", "icon",
 			"button", "input", "textarea", "checkbox", "select", "table", "canvas", "scene", "inset",
 			"gap", "pad", "width", "height", "grow", "align", "justify", "scroll", "size", "heading", "tone", "background", "paint",
-			"on", "onInput", "onSubmit", "onChoose", "onToggle", "onPick", "onSort", "View", "Tone", "Align", "Justify", "TextSize", "Axis", "Icon"]
+			"code", "ink", "shade", "squiggle", "underline", "marker", "band", "note",
+			"title", "keys", "caret", "focus", "clip", "perform", "numbers", "tabSize", "fontSize", "readOnly",
+			"border", "borderTone", "radius", "ring", "hover", "anchor", "touch", "placeholder", "hint", "disabled", "busy",
+			"on", "onInput", "onSubmit", "onChoose", "onToggle", "onPick", "onSort", "onDismiss",
+			"onKey", "onEdit", "onCaret", "onView", "onFit", "onHover", "onJump", "onProbe", "onPaste",
+			"onMenu", "onMiddle", "onDouble", "onDrag",
+			"View", "Run", "Tone", "Align", "Justify", "TextSize", "Axis", "Anchor", "Icon"]
 	}
 	return []
 }

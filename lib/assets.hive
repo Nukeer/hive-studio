@@ -358,6 +358,8 @@ func shell(): Str {
 		.md a\{color:var(--accent);text-decoration:none}
 		.md a:hover\{text-decoration:underline}
 		.md img\{max-width:100%}
+		.img\{display:flex;align-items:center;justify-content:center;min-height:100%;padding:24px;box-sizing:border-box}
+		.img img\{max-width:100%;max-height:100%;padding:12px;border-radius:6px;background:var(--panel,#252526)}
 		.md hr\{border:0;border-top:1px solid var(--border);margin:1.5em 0}
 		.md .md-img\{color:var(--muted)}
 		body.gone::after\{content:"conexão encerrada — feche a janela";position:fixed;bottom:34px;left:50%;transform:translateX(-50%);background:var(--danger);color:#fff;padding:6px 14px;border-radius:6px;font-size:12px}

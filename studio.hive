@@ -40,7 +40,7 @@ import ./lib/watch.go
 
 proc reload(state: mut model.State): void {
 	mut model.TreeRow[dyn] rows = []
-	workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden, rows)
+	workspace.buildTree(state.root, 0, state.expanded, rows)
 	state.tree = rows
 }
 
@@ -134,9 +134,21 @@ proc reloadDoc(state: mut model.State, i: Int): void {
 	}
 }
 
+// O que se abre de um arquivo: o texto, ou — numa imagem de bytes, que só se
+// vê — nada, desde que ela exista.
+proc readDoc(path: Str): Result<Str, hive.file.FileError> {
+	if model.isPicture(path) {
+		if hive.file.size(path) is Result.Error(why) {
+			return Result.Error(why)
+		}
+		return Result.Ok("")
+	}
+	return hive.file.read(path)
+}
+
 // O texto de um arquivo, com as quebras de linha de qualquer sistema como "\n".
 proc diskText(path: Str): Result<Str, Str> {
-	read := hive.file.read(path)
+	read := readDoc(path)
 	if read is Result.Ok(raw) {
 		return Result.Ok(replaceAll(replaceAll(raw, "\r\n", "\n"), "\r", "\n"))
 	} else if read is Result.Error(why) {
@@ -254,7 +266,7 @@ proc refreshTree(state: mut model.State): void {
 	before := len(state.expanded)
 	pruneExpanded(state)
 	mut model.TreeRow[dyn] fresh = []
-	workspace.buildTree(state.root, 0, state.expanded, state.settings.showHidden, fresh)
+	workspace.buildTree(state.root, 0, state.expanded, fresh)
 	if fresh == state.tree && len(state.expanded) == before {
 		return
 	}
@@ -383,14 +395,32 @@ func findDoc(docs: model.Doc[], path: Str): Result<Int, Bool> {
 	return Result.Error(false)
 }
 
+// A aba de um arquivo já aberto, pelo arquivo e não pela grafia do caminho: o
+// git escreve a raiz com o nome longo e barras normais, o explorador com o
+// caminho que a pasta foi aberta.
+proc findOpen(docs: model.Doc[], path: Str): Result<Int, Bool> {
+	if findDoc(docs, path) is Result.Ok(index) {
+		return Result.Ok(index)
+	}
+	for i := 0; i < len(docs); i++ {
+		if native.sameFile(docs[i].path, path) {
+			return Result.Ok(i)
+		}
+	}
+	return Result.Error(false)
+}
+
 proc openDoc(state: mut model.State, path: Str): void {
 	state.selected = path
 	state.editorView = model.EditorView.DocView()
-	if findDoc(state.docs, path) is Result.Ok(index) {
+	if findOpen(state.docs, path) is Result.Ok(index) {
 		state.active = index
+		if state.docs bounds index {
+			state.selected = state.docs[index].path
+		}
 		return
 	}
-	read := hive.file.read(path)
+	read := readDoc(path)
 	if read is Result.Ok(raw) {
 		mut eol := "\n"
 		if indexOf(raw, "\r\n") is Result.Ok(_) {
@@ -416,6 +446,9 @@ proc openDoc(state: mut model.State, path: Str): void {
 
 // Grava o documento e o marca como salvo. Devolve o erro, ou "".
 proc saveDoc(doc: mut model.Doc): Str {
+	if model.isPicture(doc.path) {
+		return ""
+	}
 	mut contents := doc.text
 	if doc.eol == "\r\n" {
 		contents = replaceAll(doc.text, "\n", "\r\n")
@@ -850,7 +883,54 @@ func renderView(path: Str, text: Str, labels: jsonview.Labels): Rendered {
 		return Rendered(seen.html, model.Diagnostic(path, seen.problem.line, labels.column + " {seen.problem.column}: " + seen.problem.message,
 			analysis.lineText(text, seen.problem.line)))
 	}
-	return Rendered("<div class=\"md\">" + markdown.render(text) + "</div>", model.Diagnostic(path, 0, "", ""))
+	if model.isImage(path) {
+		mut src := native.imageData(path)
+		if model.isSvg(path) {
+			src = native.svgData(text)
+		}
+		return Rendered("<div class=\"img\"><img src=\"" + src + "\" alt=\"" + highlight.escape(workspace.baseName(path)) + "\"></div>",
+			model.Diagnostic(path, 0, "", ""))
+	}
+	return Rendered("<div class=\"md\">" + localImages(markdown.render(text), workspace.parentOf(path)) + "</div>", model.Diagnostic(path, 0, "", ""))
+}
+
+// O texto do `alt` de uma imagem, sem a largura que pode vir depois dele.
+func altText(attrs: Str): Str {
+	if attrs is "\"{alt}\" width={_w}" {
+		return alt
+	}
+	if attrs is "\"{alt}\"" {
+		return alt
+	}
+	return attrs
+}
+
+// As imagens do Markdown que são arquivos (`local:` caminho) viram a imagem
+// lida do disco, a partir da pasta do .md; a que não dá para ler fica com o
+// nome, como um link quebrado.
+func localImages(html: Str, folder: Str): Str {
+	mut Str[dyn] out = []
+	mut rest := html
+	for ;; {
+		if rest is "{before}<img src=\"local:{url}\" alt={alt}>{after}" {
+			append(out, before)
+			mut path := workspace.joinPath(folder, url)
+			if url is "/{tail}" || url is "{drive}:/{tail}" {
+				path = url
+			}
+			data := native.imageData(path)
+			if data != "" {
+				append(out, "<img src=\"" + data + "\" alt=" + alt + ">")
+			} else {
+				append(out, "<span class=\"md-img\">🖼 " + altText(alt) + "</span>")
+			}
+			rest = after
+		} else {
+			append(out, rest)
+			return join(out, "")
+		}
+	}
+	return join(out, "")
 }
 
 // Acima disto (em caracteres), a visualização é feita numa thread à parte.
@@ -1834,11 +1914,13 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 	} else if message is model.Msg.OpenAt(path, line, column) {
 		jumpTo(state, path, line, column)
 	} else if message is model.Msg.PaletteOpen {
-		state.palette = model.Palette(true, "", 0, search.allFiles(state.root, state.settings.showHidden, 20000))
+		Int[dyn] none = []
+		state.palette = model.Palette(true, "", 0, search.everyFile(state.root, 20000), none)
 		withFocus(state, "palette")
 	} else if message is model.Msg.PaletteTyped(text) {
 		state.palette.text = text
 		state.palette.index = 0
+		state.palette.found = render.paletteSearch(state.palette.files, text)
 	} else if message is model.Msg.PaletteMove(delta) {
 		count := paletteCount(state)
 		if count > 0 {
@@ -1953,7 +2035,14 @@ proc update(state: mut model.State, message: model.Msg, from: Address): void {
 	if message is model.Msg.Toggle(path) {
 		toggle(state, path)
 	} else if message is model.Msg.Open(path) {
-		openDoc(state, path)
+		// Um caminho de fora do explorador (o git dá o seu) é escrito a partir
+		// da raiz, como o explorador escreveria.
+		rel := native.inside(state.root, path)
+		if rel != "" {
+			openDoc(state, workspace.joinPath(state.root, rel))
+		} else {
+			openDoc(state, path)
+		}
 	} else if message is model.Msg.Refresh {
 		reload(state)
 	} else if message is model.Msg.CollapseAll {

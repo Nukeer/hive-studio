@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="honey" x1="0" y1="0" x2="0" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD25A"/>
+      <stop offset="0.55" stop-color="#F7A81B"/>
+      <stop offset="1" stop-color="#E0820A"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="56" x2="0" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#33271B"/>
+      <stop offset="1" stop-color="#1E1610"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="14" x2="0" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- favo externo, cantos arredondados pelo traço -->
+  <polygon points="128,18 223.3,73 223.3,183 128,238 32.7,183 32.7,73"
+           fill="url(#honey)" stroke="url(#honey)" stroke-width="22" stroke-linejoin="round"/>
+  <!-- brilho de cima -->
+  <polygon points="128,24 218,76 218,128 38,128 38,76"
+           fill="url(#shine)" stroke="none" opacity="0.6"/>
+  <!-- a tela do editor -->
+  <polygon points="128,60 187.8,94.5 187.8,161.5 128,196 68.2,161.5 68.2,94.5"
+           fill="url(#screen)" stroke="url(#screen)" stroke-width="16" stroke-linejoin="round"/>
+  <!-- < > -->
+  <g fill="none" stroke="#FFC53D" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="110,103 86,128 110,153"/>
+    <polyline points="146,103 170,128 146,153"/>
+  </g>
+  <!-- o cursor: um alvéolo -->
+  <polygon points="128,115 139.3,121.5 139.3,134.5 128,141 116.7,134.5 116.7,121.5"
+           fill="#FFC53D" stroke="#FFC53D" stroke-width="4" stroke-linejoin="round"/>
+</svg>

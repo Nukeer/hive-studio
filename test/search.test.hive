@@ -44,3 +44,18 @@ test "busca no projeto acha linhas em vários arquivos" {
 	}
 	assert search.allFiles("./search-test", false, 100) == ["lib/a.hive", "main.hive"]
 }
+
+test "o Ctrl+P lista os ocultos e o build, só não a pasta .git" {
+	for each folder in ["./every-test/.git", "./every-test/.vscode", "./every-test/node_modules/x"] {
+		if hive.file.makeDir(folder) is Result.Error(why) {
+			panic why
+		}
+	}
+	for each file in ["./every-test/.git/HEAD", "./every-test/.vscode/settings.json", "./every-test/node_modules/x/i.js", "./every-test/.env", "./every-test/main.hive"] {
+		if hive.file.write(file, "x") is Result.Error(why) {
+			panic why
+		}
+	}
+	assert search.everyFile("./every-test", 100) == [".env", ".vscode/settings.json", "main.hive", "node_modules/x/i.js"]
+	assert search.allFiles("./every-test", false, 100) == ["main.hive"]
+}

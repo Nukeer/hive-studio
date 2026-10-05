@@ -339,8 +339,11 @@ test "Ctrl+F acha ocorrências e Ctrl+P lista arquivos da pasta" {
 	assert indexOf(render.findBox(state), "1 de 1") is Result.Ok(_)
 	state.find.caseSensitive = true
 	assert len(render.findMatches(render.searched(state), state.find)) == 0
-	state.palette = model.Palette(true, "main", 0, search.allFiles(folder, false, 100))
+	files := search.allFiles(folder, false, 100)
+	state.palette = model.Palette(true, "main", 0, files, render.paletteSearch(files, "main"))
 	assert len(render.paletteMatches(state.palette)) == 1
+	// Com menos de três letras a busca nem começa.
+	assert len(render.paletteSearch(files, "ma")) == 0
 	assert studio.paletteChoice(state, 0) == "main.hive"
 	assert indexOf(render.palette(state), "main.hive") is Result.Ok(_)
 	if studio.actionMsg(state, "quickOpen", 0) is Result.Ok(message) {
@@ -711,6 +714,19 @@ test "fechar um arquivo alterado pergunta: salvar e fechar, fechar sem salvar ou
 	assert len(state.docs) == 0 && state.closing == ""
 }
 
+test "abrir pelo caminho do git cai na aba que o explorador abriu" {
+	folder := support.explorerFolder("same-tab-test")
+	db := support.started(spawn(studio.serve, support.fresh(folder)))
+	mut state := support.fresh(folder)
+	studio.update(state, model.Msg.Open(folder + "/main.hive"), db)
+	// O git escreve a raiz absoluta, com outras barras.
+	studio.update(state, model.Msg.Open(replaceAll(native.absPath(folder), "/", "\\") + "\\main.hive"), db)
+	assert len(state.docs) == 1
+	if state.docs is [doc] {
+		assert doc.path == folder + "/main.hive"
+	}
+}
+
 test "excluir um arquivo ou uma pasta pergunta antes e fecha o que estava aberto" {
 	folder := support.explorerFolder("remove-test")
 	if hive.file.write(folder + "/lib/util.hive", "\n") is Result.Error(why) {
@@ -960,4 +976,37 @@ test "sem o modo Vim, as teclas do Vim não fazem nada e o frame não mostra a b
 	} else {
 		assert false
 	}
+}
+
+test "imagens abrem na visualização, e as do Markdown vêm do disco" {
+	folder := support.explorerFolder("image-test")
+	if hive.file.write(folder + "/lib/logo.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/foto.png", "não é bem um png") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write(folder + "/LEIAME.md", "# Oi\n\n![logo](lib/logo.svg) ![sumiu](lib/nada.png)\n") is Result.Error(why) {
+		panic why
+	}
+	mut state := support.fresh(folder)
+	studio.openDoc(state, folder + "/foto.png")
+	assert len(state.docs) == 1
+	if state.docs is [doc] {
+		assert doc.mode == "preview" && doc.text == ""
+		assert indexOf(doc.view, "<img src=\"data:image/png;base64,") is Result.Ok(_)
+	}
+	// Salvar uma imagem de bytes não escreve nada nela.
+	if state.docs bounds 0 {
+		assert studio.saveDoc(state.docs[0]) == ""
+	}
+	if hive.file.read(folder + "/foto.png") is Result.Ok(text) {
+		assert text == "não é bem um png"
+	}
+	studio.openDoc(state, folder + "/LEIAME.md")
+	if state.docs is [_, md] {
+		assert indexOf(md.view, "<img src=\"data:image/svg+xml;base64,") is Result.Ok(_)
+		assert indexOf(md.view, "<span class=\"md-img\">🖼 sumiu</span>") is Result.Ok(_)
+	}
+	assert model.isPicture("a/B.PNG") && model.isImage("x.svg") && !model.isPicture("x.svg") && model.hasPreview("x.webp")
 }

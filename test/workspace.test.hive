@@ -50,11 +50,11 @@ test "a árvore mostra os filhos só das pastas expandidas" {
 	}
 	mut Str[dyn] closed = []
 	mut model.TreeRow[dyn] collapsed = []
-	workspace.buildTree("./tree-test", 0, closed, false, collapsed)
+	workspace.buildTree("./tree-test", 0, closed, collapsed)
 	assert len(collapsed) == 2
 	mut Str[dyn] expanded = ["./tree-test/lib"]
 	mut model.TreeRow[dyn] opened = []
-	workspace.buildTree("./tree-test", 0, expanded, false, opened)
+	workspace.buildTree("./tree-test", 0, expanded, opened)
 	assert len(opened) == 4
 	if opened is [lib, inner, a, main] {
 		assert lib.open && lib.entry.folder
@@ -64,10 +64,24 @@ test "a árvore mostra os filhos só das pastas expandidas" {
 	}
 }
 
-test "artefatos de build ficam fora do explorador" {
-	assert workspace.isHidden(".git")
-	assert workspace.isHidden("app.hive-build")
-	assert !workspace.isHidden("app.hive")
+test "o explorador mostra ocultos e build, só não a pasta .git" {
+	for each folder in ["./hidden-test/.git", "./hidden-test/app.hive-build"] {
+		if hive.file.makeDir(folder) is Result.Error(why) {
+			panic why
+		}
+	}
+	if hive.file.write("./hidden-test/.env", "") is Result.Error(why) {
+		panic why
+	}
+	if workspace.listEntries("./hidden-test") is Result.Ok(entries) {
+		mut Str[dyn] names = []
+		for each entry in entries {
+			append(names, entry.name)
+		}
+		assert names == ["app.hive-build", ".env"]
+	} else {
+		assert false
+	}
 	assert workspace.isHive("lib/x.hive")
 	assert !workspace.isHive("x.go")
 }

@@ -108,10 +108,13 @@ func keyHint(state: model.State, action: Str): Str {
 
 // ── barra de título e menus ──────────────────────────────────────────────
 
-// O hexágono do Hive — o mesmo desenho do ícone da janela.
+// O ícone do Hive Studio — o mesmo desenho de assets/icon.svg, sem os degradês.
 func logo(): Str {
-	return "<svg class=\"logo\" viewBox=\"0 0 32 32\" aria-hidden=\"true\"><path d=\"M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z\" fill=\"#f5a623\"/>" +
-		"<path d=\"M16 10 21.2 13v6L16 22l-5.2-3v-6z\" fill=\"#1b1d23\" opacity=\".82\"/></svg>"
+	return "<svg class=\"logo\" viewBox=\"0 0 256 256\" aria-hidden=\"true\">" +
+		"<polygon points=\"128,18 223.3,73 223.3,183 128,238 32.7,183 32.7,73\" fill=\"#f7a81b\" stroke=\"#f7a81b\" stroke-width=\"22\" stroke-linejoin=\"round\"/>" +
+		"<polygon points=\"128,60 187.8,94.5 187.8,161.5 128,196 68.2,161.5 68.2,94.5\" fill=\"#2a2017\" stroke=\"#2a2017\" stroke-width=\"16\" stroke-linejoin=\"round\"/>" +
+		"<g fill=\"none\" stroke=\"#ffc53d\" stroke-width=\"12\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"110,103 86,128 110,153\"/><polyline points=\"146,103 170,128 146,153\"/></g>" +
+		"<polygon points=\"128,115 139.3,121.5 139.3,134.5 128,141 116.7,134.5 116.7,121.5\" fill=\"#ffc53d\"/></svg>"
 }
 
 func toolButton(state: model.State, label: Str, command: Str, cls: Str, ready: Bool): Str {
@@ -442,7 +445,26 @@ func searchPanel(state: model.State): Str {
 
 // Os arquivos que o Ctrl+P mostra, como posições em `palette.files`.
 func paletteMatches(palette: model.Palette): Int[dyn] {
-	return search.quickOpen(palette.files, palette.text, 60)
+	return palette.found
+}
+
+// Quantas letras a busca do Ctrl+P espera antes de procurar: com menos, quase
+// todo arquivo casa, e o trabalho não vale a lista.
+func paletteMinimum(): Int {
+	return 3
+}
+
+// Os arquivos que casam com o que foi digitado, quando já há o bastante.
+func paletteSearch(files: Str[], text: Str): Int[dyn] {
+	if len(trimPalette(text)) < paletteMinimum() {
+		Int[dyn] none = []
+		return none
+	}
+	return search.quickOpen(files, text, 60)
+}
+
+func trimPalette(text: Str): Str {
+	return replaceAll(text, " ", "")
 }
 
 func palette(state: model.State): Str {
@@ -464,7 +486,9 @@ func palette(state: model.State): Str {
 			"<span class=\"ic\"" + attr("style", "color:" + icon.color) + ">" + esc(icon.glyph) + "</span>" +
 			"<span class=\"nm\">" + esc(name) + "</span><span class=\"dir\">" + esc(folder) + "</span></div>")
 	}
-	if len(found) == 0 {
+	if len(trimPalette(state.palette.text)) < paletteMinimum() {
+		append(items, "<div class=\"empty\">" + tx(state, "Digite ao menos 3 letras do nome") + "</div>")
+	} else if len(found) == 0 {
 		append(items, "<div class=\"empty\">" + tx(state, "Nenhum arquivo encontrado") + "</div>")
 	}
 	return "<div class=\"palette\"><input class=\"field\" data-input=\"palette\" data-submit=\"paletteAccept\" data-palette=\"1\" spellcheck=\"false\" autocomplete=\"off\"" +
@@ -929,7 +953,7 @@ func breadcrumb(state: model.State): Str {
 			extra = "<span>📌 " + tx(state, "entrada") + "</span>"
 		}
 		mut switch := ""
-		if model.hasPreview(doc.path) {
+		if model.hasPreview(doc.path) && !model.isPicture(doc.path) {
 			switch = modeSwitch(state, doc)
 		}
 		return "<span>" + join(parts, "  ›  ") + "</span>" + extra + "<span class=\"grow\"></span>" + switch
@@ -1148,7 +1172,7 @@ func settingsPage(state: model.State): Str {
 		item(tx(state, "Modo Vim"), tx(state, "Modos normal, inserção e visual, movimentos, operadores, objetos de texto, desfazer, busca com / e a linha de comando (:w, :q, :s…)."),
 			check("vim", tx(state, "Usar as teclas do Vim no editor"), prefs.vim)) +
 		"<h2>" + tx(state, "Explorador") + "</h2>" +
-		item(tx(state, "Arquivos ocultos"), "", check("showHidden", tx(state, "Mostrar arquivos ocultos e artefatos de build"), prefs.showHidden)) +
+		item(tx(state, "Arquivos ocultos"), "", check("showHidden", tx(state, "Incluir ocultos e artefatos de build na busca e no TODO"), prefs.showHidden)) +
 		"<h2>" + tx(state, "Agentes") + "</h2>" +
 		"<div class=\"item\"><div class=\"dsc\">" + tx(state, "Programas que rodam no painel AGENTE, num terminal de verdade, na pasta aberta. Cada um usa o próprio login (a sua assinatura); o Hive Studio não vê nem guarda credenciais.") + "</div></div>" +
 		agentCommandItem(state, "claude", prefs.claudeCommand) +

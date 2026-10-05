@@ -17,11 +17,51 @@
 * Os testes de ponta a ponta (`tools/e2e`) abrem a mesma janela servida como
   página (`HIVE_WINDOW=print`).
 
+### Ícone e prints
+
+* **Ícone novo** (`assets/icon.svg` → `assets/icon.png`): um favo com `< >` e
+  um alvéolo de cursor. Vai para a janela, a barra de tarefas, o `.exe`, a
+  barra de título, a tela de boas-vindas e o "Sobre". Sai `assets/logo.png`.
+* O README mostra prints do app (`docs/screenshots/`).
+* Clicar numa alteração do git com o arquivo já aberto não abre outra aba: o
+  caminho do git (raiz absoluta, nome longo do Windows) é reescrito a partir
+  da pasta aberta (`native.inside`, `native.sameFile`).
+* "Dividir" no Markdown fica meio a meio; antes o preview tomava quase tudo
+  quando tinha um bloco de código comprido.
+
+### Imagens
+
+* **PNG, JPEG, GIF e WebP abrem numa aba de imagem** (no meio, com nome e
+  tamanho); salvar nunca escreve nelas. **SVG** abre no preview, com Editor e
+  Dividir: a imagem acompanha o que se digita.
+* **O Markdown mostra as imagens que são arquivos** (`![](docs/tela.png)`,
+  relativas ao `.md` ou absolutas), lidas do disco como data URL (até 8 MB,
+  `native.imageData`). O `<img src=… width=…>` de um README também vira
+  imagem, na largura pedida, e as caixas em volta (`<p align>`, `<div>`,
+  `<br>`) somem.
+
+### Ctrl+P mais leve
+
+* A busca por nome só começa com **3 letras** (antes disso, a paleta pede
+  "Digite ao menos 3 letras do nome"), e é feita uma vez por tecla, não a cada desenho.
+* A comparação dos nomes e a varredura das pastas passam para Go
+  (`native.quickOpen`, `native.allFiles`): com 15 mil arquivos, abrir o
+  Ctrl+P cai de ~1 s para ~0,16 s e cada tecla custa poucos ms. A busca no
+  projeto e o TODO usam a mesma varredura.
+* O Ctrl+P e o explorador mostram **todos** os arquivos — ocultos (`.env`,
+  `.vscode/…`), `node_modules`, `dist` e builds inclusive —, só a pasta `.git`
+  fica de fora. A opção "Arquivos ocultos" passa a valer só para a busca no
+  projeto e o TODO.
+
 ### Precisa de
 
-* Um **`hivec`** com o `hive.ui` novo (`ui.code`, `ui.keys`, `ui.focus`,
-  `ui.clip`, `ui.perform`, `anchor`, `onDrag`…). O CI continua fixado na
-  v0.2.11 até sair a versão que os traz.
+* **`hivec` v0.2.12** para o `studio.hive` (o CI passa a usá-la), e para o
+  `studioui.hive` o `hive.ui` novo (`ui.code`, `ui.keys`, `ui.focus`,
+  `ui.clip`, `ui.perform`, `anchor`, `onDrag`…), que está no PR
+  R0DR160HM/hive-lang#47 e ainda não saiu numa versão.
+* O autocomplete conhece os nomes novos da v0.2.12 (`hide`, `reveal`,
+  `bypass`, `Secret`, `getSecret`, `randomSecret`, `ui.touch`) e os do
+  `hive.ui` novo.
 
 ## v0.1.3
 

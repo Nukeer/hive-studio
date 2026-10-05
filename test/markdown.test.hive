@@ -38,3 +38,19 @@ test "tabela e links seguros" {
 	assert indexOf(html, "href=\"https://x.dev\"") is Result.Ok(_)
 	assert indexOf(html, "href=\"\" title=\"javascript:alert\"") is Result.Ok(_)
 }
+
+test "uma imagem que é arquivo fica marcada para ser lida; um esquema estranho, não" {
+	html := markdown.render("![tela](docs/tela.png) ![web](https://x.dev/a.png) ![abs](C:/a/b.png) ![ruim](javascript:x)")
+	assert indexOf(html, "<img src=\"local:docs/tela.png\" alt=\"tela\">") is Result.Ok(_)
+	assert indexOf(html, "<img src=\"https://x.dev/a.png\" alt=\"web\">") is Result.Ok(_)
+	assert indexOf(html, "<img src=\"local:C:/a/b.png\" alt=\"abs\">") is Result.Ok(_)
+	assert indexOf(html, "local:javascript") is Result.Error(_)
+}
+
+test "o <img> de um README vira imagem, com a largura, e a caixa em volta some" {
+	html := markdown.render("<p align=\"center\"><img src=\"assets/icon.png\" width=\"112\" alt=\"Hive Studio\"></p>\n\n<img src=\"javascript:x\" alt=\"ruim\"/>")
+	assert indexOf(html, "<img src=\"local:assets/icon.png\" alt=\"Hive Studio\" width=\"112\">") is Result.Ok(_)
+	assert indexOf(html, "align") is Result.Error(_)
+	assert indexOf(html, "&lt;") is Result.Error(_)
+	assert indexOf(html, "<span class=\"md-img\">🖼 ruim</span>") is Result.Ok(_)
+}

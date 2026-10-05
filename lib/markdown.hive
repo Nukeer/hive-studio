@@ -16,14 +16,93 @@ func safeHref(url: Str): Str {
 	return ""
 }
 
+// Um caminho de arquivo, relativo ao .md ou absoluto (C:/…, /…): sem esquema
+// como `javascript:`.
+func isLocal(url: Str): Bool {
+	if url == "" {
+		return false
+	}
+	if url is "{drive}:/{rest}" && len(drive) == 1 {
+		return true
+	}
+	return indexOf(url, ":") is Result.Error(_)
+}
+
+// O valor de um atributo de uma tag HTML que chegou escapada; "" sem ele.
+func attribute(attrs: Str, name: Str): Str {
+	pieces := split(" " + replaceAll(attrs, "\t", " "), " " + name + "=&quot;")
+	if pieces bounds 1 {
+		if pieces[1] is "{value}&quot;{tail}" {
+			return value
+		}
+	}
+	return ""
+}
+
+// O texto sem as tags `<tag …>` que abrem uma caixa (o que vem dentro fica).
+func dropTag(text: Str, tag: Str): Str {
+	pieces := split(text, "&lt;" + tag + " ")
+	mut Str[dyn] out = []
+	for i := 0; i < len(pieces); i++ {
+		if pieces bounds i {
+			if i == 0 {
+				append(out, pieces[i])
+			} else if pieces[i] is "{attrs}&gt;{rest}" {
+				append(out, rest)
+			} else {
+				append(out, "&lt;" + tag + " " + pieces[i])
+			}
+		}
+	}
+	return join(out, "")
+}
+
+// O HTML que um README costuma ter: `<img>` vira imagem (com a largura dada) e
+// as caixas em volta dela (`<p align="center">`, `<div>`, `<br>`) somem.
+func rawHtml(text: Str): Str {
+	mut out := text
+	for each tag in ["p", "div", "center", "picture", "br"] {
+		out = replaceAll(out, "&lt;/" + tag + "&gt;", "")
+		out = replaceAll(out, "&lt;" + tag + "&gt;", "")
+		out = replaceAll(out, "&lt;" + tag + "/&gt;", "")
+		out = dropTag(replaceAll(out, "&lt;" + tag + " /&gt;", ""), tag)
+	}
+	for ;; {
+		if out is "{before}&lt;img {attrs}&gt;{rest}" {
+			mut tail := ""
+			width := attribute(replaceAll(attrs, "/", " "), "width")
+			if hive.conv.sti(width) is Result.Ok(_) {
+				tail = " width=\"" + width + "\""
+			}
+			src := attribute(attrs, "src")
+			alt := attribute(attrs, "alt")
+			href := safeHref(src)
+			if href != "" {
+				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\"" + tail + ">" + rest
+			} else if isLocal(src) {
+				out = before + "<img src=\"local:" + src + "\" alt=\"" + alt + "\"" + tail + ">" + rest
+			} else {
+				out = before + "<span class=\"md-img\">🖼 " + alt + "</span>" + rest
+			}
+		} else {
+			return out
+		}
+	}
+	return out
+}
+
 // Ênfase, links e imagens num trecho que não é código. Já chega escapado.
 func emphasis(text: Str): Str {
-	mut out := text
+	mut out := rawHtml(text)
 	for ;; {
 		if out is "{before}![{alt}]({url}){rest}" {
 			href := safeHref(url)
 			if href != "" {
 				out = before + "<img src=\"" + href + "\" alt=\"" + alt + "\">" + rest
+			} else if isLocal(url) {
+				// Um arquivo ao lado do .md: quem mostra a página troca o
+				// `local:` pela imagem (studio.localImages).
+				out = before + "<img src=\"local:" + url + "\" alt=\"" + alt + "\">" + rest
 			} else {
 				out = before + "<span class=\"md-img\">🖼 " + alt + "</span>" + rest
 			}

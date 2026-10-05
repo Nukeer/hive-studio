@@ -25,3 +25,21 @@ test "a posição do cursor em linha e coluna, numa passada" {
 	assert native.caretLabel("ção\nx", 4) == "Ln 2, Col 1"
 	assert native.caretLabel("ab", 99) == "Ln 1, Col 3"
 }
+
+test "o mesmo arquivo, escrito de jeitos diferentes" {
+	if hive.file.makeDir("./same-test/lib") is Result.Error(why) {
+		panic why
+	}
+	if hive.file.write("./same-test/lib/a.hive", "") is Result.Error(why) {
+		panic why
+	}
+	full := native.absPath("./same-test/lib/a.hive")
+	assert native.sameFile("./same-test/lib/a.hive", full)
+	assert native.sameFile("same-test\\lib\\a.hive", "./same-test/lib/a.hive")
+	assert !native.sameFile("./same-test/lib/a.hive", "./same-test/lib")
+	assert !native.sameFile("./same-test/nada.hive", "./same-test/nada.hive")
+	assert native.inside("./same-test", full) == "lib/a.hive"
+	assert native.inside(native.absPath("./same-test"), "./same-test/lib/a.hive") == "lib/a.hive"
+	assert native.inside("./same-test/lib", "./same-test") == ""
+	assert native.inside("./same-test", "./same-test") == ""
+}

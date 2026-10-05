@@ -175,11 +175,14 @@ type SearchPanel {
 }
 
 // A busca rápida de arquivos (Ctrl+P). `files` é a lista da pasta, lida ao abrir.
+// O Ctrl+P. `found` são os arquivos que casam com `text` (posições em
+// `files`), achados uma vez por tecla — não a cada vez que a janela desenha.
 type Palette {
 	open:  Bool
 	text:  Str
 	index: Int
 	files: Str[dyn]
+	found: Int[dyn]
 }
 
 // O modo Vim do editor. A linha de comando (`:`, `/`, `?`) abre por cima do
@@ -764,9 +767,24 @@ func isJson(path: Str): Bool {
 	return path is "{stem}.json"
 }
 
-// Markdown e JSON abrem na visualização, com a troca para o texto.
+// Markdown, JSON e imagens abrem na visualização; os que são texto (não as
+// imagens de bytes) têm a troca para o editor.
 func hasPreview(path: Str): Bool {
-	return isMarkdown(path) || isJson(path)
+	return isMarkdown(path) || isJson(path) || isImage(path)
+}
+
+func isSvg(path: Str): Bool {
+	return path is "{stem}.svg" || path is "{stem}.SVG"
+}
+
+// Uma imagem de bytes: só se vê, não se edita.
+func isPicture(path: Str): Bool {
+	return path is "{stem}.png" || path is "{stem}.jpg" || path is "{stem}.jpeg" || path is "{stem}.gif" || path is "{stem}.webp" ||
+		path is "{stem}.PNG" || path is "{stem}.JPG" || path is "{stem}.JPEG" || path is "{stem}.GIF" || path is "{stem}.WEBP"
+}
+
+func isImage(path: Str): Bool {
+	return isPicture(path) || isSvg(path)
 }
 
 // Um documento recém-aberto, sem nada para desfazer.
@@ -783,7 +801,8 @@ func emptySearch(): SearchPanel {
 
 func emptyPalette(): Palette {
 	Str[dyn] none = []
-	return Palette(false, "", 0, none)
+	Int[dyn] nothing = []
+	return Palette(false, "", 0, none, nothing)
 }
 
 func emptyGit(): GitInfo {

@@ -1,10 +1,24 @@
+<p align="center"><img src="assets/icon.png" width="112" alt="Hive Studio"></p>
+
 # Hive Studio
 
 Uma IDE para [Hive](https://hive-lang.run), escrita em Hive.
+
+![O editor: explorador, abas e o código colorido](docs/screenshots/editor.png)
+
+| ![Ctrl+P: ir para um arquivo pelo nome](docs/screenshots/palette.png) | 
+| **Ctrl+P** acha um arquivo pelo nome |
+
+| ![Controle de código: alterações, histórico e o diff](docs/screenshots/git.png) |
+| **Git**: alterações, histórico e o diff |
+
+![Markdown com o preview ao lado](docs/screenshots/markdown.png)
+
 A janela é um Chromium (Edge, Chrome, Brave) em modo aplicativo, com perfil
 próprio — o "webview" — e toda a lógica roda no programa Hive.
 
-Precisa do `hivec` v0.2.11 ou mais novo.
+Precisa do `hivec` v0.2.12 ou mais novo; a janela nativa (`studioui.hive`)
+precisa do `hive.ui` novo, do PR R0DR160HM/hive-lang#47.
 
 ```
 hivec run studio.hive [pasta]      # abre a pasta (padrão: a atual)
@@ -372,10 +386,10 @@ git config core.hooksPath .githooks
 
 ## Limites conhecidos
 
-- O ícone da janela e da barra de tarefas vem da página (o hexágono do Hive).
-  O `hivec build` também embute `assets/icon.png` no `.exe`, mas o gerador de
-  ícone do hivec 0.2.8 não compila com Go 32 bits (`windows/386`); por isso o
-  desenho está em `assets/logo.png`. Com Go 64 bits, renomeie para `icon.png`.
+- O ícone (`assets/icon.png`, desenhado em `assets/icon.svg`) vai para a
+  janela, a barra de tarefas e o `.exe`. Com Go 32 bits (`windows/386`) o
+  gerador de ícone do hivec até a v0.2.12 não compila; a correção está no
+  mesmo PR do `hive.ui` novo (R0DR160HM/hive-lang#47).
 
 - O painel TERMINAL não é um PTY: programas de tela cheia (vim, less, htop) e
   prompts que leem direto do console não funcionam nele; `Ctrl+C` reinicia o

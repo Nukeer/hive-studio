@@ -40,46 +40,17 @@ func occurrences(text: Str, wanted: Str, caseSensitive: Bool, limit: Int): Int[d
 	return found
 }
 
-func skippedFolder(name: Str): Bool {
-	return name == "node_modules" || name == ".git" || name == "dist" || name is "{stem}.hive-build"
-}
-
-// Todos os arquivos debaixo de `root`, como caminhos relativos a ela.
+// Todos os arquivos debaixo de `root`, como caminhos relativos a ela, em
+// ordem — no máximo `limit` (lib/native.go: um projeto grande tem milhares de
+// pastas, e listar cada uma pelo Hive levava segundos).
 proc allFiles(root: Str, showHidden: Bool, limit: Int): Str[dyn] {
-	mut Str[dyn] found = []
-	mut Str[dyn] pending = [""]
-	for next := 0; next < len(pending) && len(found) < limit; next++ {
-		mut current := ""
-		if pending bounds next {
-			current = pending[next]
-		}
-		mut folder := root
-		if current != "" {
-			folder = workspace.joinPath(root, current)
-		}
-		if workspace.listEntries(folder, showHidden) is Result.Ok(entries) {
-			queueEntries(entries, current, limit, found, pending)
-		}
-	}
-	return sort(found)
+	return native.allFiles(root, showHidden, limit)
 }
 
-// As entradas de uma pasta (`current`, relativa à raiz): arquivos em `found`,
-// até `limit`, e pastas em `pending`, para listar depois.
-proc queueEntries(entries: model.Entry[], current: Str, limit: Int, found: mut Str[dyn], pending: mut Str[dyn]): void {
-	for each entry in entries {
-		mut rel := entry.name
-		if current != "" {
-			rel = current + "/" + entry.name
-		}
-		if entry.folder {
-			if !skippedFolder(entry.name) {
-				append(pending, rel)
-			}
-		} else if len(found) < limit {
-			append(found, rel)
-		}
-	}
+// Todos os arquivos debaixo de `root`, ocultos inclusive — só a pasta .git
+// fica de fora. É a lista do Ctrl+P.
+proc everyFile(root: Str, limit: Int): Str[dyn] {
+	return native.everyFile(root, limit)
 }
 
 func isTextFile(path: Str): Bool {
@@ -172,91 +143,11 @@ proc searchProject(root: Str, wanted: Str, caseSensitive: Bool, showHidden: Bool
 	return ProjectResult(hits, files, truncated)
 }
 
-// `wanted` aparece em `text` nessa ordem, mesmo com coisas no meio.
-func subsequence(text: Str, wanted: Str): Bool {
-	want := split(wanted, "")
-	mut k := 0
-	for each c in split(text, "") {
-		if want bounds k {
-			if want[k] == c {
-				k++
-			}
-		}
-	}
-	return k >= len(want)
-}
-
-func containsAll(text: Str, words: Str[]): Bool {
-	for each word in words {
-		if word != "" && !highlight.has(text, word) {
-			return false
-		}
-	}
-	return true
-}
-
 // Os arquivos que casam com o que foi digitado no Ctrl+P, dos melhores para os
 // piores: nome começando igual, nome contendo, caminho contendo todas as
-// palavras, e por fim as letras na ordem.
+// palavras, e por fim as letras na ordem (lib/native.go, que passa por milhares
+// de caminhos a cada tecla).
 func quickOpen(files: Str[], wanted: Str, limit: Int): Int[dyn] {
-	mut Int[dyn] found = []
-	q := lower(replaceAll(wanted, "\\", "/"))
-	if q == "" {
-		for i := 0; i < len(files) && i < limit; i++ {
-			append(found, i)
-		}
-		return found
-	}
-	words := split(q, " ")
-	squeezed := replaceAll(q, " ", "")
-	mut Int[dyn] first = []
-	mut Int[dyn] second = []
-	mut Int[dyn] third = []
-	mut Int[dyn] fourth = []
-	for i := 0; i < len(files); i++ {
-		if files bounds i {
-			rank := rankOf(lower(files[i]), q, words, squeezed, len(first) + len(second) + len(third) + len(fourth) < limit)
-			if rank == 1 {
-				append(first, i)
-			} else if rank == 2 {
-				append(second, i)
-			} else if rank == 3 {
-				append(third, i)
-			} else if rank == 4 {
-				append(fourth, i)
-			}
-		}
-	}
-	for each group in [first, second, third, fourth] {
-		takeInto(found, group, limit)
-	}
-	return found
+	return native.quickOpen(files, wanted, limit)
 }
 
-// Como um caminho (em minúsculas) casa com a busca: 1 o nome começa com ela,
-// 2 o nome a contém, 3 o caminho tem todas as palavras, 4 as letras aparecem
-// em ordem (só olhado enquanto `room`), 0 não casa.
-func rankOf(path: Str, q: Str, words: Str[], squeezed: Str, room: Bool): Int {
-	name := workspace.baseName(path)
-	if complete.startsWith(name, q) {
-		return 1
-	}
-	if indexOf(name, q) is Result.Ok(_) {
-		return 2
-	}
-	if containsAll(path, words) {
-		return 3
-	}
-	if room && subsequence(path, squeezed) {
-		return 4
-	}
-	return 0
-}
-
-proc takeInto(found: mut Int[dyn], group: Int[], limit: Int): void {
-	for each i in group {
-		if len(found) < limit {
-			append(found, i)
-		}
-	}
-}
