@@ -40,16 +40,18 @@ function killTree(child) {
   } catch (e) {}
 }
 
-async function connect(port) {
+// Até 30 s: a primeira abertura do Chromium num runner novo (o cache de
+// fontes, o perfil) passa dos 10 s.
+async function connect(port, browserLog) {
   let target;
-  for (let i = 0; i < 100 && !target; i++) {
+  for (let i = 0; i < 300 && !target; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       target = list.find((t) => t.type === "page" && t.url.startsWith("http://127.0.0.1"));
     } catch (e) {}
     if (!target) await sleep(100);
   }
-  if (!target) throw new Error("o navegador não abriu a página");
+  if (!target) throw new Error("o navegador não abriu a página: " + (browserLog() || "(sem saída)").slice(-400));
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
   let id = 0;
@@ -133,8 +135,11 @@ async function runScenario(exe, browser, scenario, port) {
     const sandbox = windows ? [] : ["--no-sandbox"];
     browserProc = spawn(browser, [...sandbox, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
       `--user-data-dir=${join(root, "browser")}`, `--remote-debugging-port=${port}`, "--window-size=1400,900", url],
-      { detached: !windows, stdio: "ignore" });
-    const page = await connect(port);
+      { detached: !windows, stdio: ["ignore", "pipe", "pipe"] });
+    let browserOut = "";
+    browserProc.stdout.on("data", (d) => (browserOut += d));
+    browserProc.stderr.on("data", (d) => (browserOut += d));
+    const page = await connect(port, () => browserOut.trim());
     const ready = await page.waitFor(`typeof sock !== "undefined" && sock.readyState === 1 && !!document.querySelector('input[placeholder="hive-event"]')`, 15000);
     checks.push(["a janela abriu", !!ready]);
     if (ready) {
