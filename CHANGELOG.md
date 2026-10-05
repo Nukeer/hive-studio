@@ -1,5 +1,26 @@
 # Changelog
 
+## Não lançado
+
+### Atualização automática
+
+* **O Hive Studio se atualiza pelos releases do GitHub.** Ao abrir, e a cada
+  seis horas com a janela aberta, procura o último release; havendo versão
+  nova, abre um diálogo com as notas dela em preview de Markdown, com
+  *Atualizar agora*, *Agora não*, *Ignorar esta versão* e *Ver no GitHub*.
+  Dispensada, a versão fica num selo em destaque na barra de status
+  (`⬆ Atualização disponível · vX.Y.Z`). **Ajuda → Procurar atualizações…**
+  (e o botão no "Sobre") procura na hora.
+* O binário da plataforma só entra no lugar do executável depois de a
+  assinatura ed25519 do `SHA256SUMS` (`SHA256SUMS.sig`, feita no CI com o
+  secret `RELEASE_SIGNING_KEY`) conferir com a chave embutida e de o binário
+  bater com o hash dele. Um release sem assinatura não é oferecido. No Windows o executável em uso é renomeado para
+  `<exe>.old` (apagado na abertura seguinte); fora dele, o novo é renomeado
+  por cima. *Reiniciar agora* salva o que estiver por salvar e reabre a mesma
+  pasta.
+* **Configurações → Atualizações** liga e desliga a procura ao abrir. Um build
+  `-dev` não procura sozinho.
+
 ## v0.2.0
 
 ### Uma janela só: a nativa do `hive.ui`

@@ -1,0 +1,305 @@
+// Atualização automática: o último release do GitHub, se é mais novo que
+// este Hive Studio, e a troca do executável pelo binário dele.
+//
+// O release é o que o .github/workflows/build.yml publica numa tag: um
+// binário por plataforma (hive-studio-<sistema>-<arquitetura>[.exe]) e o
+// SHA256SUMS com o hash de cada um, assinado (SHA256SUMS.sig, ed25519) pela
+// chave do repositório. Um binário só entra no lugar do atual depois de a
+// assinatura conferir com uma chave embutida (lib/selfupdate.go) e de o
+// binário bater com o hash.
+
+import ./selfupdate.go
+
+func repository(): Str {
+	return "Nukeer/hive-studio"
+}
+
+func latestUrl(): Str {
+	return "https://api.github.com/repos/{repository()}/releases/latest"
+}
+
+func releasesPage(): Str {
+	return "https://github.com/{repository()}/releases"
+}
+
+// Seis horas, em segundos: com a janela aberta, o intervalo entre duas
+// procuras automáticas. Ao abrir, a procura é sempre feita.
+func interval(): Int {
+	return 21600
+}
+
+// ── versões ──────────────────────────────────────────────────────────────
+
+// `v1.2.3` ou `v1.2.3-dev`. `ok` falso: não é uma versão.
+type Version {
+	major: Int
+	minor: Int
+	patch: Int
+	pre:   Str
+	ok:    Bool
+}
+
+func number(text: Str): Int {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		return n
+	}
+	return 0
+}
+
+func parse(tag: Str): Version {
+	mut text := tag
+	if tag is "v{rest}" {
+		text = rest
+	}
+	if text is "{major is (\d+)}.{minor is (\d+)}.{patch is (\d+)}-{pre}" {
+		return Version(number(major), number(minor), number(patch), pre, true)
+	}
+	if text is "{major is (\d+)}.{minor is (\d+)}.{patch is (\d+)}" {
+		return Version(number(major), number(minor), number(patch), "", true)
+	}
+	return Version(0, 0, 0, "", false)
+}
+
+// `candidate` vem depois de `current`? Uma versão sem sufixo vem depois da
+// mesma com sufixo (`v0.2.0` depois de `v0.2.0-dev`); o que não é versão
+// nunca é mais novo.
+func newer(candidate: Str, current: Str): Bool {
+	a := parse(candidate)
+	b := parse(current)
+	if !a.ok || !b.ok {
+		return false
+	}
+	if a.major != b.major {
+		return a.major > b.major
+	}
+	if a.minor != b.minor {
+		return a.minor > b.minor
+	}
+	if a.patch != b.patch {
+		return a.patch > b.patch
+	}
+	if a.pre == b.pre {
+		return false
+	}
+	if a.pre == "" {
+		return true
+	}
+	if b.pre == "" {
+		return false
+	}
+	return sort([a.pre, b.pre]) == [b.pre, a.pre]
+}
+
+// Um build que não saiu de uma tag (`-dev`) não procura sozinho: quem
+// compila o Hive Studio na mão não quer vê-lo trocado por um release.
+func isDev(current: Str): Bool {
+	return parse(current).pre == "dev" || !parse(current).ok
+}
+
+// Esta cópia procura sozinha? Não quando a opção está desligada nem num
+// build de desenvolvimento.
+func automatic(current: Str, enabled: Bool): Bool {
+	return enabled && !isDev(current)
+}
+
+// Com a janela aberta: está na hora de procurar de novo?
+func due(current: Str, enabled: Bool, last: Int, now: Int): Bool {
+	return automatic(current, enabled) && now - last >= interval()
+}
+
+// ── o release ────────────────────────────────────────────────────────────
+
+type Asset {
+	name: Str
+	url:  Str -- JSON as browser_download_url;
+}
+
+// O que interessa da resposta de /releases/latest.
+type Release {
+	tag:    Str -- JSON as tag_name;
+	notes:  Str -- JSON as body; Default as "";
+	page:   Str -- JSON as html_url; Default as "";
+	assets: Asset[dyn]
+}
+
+// Uma versão nova, pronta para baixar: o binário desta plataforma, o
+// SHA256SUMS que diz o hash dele e a assinatura do SHA256SUMS.
+type Offer {
+	tag:       Str
+	notes:     Str
+	page:      Str
+	asset:     Str
+	binary:    Str
+	sums:      Str
+	signature: Str
+}
+
+func noOffer(): Offer {
+	return Offer("", "", "", "", "", "", "")
+}
+
+type Check {
+	Found    { offer: Offer }
+	UpToDate { tag: Str }
+	Failed   { reason: Str }
+}
+
+// O nome do binário de uma plataforma ("windows/amd64") no release.
+func assetName(platform: Str): Str {
+	name := "hive-studio-" + replaceAll(platform, "/", "-")
+	if platform is "windows/{_arch}" {
+		return name + ".exe"
+	}
+	return name
+}
+
+func assetUrl(assets: Asset[], name: Str): Str {
+	for each a in assets {
+		if a.name == name {
+			return a.url
+		}
+	}
+	return ""
+}
+
+// O que fazer com o último release, sabendo a versão e a plataforma daqui.
+func decide(release: Release, current: Str, platform: Str): Check {
+	if !newer(release.tag, current) {
+		return Check.UpToDate(release.tag)
+	}
+	name := assetName(platform)
+	binary := assetUrl(release.assets, name)
+	if binary == "" {
+		return Check.Failed("o release {release.tag} não tem {name}")
+	}
+	sums := assetUrl(release.assets, "SHA256SUMS")
+	if sums == "" {
+		return Check.Failed("o release {release.tag} não tem SHA256SUMS")
+	}
+	signature := assetUrl(release.assets, "SHA256SUMS.sig")
+	if signature == "" {
+		return Check.Failed("o release {release.tag} não é assinado (falta SHA256SUMS.sig)")
+	}
+	return Check.Found(Offer(release.tag, release.notes, release.page, name, binary, sums, signature))
+}
+
+// O SHA256SUMS foi assinado por uma das chaves do Hive Studio?
+func signed(sums: Str, signature: Str): Bool {
+	return selfupdate.verify(sums, signature)
+}
+
+// O hash de `name` num SHA256SUMS (`<hash>  <nome>` por linha).
+func sumFor(sums: Str, name: Str): Result<Str, Bool> {
+	for each line in split(replaceAll(sums, "\r", ""), "\n") {
+		if line is "{hash is ([0-9a-f]{64})}  {file}" {
+			if file == name {
+				return Result.Ok(hash)
+			}
+		}
+	}
+	return Result.Error(false)
+}
+
+// ── a rede ───────────────────────────────────────────────────────────────
+
+// Um GET com o User-Agent que a API do GitHub exige. Só um 200 é resposta.
+proc get(url: Str): Result<Str, Str> {
+	asked := hive.net.HttpRequest("GET", url, [["User-Agent", "hive-studio"], ["Accept", "application/vnd.github+json"]], "")
+	answered := hive.net.httpRequest(asked)
+	if answered is Result.Ok(answer) {
+		if answer.status == 200 {
+			return Result.Ok(answer.body)
+		}
+		if answer.status == 404 {
+			return Result.Error("nada publicado em {url}")
+		}
+		if answer.status == 403 || answer.status == 429 {
+			return Result.Error("o GitHub limitou as consultas; tente de novo mais tarde")
+		}
+		return Result.Error("{url} respondeu {answer.status}")
+	} else if answered is Result.Error(why) {
+		return Result.Error("sem conexão com o GitHub: {why.message}")
+	}
+}
+
+// Procura o último release e diz se ele serve para esta cópia.
+proc check(current: Str): Check {
+	fetched := get(latestUrl())
+	if fetched is Result.Ok(body) {
+		if Release.decode(body, hive.json.codec()) is Result.Ok(release) {
+			return decide(release, current, selfupdate.platform())
+		}
+		return Check.Failed("a resposta do GitHub não é um release")
+	} else if fetched is Result.Error(why) {
+		return Check.Failed(why)
+	}
+}
+
+// Baixa o binário da oferta, confere o hash e o põe no lugar deste
+// executável. O Hive Studio que roda continua o mesmo até reiniciar.
+proc install(offer: Offer): Result<Str, Str> {
+	located := selfupdate.executable()
+	if located is Result.Error(why) {
+		return Result.Error("não foi possível achar o executável: {why}")
+	}
+	mut exe := ""
+	if located is Result.Ok(path) {
+		exe = path
+	}
+	listed := get(offer.sums)
+	if listed is Result.Error(why) {
+		return Result.Error(why)
+	}
+	stamped := get(offer.signature)
+	if stamped is Result.Error(why) {
+		return Result.Error(why)
+	}
+	mut signature := ""
+	if stamped is Result.Ok(text) {
+		signature = text
+	}
+	mut want := ""
+	if listed is Result.Ok(sums) {
+		if !signed(sums, signature) {
+			return Result.Error("a assinatura do SHA256SUMS de {offer.tag} não confere com a chave do Hive Studio; nada foi trocado")
+		}
+		if sumFor(sums, offer.asset) is Result.Ok(hash) {
+			want = hash
+		} else {
+			return Result.Error("o SHA256SUMS de {offer.tag} não lista {offer.asset}")
+		}
+	}
+	fetched := get(offer.binary)
+	if fetched is Result.Error(why) {
+		return Result.Error(why)
+	}
+	mut binary := ""
+	if fetched is Result.Ok(body) {
+		binary = body
+	}
+	got := hive.crypto.sha256(binary)
+	if got != want {
+		return Result.Error("o binário baixado não bate com o SHA256SUMS (esperado {want}, veio {got}); nada foi trocado")
+	}
+	fresh := exe + ".new"
+	if hive.file.write(fresh, binary) is Result.Error(why) {
+		return Result.Error("sem permissão para escrever ao lado de {exe}: {why.message}")
+	}
+	if selfupdate.replace(fresh, exe) is Result.Error(why) {
+		_removed := hive.file.delete(fresh)
+		return Result.Error("não foi possível trocar {exe}: {why}")
+	}
+	return Result.Ok(exe)
+}
+
+// Abre a versão nova na mesma pasta. Quem chama sai logo depois.
+proc relaunch(exe: Str, folder: Str): Result<Bool, Str> {
+	return selfupdate.relaunch(exe, [folder])
+}
+
+// Ao abrir: apaga o que uma atualização anterior deixou para trás.
+proc cleanup(): void {
+	if selfupdate.executable() is Result.Ok(exe) {
+		_found := selfupdate.cleanup(exe)
+	}
+}

@@ -305,6 +305,27 @@ git tag v0.2.0
 git push origin main v0.2.0
 ```
 
+### Atualização automática
+
+Um Hive Studio publicado procura o último release ao abrir e a cada seis horas
+com a janela aberta (desliga em **Configurações → Atualizações**) e, quando há
+versão nova, abre um diálogo com as notas dela; dispensada, ela fica num selo
+na barra de status. **Ajuda → Procurar atualizações…** procura na hora.
+Atualizar baixa o binário da plataforma, confere a assinatura do `SHA256SUMS`
+e o hash do binário nele, e só então o põe no lugar do executável (no Windows
+o atual vira `<exe>.old`, apagado na próxima abertura); a versão nova abre ao
+reiniciar. Um build `-dev` não procura sozinho. O código está em
+`lib/update.hive` e `lib/selfupdate.go`.
+
+**Assinatura.** O job de release assina o `SHA256SUMS` com a chave privada
+ed25519 do secret `RELEASE_SIGNING_KEY` e publica `SHA256SUMS.sig`; antes,
+confere a assinatura contra a chave pública de `lib/selfupdate.go` e falha se
+o par não bater. Um release sem `.sig`, ou com uma que não confere, não é
+instalado. Para trocar de chave: a pública nova entra em `trusted`, ao lado da
+antiga, num release ainda assinado pela antiga; o secret muda depois, e a
+antiga sai num release seguinte. **Perder a chave privada** deixa as cópias
+instaladas sem atualização automática — guarde um backup.
+
 ## Git
 
 Os hooks ficam em `.githooks/`; ative uma vez por clone:

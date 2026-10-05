@@ -139,6 +139,36 @@ jobs:
           name: hive-studio
           path: dist
 
+      # O SHA256SUMS é assinado (ed25519) com o secret RELEASE_SIGNING_KEY: o
+      # Hive Studio só instala uma atualização cuja assinatura confira com uma
+      # chave embutida em lib/selfupdate.go. A assinatura é conferida aqui
+      # mesmo contra a primeira dessas chaves, para um secret trocado ou
+      # errado não publicar um release que nenhuma cópia aceitaria.
+      - name: Assinar o SHA256SUMS
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::falta o secret RELEASE_SIGNING_KEY (a chave privada ed25519 em PEM)."
+            exit 1
+          fi
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$work/key.pem"
+          openssl pkeyutl -sign -inkey "$work/key.pem" -rawin -in dist/SHA256SUMS -out "$work/sig"
+          base64 -w0 "$work/sig" > dist/SHA256SUMS.sig
+
+          public=$(sed -n 's/^\t"\([A-Za-z0-9+/=]\{44\}\)",$/\1/p' lib/selfupdate.go | head -n1)
+          if [ -z "$public" ]; then
+            echo "::error file=lib/selfupdate.go::não achei a chave pública em lib/selfupdate.go."
+            exit 1
+          fi
+          { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$public" | base64 -d; } > "$work/public.der"
+          if ! openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/public.der" -rawin -in dist/SHA256SUMS -sigfile "$work/sig"; then
+            echo "::error file=lib/selfupdate.go::a assinatura não confere com a chave pública $public — o secret RELEASE_SIGNING_KEY não é o par dela."
+            exit 1
+          fi
+
       - name: Publicar
         env:
           GH_TOKEN: ${{ github.token }}
@@ -169,9 +199,9 @@ jobs:
           printf '%s\n' "$notes" > notes.md
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" hive-studio-* SHA256SUMS --clobber
+            gh release upload "$tag" hive-studio-* SHA256SUMS SHA256SUMS.sig --clobber
             gh release edit "$tag" --notes-file notes.md
           else
-            gh release create "$tag" hive-studio-* SHA256SUMS \
+            gh release create "$tag" hive-studio-* SHA256SUMS SHA256SUMS.sig \
               --title "$tag" --notes-file notes.md
           fi
