@@ -1,6 +1,6 @@
 # Changelog
 
-## Próxima versão
+## v0.2.2
 
 ### Aprender Hive
 
