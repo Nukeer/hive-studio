@@ -1,0 +1,14 @@
+// A comment runs to the end of the line.
+
+// Every program starts here.
+proc main(): void {
+	echo "Hello, Hive!"
+
+	// `:=` gives a name to a value; Hive works out its type.
+	name := "bee"
+	wings := 4
+
+	// `{...}` inside a string splices a value into it.
+	echo "A {name} has {wings} wings."
+	echo "Two of them have {wings * 2}."
+}

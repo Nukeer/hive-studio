@@ -1,0 +1,25 @@
+test "o estoque inteiro" {
+	stock := [Item("mel", 12, 3), Item("cera", 5, 10), Item("pólen", 30, 1)]
+	assert total(stock) == 116
+}
+
+test "o que vale mais" {
+	stock := [Item("mel", 12, 3), Item("cera", 5, 10), Item("pólen", 30, 1)]
+	assert mostValuable(stock) == "cera"
+}
+
+test "uma loja vazia" {
+	Item[dyn] none = []
+	assert total(none) == 0
+	assert mostValuable(none) == ""
+}
+
+test "um empate fica com o primeiro" {
+	stock := [Item("geleia", 10, 2), Item("chá", 4, 5)]
+	assert mostValuable(stock) == "geleia"
+}
+
+test "um item que não vale nada ganha sozinho" {
+	stock := [Item("amostra grátis", 0, 9)]
+	assert mostValuable(stock) == "amostra grátis"
+}

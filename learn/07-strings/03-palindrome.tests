@@ -1,0 +1,21 @@
+test "radar" {
+	assert isPalindrome("radar") == true
+}
+
+test "hive não é" {
+	assert isPalindrome("hive") == false
+}
+
+test "um número par de letras" {
+	assert isPalindrome("osso") == true
+	assert isPalindrome("ossa") == false
+}
+
+test "vazio, e uma letra só" {
+	assert isPalindrome("") == true
+	assert isPalindrome("x") == true
+}
+
+test "maiúsculas contam" {
+	assert isPalindrome("Osso") == false
+}

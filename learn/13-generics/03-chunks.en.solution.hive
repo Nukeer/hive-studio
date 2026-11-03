@@ -1,0 +1,16 @@
+// `values` cut into pieces of `size` (the last one may be shorter).
+func chunks(values: T[], size: Int): T[dyn][dyn] {
+	mut T[dyn][dyn] pieces = []
+	mut T[dyn] piece = []
+	for each value in values {
+		append(piece, value)
+		if len(piece) == size {
+			append(pieces, piece)
+			piece = []
+		}
+	}
+	if len(piece) > 0 {
+		append(pieces, piece)
+	}
+	return pieces
+}

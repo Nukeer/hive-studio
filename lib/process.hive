@@ -22,7 +22,26 @@ func run(command: Str, arguments: Str[], directory: Str): Output {
 	for each a in arguments {
 		append(args, a)
 	}
-	result := native.run(command, args, directory)
+	return outputOf(native.run(command, args, directory))
+}
+
+// O `run` com prazo: passados `limit` ms o programa (e o que ele abriu) é
+// encerrado e `code` é -2; parado por `stop(tag)` antes disso, -3.
+func runFor(command: Str, arguments: Str[], directory: Str, limit: Int, tag: Str): Output {
+	mut Str[dyn] args = []
+	for each a in arguments {
+		append(args, a)
+	}
+	return outputOf(native.runFor(command, args, directory, limit, tag))
+}
+
+// Encerra o que `runFor` roda com `tag`; false quando não há nada rodando.
+func stop(tag: Str): Bool {
+	return native.stopRun(tag)
+}
+
+// A resposta do native.go — o código numa linha, e depois a saída — como `Output`.
+func outputOf(result: Result<Str, Str>): Output {
 	if result is Result.Ok(raw) {
 		if raw is "{code}\n{text}" {
 			return Output(codeOf(code), text)

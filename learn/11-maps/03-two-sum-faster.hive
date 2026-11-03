@@ -1,0 +1,6 @@
+// As posições [i, j] (i < j) de dois números que somam `target`; [] se não houver.
+// Desta vez numa passada só, com um mapa.
+func twoSum(numbers: Int[], target: Int): Int[dyn] {
+	Int[dyn] none = []
+	return none
+}

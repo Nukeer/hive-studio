@@ -1,0 +1,26 @@
+func area(width: Int, height: Int): Int {
+	return width * height
+}
+
+// Uma função pode chamar a si mesma: recursão.
+func factorial(n: Int): Int {
+	if n <= 1 {
+		return 1
+	}
+	return n * factorial(n - 1)
+}
+
+// Um proc pode mudar a variável de quem chamou por um parâmetro `mut`.
+proc addHoney(jars: mut Int, more: Int): void {
+	jars = jars + more
+}
+
+proc main(): void {
+	echo area(3, 4)
+	echo area(height: 2, width: 10)
+	echo factorial(5)
+
+	mut jars := 1
+	addHoney(jars, 2)
+	echo "potes: {jars}"
+}

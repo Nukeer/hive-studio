@@ -1,0 +1,28 @@
+test "the and bee appear twice" {
+	counts := wordCounts("the bee saw the other bee")
+	Result<Int, Bool> two = Result.Ok(2)
+	assert hive.map.get(counts, "the") == two
+	assert hive.map.get(counts, "bee") == two
+}
+
+test "saw appears once" {
+	counts := wordCounts("the bee saw the other bee")
+	Result<Int, Bool> one = Result.Ok(1)
+	assert hive.map.get(counts, "saw") == one
+}
+
+test "a word that is not there" {
+	counts := wordCounts("the bee saw the other bee")
+	assert hive.map.has(counts, "wasp") == false
+}
+
+test "four different words" {
+	assert len(wordCounts("the bee saw the other bee")) == 4
+}
+
+test "the same word over and over" {
+	counts := wordCounts("buzz buzz buzz buzz buzz")
+	Result<Int, Bool> five = Result.Ok(5)
+	assert hive.map.get(counts, "buzz") == five
+	assert len(counts) == 1
+}

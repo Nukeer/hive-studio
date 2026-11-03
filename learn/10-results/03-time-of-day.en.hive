@@ -1,0 +1,4 @@
+// Minutes past midnight for "HH:MM"; Error("bad time") when it is not a time.
+func minutes(time: Str): Result<Int, Str> {
+	return Result.Error("bad time")
+}

@@ -1,0 +1,15 @@
+test "ada@hive.dev" {
+	assert domain("ada@hive.dev") == "hive.dev"
+}
+
+test "queen@bees.org" {
+	assert domain("queen@bees.org") == "bees.org"
+}
+
+test "no @ at all" {
+	assert domain("not an address") == ""
+}
+
+test "subdomains stay whole" {
+	assert domain("bob@mail.example.com") == "mail.example.com"
+}

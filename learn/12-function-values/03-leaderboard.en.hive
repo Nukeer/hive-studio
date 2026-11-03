@@ -1,0 +1,10 @@
+type Player {
+	name:  Str
+	score: Int
+}
+
+// The names, highest score first; a tie keeps its order.
+func ranking(players: Player[]): Str[dyn] {
+	Str[dyn] none = []
+	return none
+}

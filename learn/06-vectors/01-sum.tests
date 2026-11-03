@@ -1,0 +1,20 @@
+test "1 + 2 + 3" {
+	assert sum([1, 2, 3]) == 6
+}
+
+test "um vetor vazio" {
+	Int[dyn] none = []
+	assert sum(none) == 0
+}
+
+test "eles podem se anular" {
+	assert sum([-5, 5]) == 0
+}
+
+test "um vetor feito por um laço" {
+	mut Int[dyn] many = []
+	for i := 1; i <= 100; i++ {
+		append(many, i)
+	}
+	assert sum(many) == 5050
+}

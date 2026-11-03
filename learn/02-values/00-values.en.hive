@@ -1,0 +1,25 @@
+proc main(): void {
+	// `Type name = value` states the type; `:=` works it out.
+	Int bees = 7
+	Float weight = 0.25
+	Str place = "the hive"
+	busy := true
+
+	// Int arithmetic stays whole.
+	echo bees / 2       // 3: the fraction is dropped
+	echo bees % 2       // 1: the remainder
+	echo bees ** 2      // 49
+
+	// An Int becomes a Float only when you ask.
+	echo hive.conv.itf(bees) * weight
+
+	// Dividing by zero is a value, not a crash.
+	echo bees / 0
+
+	// A name only changes if it says `mut`.
+	mut jars := 0
+	jars = jars + 3
+	jars += 2
+	jars++
+	echo "{bees} bees in {place} made {jars} jars. Busy: {busy}"
+}

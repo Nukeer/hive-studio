@@ -1,0 +1,4 @@
+// Quantos a, e, i, o, u (maiúsculos ou minúsculos) há em `text`.
+func vowels(text: Str): Int {
+	return 0
+}

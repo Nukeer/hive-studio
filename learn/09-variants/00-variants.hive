@@ -1,0 +1,39 @@
+type Shape {
+	Circle { radius: Float }
+	Rectangle { width: Float, height: Float }
+	Dot
+}
+
+// Esta cadeia cobre todas as variantes, então não precisa de `else`.
+func area(shape: Shape): Float {
+	if shape is Shape.Circle(r) {
+		return 3.14159 * r * r
+	} else if shape is Shape.Rectangle(w, h) {
+		return w * h
+	} else if shape is Shape.Dot {
+		return 0.0
+	}
+}
+
+// Um switch reconhece vários valores de uma vez, e cobre todos os casos.
+func describe(shape: Shape, big: Bool): Str {
+	switch shape, big {
+		Shape.Circle(_), true    { return "um círculo grande" }
+		Shape.Circle(_), false   { return "um círculo pequeno" }
+		Shape.Rectangle(w, h), _ { return "um retângulo de {w} por {h}" }
+		Shape.Dot, _             { return "um ponto" }
+	}
+}
+
+proc main(): void {
+	Shape[dyn] shapes = [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0), Shape.Dot()]
+	for each shape in shapes {
+		echo "{describe(shape, area(shape) > 3.0)}: {area(shape)}"
+	}
+
+	// Padrões também desmontam vetores.
+	resposta := ["abelha", "zum"]
+	if resposta is ["abelha", som] {
+		echo "a abelha faz {som}"
+	}
+}

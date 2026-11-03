@@ -71,14 +71,17 @@ jobs:
             exit 1
           fi
 
-      # O seletor de arquivo embutido (assets/pick.ps1) tem de refletir assets/.
+      # O seletor de arquivo embutido (assets/pick.ps1) tem de refletir assets/,
+      # e o curso "Aprender Hive" embutido (lib/course.hive), learn/.
       - name: Assets embutidos em dia
         run: |
           (cd tools && hivec run embed.hive)
-          git diff --exit-code -- lib/assets.hive || {
-            echo "::error file=lib/assets.hive::lib/assets.hive está desatualizado — rode 'cd tools && hivec run embed.hive' e commite."
-            exit 1
-          }
+          for embedded in lib/assets.hive lib/course.hive; do
+            git diff --exit-code -- "$embedded" || {
+              echo "::error file=$embedded::$embedded está desatualizado — rode 'cd tools && hivec run embed.hive' e commite."
+              exit 1
+            }
+          done
 
       - name: Check
         run: hivec check studio.hive

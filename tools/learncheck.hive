@@ -1,0 +1,97 @@
+// Confere o curso "Aprender Hive" com o compilador de verdade, como a aba do
+// curso o roda: cada lição compila (e roda), cada solução passa em todos os
+// testes escondidos, e cada código inicial compila mas não passa. Rode depois
+// de mexer em learn/ e do embed:
+//
+//     cd tools && hivec run embed.hive && hivec run learncheck.hive
+//
+// O compilador é o `hivec` do PATH, ou o da variável HIVEC. São uns cem
+// programas, seis por vez.
+
+import ../lib/learn
+import ../lib/process
+
+func compiler(): Str {
+	if hive.env.get("HIVEC") is Result.Ok(path) {
+		if path != "" {
+			return path
+		}
+	}
+	return "hivec"
+}
+
+// Quantos erros de compilação a saída tem (os do próprio programa).
+func compileErrors(output: Str): Int {
+	mut n := 0
+	for each line in split(replaceAll(output, "\r", ""), "\n") {
+		if line is "main.hive:{digits is (\d+)}: {message}" {
+			n++
+		}
+	}
+	return n
+}
+
+// Roda `code` como a aba roda o passo, numa pasta só dele, e diz o veredito.
+proc verdictOf(step: learn.Step, code: Str, folder: Str): Str {
+	_made := hive.file.makeDir(folder)
+	_written := hive.file.write(folder + "/main.hive", learn.program(step, code))
+	command := learn.command(code, learn.isChallenge(step))
+	result := process.runFor(compiler(), [command, "main.hive"], folder, 120000, "")
+	verdict := learn.verdict(result.code, compileErrors(result.text), learn.outcomes(result.text))
+	if verdict == "broken" || verdict == "missing" || verdict == "timeout" {
+		return verdict + "\n" + result.text
+	}
+	return verdict
+}
+
+// O que há de errado com o passo `at` ("" quando nada, ou fora do curso).
+proc verify(steps: learn.Step[], at: Int, work: Str): Str {
+	if steps bounds at {
+		return verifyStep(steps[at], work)
+	}
+	return ""
+}
+
+proc verifyStep(step: learn.Step, work: Str): Str {
+	folder := work + "/" + replaceAll(step.id, "/", "__")
+	if !learn.isChallenge(step) {
+		ran := verdictOf(step, step.code, folder + "-lesson")
+		if ran != "passed" && ran != "failed" {
+			return "{step.id}: a lição não roda: {ran}"
+		}
+		return ""
+	}
+	mut Str[dyn] wrong = []
+	solved := verdictOf(step, step.solution, folder + "-solution")
+	if solved != "passed" {
+		append(wrong, "{step.id}: a solução não passa: {solved}")
+	}
+	started := verdictOf(step, step.code, folder + "-starter")
+	if started != "failed" {
+		append(wrong, "{step.id}: o código inicial devia compilar e não passar: {started}")
+	}
+	return join(wrong, "\n")
+}
+
+proc main(): void {
+	work := "./learncheck-work"
+	steps := learn.steps(learn.load(""))
+	mut Str[dyn] problems = []
+	for at := 0; at < len(steps); at = at + 6 {
+		found := await [verify(steps, at, work), verify(steps, at + 1, work), verify(steps, at + 2, work),
+			verify(steps, at + 3, work), verify(steps, at + 4, work), verify(steps, at + 5, work)]
+		for each problem in found {
+			if problem != "" {
+				append(problems, problem)
+			}
+		}
+	}
+	if len(problems) > 0 {
+		for each problem in problems {
+			echo problem
+		}
+		echo "{len(problems)} problema(s) em {len(steps)} passos."
+		hive.term.exit(1)
+	}
+	echo "{len(steps)} passos conferidos: as lições rodam, as soluções passam e os códigos iniciais não."
+}

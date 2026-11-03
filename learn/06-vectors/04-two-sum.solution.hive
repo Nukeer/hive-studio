@@ -1,0 +1,12 @@
+// As posições [i, j] (i < j) de dois números que somam `target`; [] se não houver.
+func twoSum(numbers: Int[], target: Int): Int[dyn] {
+	for i := 0; i < len(numbers); i++ {
+		for j := i + 1; j < len(numbers); j++ {
+			if numbers bounds j && numbers[i] + numbers[j] == target {
+				return [i, j]
+			}
+		}
+	}
+	Int[dyn] none = []
+	return none
+}

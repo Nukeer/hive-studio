@@ -1,0 +1,18 @@
+test "quatro letras ou mais" {
+	Str[dyn] expected = ["colmeia", "abelha"]
+	assert longWords(["a", "mel", "colmeia", "boa", "abelha"], 4) == expected
+}
+
+test "nenhuma comprida o bastante" {
+	assert len(longWords(["a", "boa"], 10)) == 0
+}
+
+test "toda palavra tem pelo menos nada" {
+	Str[dyn] expected = ["a", "boa"]
+	assert longWords(["a", "boa"], 0) == expected
+}
+
+test "caracteres, não bytes" {
+	Str[dyn] expected = ["café"]
+	assert longWords(["café", "chá"], 4) == expected
+}

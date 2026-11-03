@@ -1,0 +1,4 @@
+// O n-ésimo número de Fibonacci, contando de fib(0) = 0.
+func fib(n: Int): Int {
+	return 0
+}

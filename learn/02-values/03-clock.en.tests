@@ -1,0 +1,15 @@
+test "125 minutes" {
+	assert clock(125) == "2h 5m"
+}
+
+test "less than an hour" {
+	assert clock(59) == "0h 59m"
+}
+
+test "exactly ten hours" {
+	assert clock(600) == "10h 0m"
+}
+
+test "no time at all" {
+	assert clock(0) == "0h 0m"
+}

@@ -1,0 +1,37 @@
+proc main(): void {
+	// Começa; continua enquanto; anda.
+	for i := 1; i <= 3; i++ {
+		echo "abelha número {i}"
+	}
+
+	// Só a condição: um laço enquanto.
+	mut n := 27
+	mut steps := 0
+	for ; n != 1; {
+		if n % 2 == 0 {
+			n = n / 2
+		} else {
+			n = 3 * n + 1
+		}
+		steps++
+	}
+	echo "27 chega a 1 em {steps} passos"
+
+	// `continue` pula uma volta, `break` sai do laço.
+	mut total := 0
+	for i := 1; i <= 100; i++ {
+		if i % 2 == 0 {
+			continue
+		}
+		if total > 50 {
+			break
+		}
+		total += i
+	}
+	echo "os ímpares somaram {total}"
+
+	// `for each` percorre uma lista de valores.
+	for each flor in ["trevo", "lavanda", "tomilho"] {
+		echo "visitando o {flor}"
+	}
+}

@@ -5,6 +5,7 @@ import ./settings
 import ./i18n
 import ./highlight
 import ./update
+import ./learn
 
 // Um item do explorador: arquivo ou pasta.
 type Entry {
@@ -292,6 +293,7 @@ type SideView {
 	OutlineSide
 	GitSide
 	TodoSide
+	LearnSide
 }
 
 // A atualização automática. `phase`: "" (nada a mostrar), "checking",
@@ -313,6 +315,39 @@ type EditorView {
 	DocView
 	SettingsView
 	CommitPage
+	LearnPage
+}
+
+// O curso "Aprender Hive" (lib/learn.hive), numa aba própria: `step` é o passo
+// à vista ("" = a página do curso) e `code` o texto do editor da página, que o
+// programa troca (outro passo, Reset) contando `serial`. `running` diz que o
+// passo está rodando; `ran` é o passo do último resultado, `verdict` o que ele
+// deu (ver `learn.verdict`), com a saída e os testes, e `problems` os erros do
+// compilador no código. `due` conta as edições: quando a digitação para, o
+// código é guardado e conferido. Tudo fica em `root` (o progresso, o código de
+// cada passo e as pastas onde ele roda), lido do disco na primeira vez que a
+// aba abre (`loaded`). `page` e `hintPage` são o texto do passo e a dica já
+// em HTML (lib/markdown), feitos quando o passo muda e não a cada desenho.
+type Learning {
+	course:   learn.Course
+	root:     Str
+	open:     Bool
+	loaded:   Bool
+	step:     Str
+	code:     Str
+	serial:   Int
+	running:  Bool
+	ran:      Str
+	verdict:  Str
+	output:   Str
+	outcomes: learn.Outcome[dyn]
+	problems: Diagnostic[dyn]
+	hint:     Bool
+	solution: Bool
+	solved:   Str[dyn]
+	due:      Int
+	page:     Str
+	hintPage: Str
 }
 
 // A aba que mostra um commit (ou as alterações de um arquivo). `key` é o
@@ -479,6 +514,18 @@ type Msg {
 	UpdateFailed     { reason: Str }
 	UpdateRestart
 	UpdatePage
+	LearnOpen
+	LearnClose
+	LearnShow        { step: Str }
+	LearnEdit        { text: Str }
+	LearnRun         { command: Str }
+	LearnStop
+	LearnDone        { step: Str, command: Str, output: Str, code: Int }
+	LearnDue         { n: Int }
+	LearnChecked     { step: Str, n: Int, output: Str }
+	LearnReset
+	LearnHint
+	LearnSolution
 }
 
 type State {
@@ -542,6 +589,7 @@ type State {
 	todoScanned:   Bool
 	todoScanning:  Bool
 	update:        UpdateState
+	learn:         Learning
 }
 
 // ── os eventos dos widgets ───────────────────────────────────────────────
@@ -633,8 +681,18 @@ func initial(root: Str, prefs: settings.Settings): State {
 		todos: [],
 		todoScanned: false,
 		todoScanning: false,
-		update: UpdateState("", update.noOffer(), "", "", false, false, "")
+		update: UpdateState("", update.noOffer(), "", "", false, false, ""),
+		learn: emptyLearning(settings.folder() + "/learn", prefs.language)
 	)
+}
+
+// O curso com a aba fechada, no idioma da interface; o progresso é lido de
+// `root` quando ela abre.
+func emptyLearning(root: Str, language: Str): Learning {
+	Str[dyn] none = []
+	learn.Outcome[dyn] nothing = []
+	Diagnostic[dyn] clean = []
+	return Learning(learn.load(language), root, false, false, "", "", 0, false, "", "", "", nothing, clean, false, false, none, 0, "", "")
 }
 
 func emptyAgents(): Agents {

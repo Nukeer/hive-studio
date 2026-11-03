@@ -1,0 +1,11 @@
+// The n-th Fibonacci number, counting from fib(0) = 0.
+func fib(n: Int): Int {
+	mut previous := 0
+	mut current := 1
+	for i := 0; i < n; i++ {
+		next := previous + current
+		previous = current
+		current = next
+	}
+	return previous
+}

@@ -1,0 +1,4 @@
+// A média de a, b e c, com a fração: average(1, 2, 2) é 1,666…
+func average(a: Int, b: Int, c: Int): Float {
+	return hive.conv.itf(a + b + c) / 3.0
+}

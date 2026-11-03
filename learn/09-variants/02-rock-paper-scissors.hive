@@ -1,0 +1,10 @@
+type Hand {
+	Rock
+	Paper
+	Scissors
+}
+
+// "primeiro", "segundo" ou "empate".
+func winner(a: Hand, b: Hand): Str {
+	return ""
+}

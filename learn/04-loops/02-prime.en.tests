@@ -1,0 +1,24 @@
+test "small primes" {
+	assert isPrime(2) == true
+	assert isPrime(3) == true
+	assert isPrime(5) == true
+}
+
+test "9 is 3 times 3" {
+	assert isPrime(9) == false
+}
+
+test "97 is prime" {
+	assert isPrime(97) == true
+}
+
+test "1, 0 and negative numbers are not prime" {
+	assert isPrime(1) == false
+	assert isPrime(0) == false
+	assert isPrime(-7) == false
+}
+
+test "a big prime and a big square" {
+	assert isPrime(7919) == true
+	assert isPrime(7921) == false
+}

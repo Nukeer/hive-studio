@@ -24,6 +24,7 @@ import ./vim
 import ./native.go
 import ./jsonview
 import ./pty.go
+import ./learn
 
 // O que só a janela do hive.ui lembra, fora do estado do Hive Studio: o menu
 // aberto na barra de título e o resto, abaixo.
@@ -780,7 +781,7 @@ func gap(): Entry {
 func menuEntries(state: model.State, name: Str): Entry[dyn] {
 	ready := state.running == "" && render.targetOf(state) != ""
 	hasDoc := render.activeDoc(state) is Result.Ok(_)
-	canClose := hasDoc || state.settingsOpen || state.commit.key != ""
+	canClose := hasDoc || state.settingsOpen || state.commit.key != "" || state.learn.open
 	path := render.activePath(state)
 	isHiveDoc := hasDoc && path is "{stem}.hive"
 	mut Entry[dyn] items = []
@@ -866,6 +867,7 @@ func menuEntries(state: model.State, name: Str): Entry[dyn] {
 		]
 	} else if name == "Ajuda" {
 		items = [
+			item(state, "Aprender Hive", "learn", true),
 			item(state, "Documentação do Hive", "docs", true),
 			item(state, "Atalhos de teclado", "settings", true),
 			gap(),
@@ -940,8 +942,15 @@ func logo(side: Int): hive.ui.View {
 }
 
 func titleBar(state: model.State, t: theme.Theme, open: Str): hive.ui.View {
-	idle := state.running == ""
-	ready := idle && render.targetOf(state) != ""
+	mut idle := state.running == ""
+	mut ready := idle && render.targetOf(state) != ""
+	mut building := ready
+	// Na página do curso, Check, Run e Test valem para o passo à vista.
+	if render.showingLearn(state) {
+		idle = !state.learn.running
+		ready = idle && state.learn.step != ""
+		building = false
+	}
 	mut hive.ui.View[dyn] items = [logo(18)]
 	for each name in menuNames() {
 		mut color := t.text
@@ -961,13 +970,17 @@ func titleBar(state: model.State, t: theme.Theme, open: Str): hive.ui.View {
 	append(items, ui.spacer())
 	if !idle {
 		append(items, ui.spinner([]))
-		append(items, small(t.muted, state.running + "…"))
+		mut busy := state.running
+		if render.showingLearn(state) {
+			busy = "run"
+		}
+		append(items, small(t.muted, busy + "…"))
 	}
 	append(items, toolButton(state, t, "Check", "check", ready))
 	append(items, toolButton(state, t, "▶ Run", "run", ready))
 	append(items, toolButton(state, t, "Test", "test", ready))
-	append(items, toolButton(state, t, "Build", "build", ready))
-	append(items, toolButton(state, t, "Analyze", "analyze", ready))
+	append(items, toolButton(state, t, "Build", "build", building))
+	append(items, toolButton(state, t, "Analyze", "analyze", building))
 	return ui.row([ui.gap(14), ui.pad(6), ui.align(ui.Align.Center()), fill(t.titleBar)], items)
 }
 
@@ -1021,6 +1034,13 @@ func iconMarks(name: Str, color: Str): hive.ui.Mark[dyn] {
 		return [
 			stroke(color, [4.0, 4.0, 20.0, 4.0, 20.0, 20.0, 4.0, 20.0, 4.0, 4.0]),
 			stroke(color, [8.0, 12.2, 11.0, 15.2, 16.5, 8.8])
+		]
+	} else if name == "learn" {
+		// Um livro aberto: as duas páginas e a lombada.
+		return [
+			stroke(color, [12.0, 7.0, 7.5, 5.0, 3.0, 5.0, 3.0, 18.0, 7.5, 18.0, 12.0, 20.0]),
+			stroke(color, [12.0, 7.0, 16.5, 5.0, 21.0, 5.0, 21.0, 18.0, 16.5, 18.0, 12.0, 20.0]),
+			stroke(color, [12.0, 7.0, 12.0, 20.0])
 		]
 	}
 	// A engrenagem: oito dentes em volta de um furo.
@@ -1076,6 +1096,8 @@ func activityBar(state: model.State, t: theme.Theme): hive.ui.View {
 			state.sideOpen && state.side == model.SideView.OutlineSide(), act("side", "outline"), 0),
 		activityItem(state, t, "todo", "TODO" + render.keyHint(state, "todo"),
 			state.sideOpen && state.side == model.SideView.TodoSide(), act("side", "todo"), len(state.todos)),
+		activityItem(state, t, "learn", tx(state, "Aprender Hive") + render.keyHint(state, "learn"),
+			state.sideOpen && state.side == model.SideView.LearnSide(), act("side", "learn"), 0),
 		ui.spacer(),
 		activityItem(state, t, "settings", tx(state, "Configurações") + render.keyHint(state, "settings"),
 			render.showingSettings(state), act("settings", ""), 0)
@@ -1555,6 +1577,8 @@ func sidePanel(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View 
 		return ui.column([ui.width(300), fill(t.side)], [gitPanel(state, t, extra)])
 	} else if state.side is model.SideView.SearchSide {
 		body = searchPanel(state, t)
+	} else if state.side is model.SideView.LearnSide {
+		body = learnPanel(state, t)
 	}
 	return ui.column([ui.width(300), fill(t.side), ui.scroll(ui.Axis.Vertical())], [body])
 }
@@ -1605,6 +1629,11 @@ func tabStrip(state: model.State, t: theme.Theme): hive.ui.View {
 		append(items, ui.row(tabBox(t, on), [label(t.accent, "⑂"), clickable(t.text, state.commit.title, act("focusCommit", ""), state.commit.title),
 			iconButton(t, "close", "×", tx(state, "Fechar"), act("closeCommit", ""), 20, 12)]))
 	}
+	if state.learn.open {
+		on := render.showingLearn(state)
+		append(items, ui.row(tabBox(t, on), [label(t.accent, "◆"), clickable(t.text, tx(state, "Aprender Hive"), act("learn", state.learn.step), ""),
+			iconButton(t, "close", "×", tx(state, "Fechar") + render.keyHint(state, "closeTab"), act("learnClose", ""), 20, 12)]))
+	}
 	return ui.row([ui.gap(1), fill(t.tabStrip), ui.scroll(ui.Axis.Horizontal())], items)
 }
 
@@ -1638,6 +1667,13 @@ func breadcrumb(state: model.State, t: theme.Theme): hive.ui.View {
 	}
 	if render.showingSettings(state) {
 		return ui.row([ui.pad(6), fill(t.editor)], [small(t.muted, tx(state, "Configurações") + "  ›  " + tx(state, "Usuário"))])
+	}
+	if render.showingLearn(state) {
+		mut Str[dyn] crumbs = [tx(state, "Aprender Hive")]
+		if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+			crumbs = [tx(state, "Aprender Hive"), learn.chapterOf(state.learn.course, step).title, step.title]
+		}
+		return ui.row([ui.pad(6), fill(t.editor)], [small(t.muted, join(crumbs, "  ›  "))])
 	}
 	if render.activeDoc(state) is Result.Ok(doc) {
 		mut hive.ui.View[dyn] items = [small(t.muted, join(workspace.crumbs(state.root, doc.path), "  ›  "))]
@@ -2343,7 +2379,7 @@ func docBody(state: model.State, t: theme.Theme, doc: model.Doc, extra: Chrome):
 func welcome(state: model.State, t: theme.Theme): hive.ui.View {
 	mut hive.ui.View[dyn] rows = []
 	for each option in [["newFile", "Novo arquivo"], ["openFile", "Abrir arquivo…"], ["openFolder", "Abrir pasta…"],
-		["terminal", "Terminal"], ["git", "Controle de código"], ["settings", "Configurações"], ["docs", "Documentação do Hive"]] {
+		["terminal", "Terminal"], ["git", "Controle de código"], ["settings", "Configurações"], ["learn", "Aprender Hive"], ["docs", "Documentação do Hive"]] {
 		append(rows, ui.row([ui.width(360), ui.gap(24)], [
 			clickable(t.accent, tx(state, option[1]), action(option[0]), ""),
 			ui.spacer(),
@@ -2497,6 +2533,351 @@ func settingsPage(state: model.State, t: theme.Theme): hive.ui.View {
 	return ui.column([ui.grow(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [ui.column([ui.gap(6), ui.pad(28), ui.width(900)], page)])
 }
 
+// ── Aprender Hive ────────────────────────────────────────────────────────
+//
+// O curso de lib/learn.hive: na barra lateral os capítulos e os passos, e na
+// aba o texto do passo de um lado e, do outro, o código para rodar e o que ele
+// deu. Os botões do editor ficam em inglês, como os da barra de título
+// (▶ Run, Reset), que é como o texto do curso os chama.
+
+// Uma edição do editor do curso: o trecho de `from` a `to` virou `text`, sobre
+// o texto do serial `serial`.
+func learnEditCmd(serial: Int, from: Int, to: Int, text: Str): model.Cmd {
+	return model.Cmd.Ui(encode(model.Event("learnEdit", "", text, "", from + len(text), from, to - from, serial), hive.json.codec()))
+}
+
+func isSolved(state: model.State, id: Str): Bool {
+	return indexOf(state.learn.solved, id) is Result.Ok(_)
+}
+
+// `done` de `total`, numa barra de `width` pixels.
+func progressBar(t: theme.Theme, done: Int, total: Int, width: Int): hive.ui.View {
+	mut filled := 0
+	if total > 0 {
+		filled = width * done / total
+	}
+	return ui.row([ui.width(width), ui.height(6), fill(t.border)], [ui.row([ui.width(filled), ui.height(6), fill(t.good)], [])])
+}
+
+// O sinal de um passo: ✓ concluído, ◇ um desafio, ○ uma lição.
+func stepMark(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View {
+	mut mark := label(t.muted, "○")
+	if isSolved(state, step.id) {
+		mark = label(t.good, "✓")
+	} else if learn.isChallenge(step) {
+		mark = label(t.accent, "◇")
+	}
+	return ui.row([ui.width(16), ui.justify(ui.Justify.Center())], [mark])
+}
+
+func stepKind(state: model.State, step: learn.Step): Str {
+	if learn.isChallenge(step) {
+		return tx(state, "Desafio")
+	}
+	return tx(state, "Lição")
+}
+
+// Um passo na barra lateral, aceso quando é o que está à vista.
+func stepRow(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View {
+	open := act("learn", step.id)
+	mut box := plus([ui.gap(6), ui.pad(4), ui.align(ui.Align.Center()), ui.on(open)], lit())
+	if render.showingLearn(state) && step.id == state.learn.step {
+		append(box, fill(t.selection))
+	}
+	return ui.row(box, [spaceOf(10), stepMark(state, t, step), plainLink(t.text, step.title, open, stepKind(state, step))])
+}
+
+func tourLink(state: model.State, t: theme.Theme): hive.ui.View {
+	return clickable(t.accent, tx(state, "Tour oficial em hive-lang.run") + " ↗", action("docs"), "https://hive-lang.run")
+}
+
+// A barra lateral do curso: o progresso, e cada capítulo com os passos dele.
+func learnPanel(state: model.State, t: theme.Theme): hive.ui.View {
+	c := state.learn.course
+	total := learn.count(c)
+	done := learn.solvedCount(c, state.learn.solved)
+	mut hive.ui.View[dyn] rows = [
+		header(t, tx(state, "APRENDER HIVE"), []),
+		ui.column([ui.gap(6), ui.pad(8)], [
+			ui.row([ui.gap(8), ui.align(ui.Align.Center())], [progressBar(t, done, total, 200), small(t.muted, "{done}/{total}")]),
+			clickable(t.accent, tx(state, "Visão geral do curso"), act("learnHome", ""), "")
+		])
+	]
+	for i := 0; i < len(c.chapters); i++ {
+		chapter := c.chapters[i]
+		append(rows, ui.row([ui.gap(8), ui.pad(6), ui.align(ui.Align.Center())], [
+			label(t.text, "{i + 1}. " + chapter.title), ui.spacer(),
+			small(t.muted, "{learn.chapterDone(chapter, state.learn.solved)}/{len(chapter.steps)}")
+		]))
+		for each step in chapter.steps {
+			append(rows, stepRow(state, t, step))
+		}
+	}
+	append(rows, rule(t))
+	append(rows, ui.row([ui.pad(8)], [tourLink(state, t)]))
+	return ui.column([ui.gap(1)], rows)
+}
+
+// A aba do curso: a página do curso, ou o passo à vista ao lado do código dele.
+func learnPage(state: model.State, t: theme.Theme): hive.ui.View {
+	if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+		// Metade cada, como o Markdown dividido (ver `docBody`); e, com
+		// `height(1)`, a altura que sobra na janela — um texto comprido rola do
+		// lado dele em vez de empurrar o resultado para baixo da tela.
+		return ui.row([ui.grow(1), ui.height(1), ui.gap(1), fill(t.border)], [
+			ui.column([ui.grow(1), ui.width(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [learnLesson(state, t, step)]),
+			ui.column([ui.grow(1), ui.width(1), fill(t.editor)], [learnToolbar(state, t, step), learnEditor(state, t), learnResult(state, t, step)])
+		])
+	}
+	return learnOverview(state, t)
+}
+
+// A página do curso: o que ele é, o progresso e os capítulos.
+func learnOverview(state: model.State, t: theme.Theme): hive.ui.View {
+	c := state.learn.course
+	total := learn.count(c)
+	done := learn.solvedCount(c, state.learn.solved)
+	next := learn.firstOpen(c, state.learn.solved)
+	mut hive.ui.View[dyn] page = [
+		ui.row([ui.gap(14), ui.align(ui.Align.Center())], [logo(56), ui.text([tone(t.text), ui.size(ui.TextSize.Title()), ui.heading(1)], c.title)])
+	]
+	for each block in markdownBlocks(t, state.learn.page) {
+		append(page, block)
+	}
+	mut hive.ui.View[dyn] buttons = []
+	if next != "" {
+		mut start := tx(state, "Começar")
+		if done > 0 {
+			start = tx(state, "Continuar")
+		}
+		append(buttons, primary(t, start + " →", act("learn", next), true))
+	}
+	append(buttons, button(t, tx(state, "Tour oficial em hive-lang.run") + " ↗", action("docs"), true))
+	append(page, ui.row([ui.gap(10)], buttons))
+	append(page, ui.row([ui.gap(10), ui.align(ui.Align.Center())], [
+		progressBar(t, done, total, 320), small(t.muted, "{done} " + tx(state, "de") + " {total} " + tx(state, "passos concluídos"))
+	]))
+	if next == "" {
+		append(page, strong(t.good, "✓ " + tx(state, "Você concluiu o curso inteiro!")))
+	}
+	for i := 0; i < len(c.chapters); i++ {
+		chapter := c.chapters[i]
+		mut hive.ui.View[dyn] card = [
+			ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+				strong(t.text, "{i + 1}. " + chapter.title), ui.spacer(),
+				small(t.muted, "{learn.chapterDone(chapter, state.learn.solved)}/{len(chapter.steps)}")
+			]),
+			small(t.muted, replaceAll(chapter.blurb, "`", ""))
+		]
+		for each step in chapter.steps {
+			append(card, ui.row([ui.gap(6), ui.align(ui.Align.Center())], [stepMark(state, t, step),
+				clickable(t.text, step.title, act("learn", step.id), ""), small(t.muted, stepKind(state, step))]))
+		}
+		append(page, ui.column([ui.gap(6), ui.pad(14), fill(t.panel)], card))
+	}
+	return ui.column([ui.grow(1), fill(t.editor), ui.scroll(ui.Axis.Vertical())], [ui.column([ui.gap(14), ui.pad(32), ui.width(900)], page)])
+}
+
+// O texto do passo: onde ele fica no curso, o título, a explicação e — num
+// desafio — a dica e uma solução, a pedido; embaixo, o anterior e o próximo.
+func learnLesson(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View {
+	c := state.learn.course
+	chapter := learn.chapterOf(c, step)
+	challenge := learn.isChallenge(step)
+	mut kind := tx(state, "Lição")
+	if challenge {
+		kind = tx(state, "Desafio") + " {learn.challengeNumber(c, step)} " + tx(state, "de") + " {learn.challengeCount(chapter)}"
+	}
+	mut hive.ui.View[dyn] where = [small(t.muted, tx(state, "Capítulo") + " {step.chapter + 1} · " + chapter.title), small(t.accent, kind), ui.spacer()]
+	if isSolved(state, step.id) {
+		append(where, small(t.good, "✓ " + tx(state, "concluído")))
+	}
+	mut hive.ui.View[dyn] blocks = [
+		ui.row([ui.gap(8), ui.align(ui.Align.Center())], where),
+		ui.text([tone(t.text), ui.size(ui.TextSize.Title()), ui.heading(1)], step.title)
+	]
+	for each block in markdownBlocks(t, state.learn.page) {
+		append(blocks, block)
+	}
+	if challenge {
+		mut hive.ui.View[dyn] help = []
+		if step.hint != "" {
+			mut hint := tx(state, "Ver uma dica")
+			if state.learn.hint {
+				hint = tx(state, "Esconder a dica")
+			}
+			append(help, button(t, hint, act("learnHint", ""), true))
+		}
+		mut answer := tx(state, "Ver uma solução")
+		if state.learn.solution {
+			answer = tx(state, "Esconder a solução")
+		}
+		append(help, button(t, answer, act("learnSolution", ""), true))
+		append(blocks, ui.row([ui.gap(8)], help))
+		if state.learn.hint {
+			append(blocks, ui.column([ui.gap(10), ui.pad(14), fill(t.panel)], markdownBlocks(t, state.learn.hintPage)))
+		}
+		if state.learn.solution {
+			append(blocks, small(t.muted, tx(state, "Uma solução possível — não a única. Tente antes de ler.")))
+			append(blocks, codeBlock(t, highlight.highlight(step.solution)))
+		}
+	}
+	append(blocks, rule(t))
+	previous := learn.neighbour(c, step.id, -1)
+	next := learn.neighbour(c, step.id, 1)
+	mut hive.ui.View[dyn] nav = []
+	if previous != "" {
+		append(nav, button(t, "← " + tx(state, "Anterior"), act("learn", previous), true))
+	}
+	append(nav, ui.spacer())
+	append(nav, tourLink(state, t))
+	append(nav, ui.spacer())
+	if next != "" {
+		append(nav, button(t, tx(state, "Próximo") + " →", act("learn", next), true))
+	} else {
+		append(nav, button(t, tx(state, "Visão geral do curso"), act("learnHome", ""), true))
+	}
+	append(blocks, ui.row([ui.gap(8), ui.align(ui.Align.Center())], nav))
+	return ui.column([ui.gap(12), ui.pad(28)], blocks)
+}
+
+// Em cima do editor: o que ele tem e os botões de rodar, recomeçar e parar.
+func learnToolbar(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View {
+	mut what := tx(state, "Exemplo — mude à vontade")
+	mut run := "▶ Run"
+	if learn.isChallenge(step) {
+		what = tx(state, "Sua solução")
+		run = "▶ Run tests"
+	}
+	mut hive.ui.View[dyn] items = [small(t.muted, what), ui.spacer()]
+	if state.learn.running {
+		append(items, ui.spinner([]))
+		append(items, button(t, "■ Stop", act("learnStop", ""), true))
+	} else {
+		append(items, ui.button(plus(buttonLook(), [ui.on(act("learnReset", "")), fill(t.button), tone(t.buttonText),
+			ui.hint(tx(state, "Volta ao código original do passo"))]), "Reset"))
+		append(items, ui.button(plus(buttonLook(), [ui.on(act("learnRun", "run")), fill(t.accent), tone(t.statusFg),
+			ui.hint(run + render.keyHint(state, "run"))]), run))
+	}
+	return ui.row([ui.gap(8), ui.pad(6), ui.align(ui.Align.Center()), fill(t.panel)], items)
+}
+
+// O código do passo: colorido, com os erros do compilador na linha deles.
+// O cursor volta ao começo (e a rolagem ao topo) quando o texto é trocado.
+func learnEditor(state: model.State, t: theme.Theme): hive.ui.View {
+	mut attrs := plus(paneLook(), [ui.grow(1), ui.height(1), fill(t.editor), tone(t.text),
+		ui.numbers(state.settings.lineNumbers), ui.tabSize(state.settings.tabSize), ui.fontSize(state.settings.fontSize),
+		ui.caret(0, 0, state.learn.serial), ui.onEdit(learnEditCmd(state.learn.serial, _, _, _))])
+	if state.focus == "learnEditor" {
+		append(attrs, ui.focus(state.focusSerial))
+	}
+	return ui.code(attrs, state.learn.code, learnRuns(state, t))
+}
+
+func learnRuns(state: model.State, t: theme.Theme): hive.ui.Run[dyn] {
+	mut hive.ui.Run[dyn] runs = []
+	mut at := 0
+	for each token in tokensOf(highlight.highlight(state.learn.code)) {
+		size := len(token.text)
+		if token.cls != "" {
+			append(runs, ui.ink(at, at + size, hex(tokenColor(t, token.cls))))
+		}
+		at = at + size
+	}
+	for each mark in render.learnMarks(state) {
+		append(runs, ui.band(mark.line, hex(t.danger + "24")))
+		append(runs, ui.note(mark.line, mark.message, hex(t.danger)))
+		append(runs, ui.marker(mark.line, hex(t.danger)))
+	}
+	return runs
+}
+
+// Um teste do desafio: ✓ ou ✗, o nome e, quando falhou, o que o `assert` disse.
+func outcomeRow(t: theme.Theme, outcome: learn.Outcome): hive.ui.View {
+	if outcome.passed {
+		return ui.row([ui.gap(8)], [label(t.good, "✓"), label(t.text, outcome.name)])
+	}
+	mut hive.ui.View[dyn] rows = [ui.row([ui.gap(8)], [label(t.danger, "✗"), label(t.text, outcome.name)])]
+	for each line in outcome.detail {
+		append(rows, ui.row([ui.gap(8)], [spaceOf(14), small(t.muted, line)]))
+	}
+	return ui.column([ui.gap(2)], rows)
+}
+
+// Embaixo do editor: o que a última execução deu.
+func learnResult(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View {
+	mut hive.ui.View[dyn] items = []
+	if state.learn.running {
+		append(items, ui.row([ui.gap(8), ui.align(ui.Align.Center())], [ui.spinner([]), label(t.muted, tx(state, "Compilando e rodando…"))]))
+	} else if state.learn.ran != step.id || state.learn.verdict == "" {
+		mut text := tx(state, "▶ Run compila e roda o exemplo; o que ele escreve aparece aqui.")
+		if learn.isChallenge(step) {
+			text = tx(state, "▶ Run tests confere o seu código com os testes escondidos.")
+		}
+		append(items, small(t.muted, text + render.keyHint(state, "run")))
+	} else {
+		items = learnVerdict(state, t, step)
+	}
+	return ui.column([ui.height(220), ui.gap(6), ui.pad(10), fill(t.panel), ui.scroll(ui.Axis.Vertical())], items)
+}
+
+func learnVerdict(state: model.State, t: theme.Theme, step: learn.Step): hive.ui.View[dyn] {
+	l := state.learn
+	verdict := l.verdict
+	challenge := learn.isChallenge(step)
+	mut hive.ui.View[dyn] out = []
+	if verdict == "passed" && challenge {
+		append(out, strong(t.good, "✓ " + tx(state, "Todos os testes passaram") + " ({len(l.outcomes)})"))
+		for each outcome in l.outcomes {
+			append(out, outcomeRow(t, outcome))
+		}
+		next := learn.neighbour(l.course, step.id, 1)
+		if next != "" {
+			append(out, ui.row([], [primary(t, tx(state, "Próximo") + " →", act("learn", next), true)]))
+		}
+	} else if verdict == "passed" {
+		append(out, small(t.good, "✓ " + tx(state, "O programa rodou.")))
+		append(out, preText(t, l.output))
+	} else if verdict == "failed" && len(l.outcomes) > 0 {
+		failed := len(l.outcomes) - learn.passedCount(l.outcomes)
+		append(out, strong(t.danger, "✗ {failed} " + tx(state, "de") + " {len(l.outcomes)} " + tx(state, "testes falharam")))
+		for each outcome in l.outcomes {
+			append(out, outcomeRow(t, outcome))
+		}
+	} else if verdict == "failed" {
+		append(out, strong(t.danger, tx(state, "O programa terminou com erro.")))
+		append(out, preText(t, l.output))
+	} else if verdict == "broken" {
+		append(out, strong(t.danger, tx(state, "Não compilou.")))
+		lines := learn.lineCount(l.code)
+		for each p in l.problems {
+			if p.line <= lines {
+				append(out, ui.row([ui.gap(8)], [label(t.danger, "⊗"), small(t.muted, tx(state, "linha") + " {p.line}"), label(t.text, p.message)]))
+			} else {
+				append(out, ui.row([ui.gap(8)], [label(t.danger, "⊗"), label(t.text, tx(state, "Os testes não conseguem usar o seu código:") + " " + p.message)]))
+				append(out, small(t.muted, tx(state, "Mantenha os nomes, os parâmetros e os tipos que o desafio pede.")))
+			}
+		}
+	} else if verdict == "timeout" {
+		append(out, strong(t.danger, tx(state, "Passou do tempo e foi encerrado — há um laço que nunca termina?")))
+		if l.output != "" {
+			append(out, preText(t, l.output))
+		}
+	} else if verdict == "stopped" {
+		append(out, label(t.muted, tx(state, "Parado.")))
+	} else if verdict == "missing" {
+		append(out, strong(t.danger, tx(state, "Não foi possível iniciar o compilador.")))
+		append(out, small(t.muted, l.output))
+		append(out, ui.row([ui.gap(8), ui.align(ui.Align.Center())], [
+			small(t.muted, tx(state, "Instale o Hive ou ajuste o compilador nas Configurações.")),
+			clickable(t.accent, tx(state, "Configurações"), act("settings", ""), "")
+		]))
+	} else if verdict == "checked" {
+		append(out, small(t.good, "✓ " + tx(state, "Nenhum problema foi detectado.")))
+	}
+	return out
+}
+
 // ── um commit, ou as alterações de um arquivo ────────────────────────────
 
 // A linha do Vim embaixo do editor: o modo, a macro sendo gravada, a última
@@ -2542,6 +2923,8 @@ func editorArea(state: model.State, t: theme.Theme, extra: Chrome): hive.ui.View
 		body = settingsPage(state, t)
 	} else if layout == "commit" {
 		body = commitView(state, t, extra.commit)
+	} else if layout == "learn" {
+		body = learnPage(state, t)
 	} else if render.activeDoc(state) is Result.Ok(doc) {
 		body = docBody(state, t, doc, extra)
 	}
@@ -3116,6 +3499,9 @@ func editorShown(state: model.State): Bool {
 
 // O título da janela, como o da janela própria: "● nome — pasta — Hive Studio".
 func windowTitle(state: model.State): Str {
+	if render.showingLearn(state) {
+		return tx(state, "Aprender Hive") + " — Hive Studio"
+	}
 	if render.activeDoc(state) is Result.Ok(doc) {
 		mut mark := ""
 		if model.dirty(doc) {

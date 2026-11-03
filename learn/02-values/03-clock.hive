@@ -1,0 +1,4 @@
+// 125 minutos são "2h 5m".
+func clock(minutes: Int): Str {
+	return ""
+}

@@ -1,0 +1,122 @@
+// Testes de lib/learn.hive.
+
+import ../lib/learn
+import ./support/learn as support
+
+test "o curso embutido tem os capítulos de learn/, e cada desafio tem dica, testes e solução" {
+	c := learn.load("en")
+	assert c.title == "Learn Hive"
+	assert len(c.chapters) == 15
+	assert learn.count(c) == 57
+	assert support.challenges(c) == 42
+	if c.chapters bounds 0 {
+		assert c.chapters[0].id == "01-hello"
+		assert c.chapters[0].title == "Hello, Hive"
+		Str[dyn] first = ["01-hello/00-first-program", "01-hello/01-greeting", "01-hello/02-badge"]
+		assert support.ids(c.chapters[0].steps) == first
+	}
+	for each step in learn.steps(c) {
+		assert step.title != "" && step.body != "" && step.code != ""
+		if learn.isChallenge(step) {
+			assert step.hint != "" && step.solution != ""
+		}
+	}
+}
+
+test "um passo lê o título, o texto e a dica do Markdown; um desafio é o que tem testes" {
+	c := learn.build(support.files(), "pt-BR")
+	assert c.title == "Curso" && c.intro == "Intro."
+	assert len(c.chapters) == 2
+	if c.chapters bounds 1 {
+		assert c.chapters[0].title == "Primeiro" && c.chapters[0].blurb == "O começo."
+		Str[dyn] first = ["01-a/00-lesson", "01-a/01-task"]
+		assert support.ids(c.chapters[0].steps) == first
+		// Sem chapter.md, o capítulo leva o nome da pasta.
+		assert c.chapters[1].title == "02-b"
+	}
+	if learn.find(c, "01-a/01-task") is Result.Ok(task) {
+		assert task.title == "Tarefa" && task.body == "Faça." && task.hint == "Assim."
+		assert learn.isChallenge(task)
+		assert task.solution == "func f(): Int \{\n\treturn 1\n}\n"
+		assert learn.challengeNumber(c, task) == 1
+		assert learn.challengeCount(learn.chapterOf(c, task)) == 1
+	} else {
+		assert false
+	}
+	if learn.find(c, "02-b/00-only") is Result.Ok(only) {
+		assert only.chapter == 1 && only.body == "" && !learn.isChallenge(only)
+	} else {
+		assert false
+	}
+	assert learn.find(c, "01-a/nada") is Result.Error(false)
+	assert learn.neighbour(c, "01-a/01-task", 1) == "02-b/00-only"
+	assert learn.neighbour(c, "01-a/01-task", -1) == "01-a/00-lesson"
+	assert learn.neighbour(c, "01-a/00-lesson", -1) == ""
+	assert learn.neighbour(c, "01-a/nada", 1) == ""
+}
+
+test "um desafio roda o código e os testes depois dele, sem mexer nas linhas do código" {
+	c := learn.build(support.files(), "pt-BR")
+	code := "func f(): Int \{\n\treturn 1\n}\n"
+	if learn.find(c, "01-a/01-task") is Result.Ok(task) {
+		program := learn.program(task, code)
+		assert program == code + "\n\n" + task.tests
+		assert learn.lineCount(code) == 4
+		assert learn.command(code, true) == "test"
+	}
+	if learn.find(c, "01-a/00-lesson") is Result.Ok(lesson) {
+		assert learn.program(lesson, "x") == "x"
+	}
+	// Sem `main` e com testes, rodar é testar.
+	assert learn.command("proc main(): void \{\n}\n", false) == "run"
+	assert learn.command("func f(): Int \{ return 1 }\ntest \"f\" \{ assert f() == 1 }\n", false) == "test"
+	assert learn.command("", false) == "run"
+}
+
+test "a saída do hive test vira um resultado por teste, com o porquê de quem falhou" {
+	found := learn.outcomes(support.testOutput())
+	assert len(found) == 2
+	if found bounds 1 {
+		assert found[0].name == "greets Ada" && found[0].passed && len(found[0].detail) == 0
+		assert found[1].name == "greets the World" && !found[1].passed
+		Str[dyn] why = ["assert greet(\"World\") == \"Hello, World!\"", "left:  \"\"", "right: \"Hello, World!\""]
+		assert found[1].detail == why
+	}
+	assert !learn.allPassed(found)
+	assert learn.passedCount(found) == 1
+	// Um texto vazio num lado do `assert` não sai escrito pelo hive test.
+	assert learn.detailLine("          left:  ") == "left:  \"\""
+	assert learn.detailLine("          right: x") == "right: x"
+	learn.Outcome[dyn] none = []
+	assert !learn.allPassed(none)
+}
+
+test "o veredito de uma execução" {
+	learn.Outcome[dyn] none = []
+	assert learn.verdict(-1, 0, none) == "missing"
+	assert learn.verdict(-2, 0, none) == "timeout"
+	assert learn.verdict(-3, 0, none) == "stopped"
+	assert learn.verdict(1, 1, none) == "broken"
+	assert learn.verdict(1, 0, none) == "failed"
+	assert learn.verdict(0, 0, none) == "passed"
+	assert learn.verdict(0, 0, [support.outcome(true)]) == "passed"
+	assert learn.verdict(1, 0, [support.outcome(true), support.outcome(false)]) == "failed"
+}
+
+test "o progresso vai ao disco e volta, e conta o que é do curso" {
+	c := learn.build(support.files(), "pt-BR")
+	saved := learn.parseProgress("at 01-a/01-task\r\nsolved 01-a/00-lesson\nsolved 01-a/00-lesson\nsolved 09-x/saiu\nlixo\n")
+	assert saved.at == "01-a/01-task"
+	Str[dyn] solved = ["01-a/00-lesson", "09-x/saiu"]
+	assert saved.solved == solved
+	assert learn.parseProgress(learn.progressText(saved)) == saved
+	assert learn.solvedCount(c, saved.solved) == 1
+	assert learn.firstOpen(c, saved.solved) == "01-a/01-task"
+	more := learn.withSolved(learn.withSolved(saved.solved, "01-a/01-task"), "01-a/01-task")
+	assert len(more) == 3
+	assert learn.firstOpen(c, learn.withSolved(more, "02-b/00-only")) == ""
+	if c.chapters bounds 0 {
+		assert learn.chapterDone(c.chapters[0], more) == 2
+	}
+	assert learn.draftPath("/r", "01-a/01-task") == "/r/drafts/01-a/01-task.hive"
+}

@@ -1,0 +1,460 @@
+// O curso "Aprender Hive": os capítulos de learn/ (embutidos em lib/course.hive
+// por tools/embed.hive), o programa que um passo roda e a leitura do que o
+// compilador respondeu. Tudo aqui é `func`; quem grava e roda é o studio.
+//
+// Em learn/, cada capítulo é uma pasta com um `chapter.md` (o título e uma
+// frase) e os passos, pelo nome: `<passo>.md` é o texto (a primeira linha
+// `# …` é o título e um `## Dica` no fim é a dica), `<passo>.hive` o código
+// do editor, e um desafio tem também os testes escondidos (`<passo>.tests`)
+// e uma solução (`<passo>.solution.hive`). O curso é em português; um
+// arquivo pode ter a versão de outro idioma ao lado, com o código dele antes
+// da extensão (`01-greeting.en.md`), usada quando a interface está nele.
+
+import ./course
+
+// Um passo: uma lição (o texto e um programa para rodar) ou um desafio (o
+// texto, o código inicial, os testes que conferem e uma solução).
+type Step {
+	id:       Str
+	chapter:  Int
+	title:    Str
+	body:     Str
+	hint:     Str
+	code:     Str
+	tests:    Str
+	solution: Str
+}
+
+type Chapter {
+	id:    Str
+	title: Str
+	blurb: Str
+	steps: Step[dyn]
+}
+
+type Course {
+	title:    Str
+	intro:    Str
+	chapters: Chapter[dyn]
+}
+
+// Um teste de um desafio: o nome, se passou e, quando não, o que o `assert`
+// disse (a linha dele e os dois lados).
+type Outcome {
+	name:   Str
+	passed: Bool
+	detail: Str[dyn]
+}
+
+// O que fica no disco entre uma vez e outra: o passo à vista e os concluídos.
+type Progress {
+	at:     Str
+	solved: Str[dyn]
+}
+
+// O curso no idioma da interface (`pt-BR`, `en`, `es`): o português é a base,
+// e o que não tem versão no idioma pedido fica nela.
+func load(language: Str): Course {
+	return build(course.files(), language)
+}
+
+// O caminho da versão de `path` no idioma `language`: `01-a/x.md` em `en` é
+// `01-a/x.en.md`, e `01-a/x.solution.hive`, `01-a/x.en.solution.hive`.
+func variant(path: Str, language: Str): Str {
+	if path is "{folder}/{stem}.{kind}" {
+		return folder + "/" + stem + "." + language + "." + kind
+	} else if path is "{stem}.{kind}" {
+		return stem + "." + language + "." + kind
+	}
+	return path
+}
+
+// O texto de um arquivo do curso, na versão do idioma quando ela existe.
+func textOf(texts: hive.map.Map<Str, Str>, path: Str, language: Str): Str {
+	if language != "" && language != "pt-BR" {
+		if hive.map.get(texts, variant(path, language)) is Result.Ok(text) {
+			return replaceAll(text, "\r", "")
+		}
+	}
+	if hive.map.get(texts, path) is Result.Ok(text) {
+		return replaceAll(text, "\r", "")
+	}
+	return ""
+}
+
+// O curso a partir dos arquivos de learn/ ([caminho, conteúdo]): os capítulos
+// e os passos na ordem dos nomes. Um passo é um `<passo>.md` sem ponto no
+// nome; `<passo>.en.md` é só a versão dele em outro idioma.
+func build(files: Str[2][], language: Str): Course {
+	mut hive.map.Map<Str, Str> texts = hive.map.new()
+	mut Str[dyn] chapterIds = []
+	mut Str[dyn] stepIds = []
+	for each file in files {
+		path := file[0]
+		hive.map.set(texts, path, file[1])
+		if path is "{chapter}/{name}" {
+			if indexOf(chapterIds, chapter) is Result.Error(_) {
+				append(chapterIds, chapter)
+			}
+			if name is "{stem}.md" && name != "chapter.md" && indexOf(stem, ".") is Result.Error(_) {
+				append(stepIds, path)
+			}
+		}
+	}
+	sort(chapterIds)
+	sort(stepIds)
+	mut Chapter[dyn] chapters = []
+	for c := 0; c < len(chapterIds); c++ {
+		id := chapterIds[c]
+		about := textOf(texts, id + "/chapter.md", language)
+		mut Step[dyn] steps = []
+		for each path in stepIds {
+			if path is "{chapter}/{stem}.md" && chapter == id {
+				step := chapter + "/" + stem
+				md := textOf(texts, path, language)
+				append(steps, Step(step, c, titleOf(md), bodyOf(md), hintOf(md), textOf(texts, step + ".hive", language),
+					textOf(texts, step + ".tests", language), textOf(texts, step + ".solution.hive", language)))
+			}
+		}
+		mut title := titleOf(about)
+		if title == "" {
+			title = id
+		}
+		append(chapters, Chapter(id, title, bodyOf(about), steps))
+	}
+	intro := textOf(texts, "course.md", language)
+	return Course(titleOf(intro), bodyOf(intro), chapters)
+}
+
+// A primeira linha `# …` do Markdown.
+func titleOf(md: Str): Str {
+	for each line in split(md, "\n") {
+		if line is "# {title}" {
+			return title
+		}
+	}
+	return ""
+}
+
+// O Markdown partido no título da dica — `## Dica`, ou `## Hint` na versão em
+// inglês —: o que vem antes e o que vem depois (vazio sem dica).
+func hintSplit(md: Str): Str[2] {
+	if md is "{before}\n## Dica\n{after}" {
+		return [before, after]
+	} else if md is "{before}\n## Hint\n{after}" {
+		return [before, after]
+	}
+	return [md, ""]
+}
+
+// O texto sem a linha do título nem a dica, sem linhas vazias nas pontas.
+func bodyOf(md: Str): Str {
+	mut body := hintSplit(md)[0]
+	if body is "# {title}\n{rest}" {
+		body = rest
+	} else if body is "# {title}" {
+		body = ""
+	}
+	return trimLines(body)
+}
+
+// O que vem depois da dica ("" sem dica).
+func hintOf(md: Str): Str {
+	return trimLines(hintSplit(md)[1])
+}
+
+// O texto sem as linhas em branco do começo e do fim.
+func trimLines(text: Str): Str {
+	lines := split(text, "\n")
+	mut first := 0
+	mut last := len(lines) - 1
+	for ; lines bounds first && first <= last; first++ {
+		if replaceAll(lines[first], " ", "") != "" {
+			break
+		}
+	}
+	for ; lines bounds last && last >= first; last-- {
+		if replaceAll(lines[last], " ", "") != "" {
+			break
+		}
+	}
+	mut Str[dyn] kept = []
+	for i := first; i <= last; i++ {
+		if lines bounds i {
+			append(kept, lines[i])
+		}
+	}
+	return join(kept, "\n")
+}
+
+// Todos os passos, capítulo por capítulo.
+func steps(c: Course): Step[dyn] {
+	mut Step[dyn] all = []
+	for each chapter in c.chapters {
+		for each step in chapter.steps {
+			append(all, step)
+		}
+	}
+	return all
+}
+
+func count(c: Course): Int {
+	return len(steps(c))
+}
+
+func find(c: Course, id: Str): Result<Step, Bool> {
+	for each step in steps(c) {
+		if step.id == id {
+			return Result.Ok(step)
+		}
+	}
+	return Result.Error(false)
+}
+
+func chapterOf(c: Course, step: Step): Chapter {
+	at := step.chapter
+	if c.chapters bounds at {
+		return c.chapters[at]
+	}
+	Step[dyn] none = []
+	return Chapter("", "", "", none)
+}
+
+// O passo `delta` passos depois de `id` (antes, se negativo); "" fora do curso.
+func neighbour(c: Course, id: Str, delta: Int): Str {
+	all := steps(c)
+	for i := 0; i < len(all); i++ {
+		if all[i].id == id {
+			other := i + delta
+			if all bounds other {
+				return all[other].id
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+func isChallenge(step: Step): Bool {
+	return step.tests != ""
+}
+
+// Desafios do capítulo de `step` até ele, contando o próprio (1 = o primeiro).
+func challengeNumber(c: Course, step: Step): Int {
+	mut n := 0
+	for each other in chapterOf(c, step).steps {
+		if isChallenge(other) {
+			n++
+		}
+		if other.id == step.id {
+			return n
+		}
+	}
+	return n
+}
+
+func challengeCount(chapter: Chapter): Int {
+	mut n := 0
+	for each step in chapter.steps {
+		if isChallenge(step) {
+			n++
+		}
+	}
+	return n
+}
+
+// O que vai para o disco: num desafio, o código e os testes escondidos
+// depois dele — os números de linha do código continuam os mesmos.
+func program(step: Step, code: Str): Str {
+	if isChallenge(step) {
+		return code + "\n\n" + step.tests
+	}
+	return code
+}
+
+// `test` num desafio, ou num código sem `main` que tem testes; senão `run`.
+func command(code: Str, challenge: Bool): Str {
+	if challenge {
+		return "test"
+	}
+	hasMain := indexOf(code, "proc main(") is Result.Ok(_)
+	hasTests := indexOf(code, "test \"") is Result.Ok(_)
+	if !hasMain && hasTests {
+		return "test"
+	}
+	return "run"
+}
+
+// Quantas linhas o código tem: um erro numa linha depois delas é dos testes.
+func lineCount(code: Str): Int {
+	return len(split(code, "\n"))
+}
+
+// Os testes que `hive test` contou: cada `PASS`/`FAIL` e, depois de um
+// `FAIL`, as linhas recuadas que dizem por quê.
+func outcomes(output: Str): Outcome[dyn] {
+	mut Outcome[dyn] found = []
+	for each raw in split(replaceAll(output, "\r", ""), "\n") {
+		if raw is "  PASS  {name}" {
+			Str[dyn] none = []
+			append(found, Outcome(name, true, none))
+		} else if raw is "  FAIL  {name}" {
+			Str[dyn] none = []
+			append(found, Outcome(name, false, none))
+		} else if raw is "    {detail}" {
+			last := len(found) - 1
+			if found bounds last {
+				if !found[last].passed {
+					append(found[last].detail, detailLine(detail))
+				}
+			}
+		}
+	}
+	return found
+}
+
+// Uma linha do porquê, sem o recuo nem o lugar no Go gerado
+// (`main_test.go:21: `), que não diz nada a quem escreveu o Hive. Um lado do
+// `assert` que é um texto vazio não sai escrito; aqui ele é `""`.
+func detailLine(line: Str): Str {
+	if replaceAll(line, " ", "") == "left:" || replaceAll(line, " ", "") == "right:" {
+		return replaceAll(line, " ", "") + "  \"\""
+	}
+	mut text := line
+	for ;; {
+		if text is " {rest}" {
+			text = rest
+		} else {
+			break
+		}
+	}
+	if text is "{file}_test.go:{n is (\d+)}: {rest}" {
+		return rest
+	}
+	return text
+}
+
+func allPassed(found: Outcome[]): Bool {
+	if len(found) == 0 {
+		return false
+	}
+	for each o in found {
+		if !o.passed {
+			return false
+		}
+	}
+	return true
+}
+
+func passedCount(found: Outcome[]): Int {
+	mut n := 0
+	for each o in found {
+		if o.passed {
+			n++
+		}
+	}
+	return n
+}
+
+// O que uma execução deu: "missing" (o compilador nem abriu), "timeout"
+// (passou do prazo), "stopped" (parada pelo usuário), "broken" (não
+// compilou), "passed" (rodou, e os testes que houver passaram) ou "failed".
+func verdict(code: Int, problems: Int, found: Outcome[]): Str {
+	if code == -1 {
+		return "missing"
+	} else if code == -2 {
+		return "timeout"
+	} else if code == -3 {
+		return "stopped"
+	} else if problems > 0 {
+		return "broken"
+	} else if code == 0 && (len(found) == 0 || allPassed(found)) {
+		return "passed"
+	}
+	return "failed"
+}
+
+// O primeiro passo ainda não concluído ("" quando todos estão).
+func firstOpen(c: Course, solved: Str[]): Str {
+	for each step in steps(c) {
+		if indexOf(solved, step.id) is Result.Error(_) {
+			return step.id
+		}
+	}
+	return ""
+}
+
+// Quantos passos do curso estão concluídos (um id que saiu do curso não conta).
+func solvedCount(c: Course, solved: Str[]): Int {
+	mut n := 0
+	for each step in steps(c) {
+		if indexOf(solved, step.id) is Result.Ok(_) {
+			n++
+		}
+	}
+	return n
+}
+
+func chapterDone(chapter: Chapter, solved: Str[]): Int {
+	mut n := 0
+	for each step in chapter.steps {
+		if indexOf(solved, step.id) is Result.Ok(_) {
+			n++
+		}
+	}
+	return n
+}
+
+func withSolved(solved: Str[], id: Str): Str[dyn] {
+	mut Str[dyn] out = []
+	for each s in solved {
+		append(out, s)
+	}
+	if indexOf(solved, id) is Result.Error(_) {
+		append(out, id)
+	}
+	return out
+}
+
+// O progresso no disco: uma linha `at <passo>` e uma `solved <passo>` por
+// passo concluído.
+func parseProgress(text: Str): Progress {
+	mut at := ""
+	mut Str[dyn] solved = []
+	for each line in split(replaceAll(text, "\r", ""), "\n") {
+		if line is "at {id}" {
+			at = id
+		} else if line is "solved {id}" {
+			if indexOf(solved, id) is Result.Error(_) {
+				append(solved, id)
+			}
+		}
+	}
+	return Progress(at, solved)
+}
+
+func progressText(p: Progress): Str {
+	mut Str[dyn] lines = ["at " + p.at]
+	for each id in p.solved {
+		append(lines, "solved " + id)
+	}
+	return join(lines, "\n") + "\n"
+}
+
+// Onde ficam o progresso, o código de cada passo e as pastas onde ele roda,
+// dentro de `root` (a pasta do curso nas configurações).
+func progressPath(root: Str): Str {
+	return root + "/progress.txt"
+}
+
+func draftPath(root: Str, id: Str): Str {
+	return root + "/drafts/" + id + ".hive"
+}
+
+func runFolder(root: Str): Str {
+	return root + "/run"
+}
+
+func checkFolder(root: Str): Str {
+	return root + "/check"
+}

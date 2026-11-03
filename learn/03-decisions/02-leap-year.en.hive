@@ -1,0 +1,4 @@
+// true for 2024 and 2000, false for 2023 and 1900.
+func isLeap(year: Int): Bool {
+	return false
+}

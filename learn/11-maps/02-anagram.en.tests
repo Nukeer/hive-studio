@@ -1,0 +1,21 @@
+test "listen and silent" {
+	assert isAnagram("listen", "silent") == true
+}
+
+test "heart and earth" {
+	assert isAnagram("heart", "earth") == true
+}
+
+test "every letter counts as often as it appears" {
+	assert isAnagram("bee", "eeb") == true
+	assert isAnagram("bee", "be") == false
+	assert isAnagram("bee", "bbe") == false
+}
+
+test "different letters" {
+	assert isAnagram("rat", "car") == false
+}
+
+test "two empty words" {
+	assert isAnagram("", "") == true
+}

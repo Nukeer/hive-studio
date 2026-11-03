@@ -1,0 +1,11 @@
+test "the right total" {
+	assert basketTotal("honey", "wax", "pollen") == 20
+}
+
+test "within 600 ms" {
+	assert basketTotal("wax", "wax", "honey") with timeout 600 is Result.Ok(22)
+}
+
+test "an unknown item costs nothing, quickly" {
+	assert basketTotal("honey", "gold", "gold") with timeout 600 is Result.Ok(12)
+}

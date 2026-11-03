@@ -1,0 +1,21 @@
+test "red turns green" {
+	assert next(Light.Red()) == Light.Green()
+}
+
+test "green turns yellow" {
+	assert next(Light.Green()) == Light.Yellow()
+}
+
+test "yellow turns red" {
+	assert next(Light.Yellow()) == Light.Red()
+}
+
+test "three steps come back round" {
+	assert next(next(next(Light.Red()))) == Light.Red()
+}
+
+test "only green says go" {
+	assert canGo(Light.Green()) == true
+	assert canGo(Light.Red()) == false
+	assert canGo(Light.Yellow()) == false
+}

@@ -1,0 +1,9 @@
+// "positive", "negative" or "zero".
+func sign(n: Int): Str {
+	if n > 0 {
+		return "positive"
+	} else if n < 0 {
+		return "negative"
+	}
+	return "zero"
+}

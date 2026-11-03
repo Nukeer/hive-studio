@@ -1,0 +1,15 @@
+test "3 across and 4 up" {
+	assert distance(Point(1, 1), Point(4, 5)) == 7
+}
+
+test "the other way round" {
+	assert distance(Point(4, 5), Point(1, 1)) == 7
+}
+
+test "negative coordinates" {
+	assert distance(Point(0, 0), Point(-2, 3)) == 5
+}
+
+test "the same point" {
+	assert distance(Point(6, -6), Point(6, -6)) == 0
+}

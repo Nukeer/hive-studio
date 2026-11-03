@@ -10,6 +10,7 @@ import ./highlight.test as highlightTest
 import ./i18n.test as i18nTest
 import ./jsonview.test as jsonviewTest
 import ./keys.test as keysTest
+import ./learn.test as learnTest
 import ./markdown.test as markdownTest
 import ./native.test as nativeTest
 import ./navigate.test as navigateTest

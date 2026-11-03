@@ -1,0 +1,4 @@
+// "equilateral", "isosceles", "scalene" or "impossible".
+func triangle(a: Int, b: Int, c: Int): Str {
+	return ""
+}

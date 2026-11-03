@@ -1,0 +1,21 @@
+proc main(): void {
+	// Diga o que o mapa guarda quando o criar.
+	mut hive.map.Map<Str, Int> estoque = hive.map.new()
+	hive.map.set(estoque, "mel", 12)
+	hive.map.set(estoque, "cera", 3)
+	hive.map.set(estoque, "mel", 10)
+
+	// `get` responde com um Result: a chave pode não estar lá.
+	if hive.map.get(estoque, "mel") is Result.Ok(potes) {
+		echo "mel: {potes}"
+	}
+	echo hive.map.has(estoque, "pólen")
+
+	// Percorra as chaves, na ordem em que entraram.
+	for each item in hive.map.keys(estoque) {
+		if hive.map.get(estoque, item) is Result.Ok(n) {
+			echo "{item} -> {n}"
+		}
+	}
+	echo len(estoque)
+}

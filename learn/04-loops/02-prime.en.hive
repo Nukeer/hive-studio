@@ -1,0 +1,4 @@
+// true when only 1 and n itself divide n (and n is greater than 1).
+func isPrime(n: Int): Bool {
+	return false
+}

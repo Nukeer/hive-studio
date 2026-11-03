@@ -1,0 +1,15 @@
+test "up to 5" {
+	assert fizzBuzz(5) == "1 2 Fizz 4 Buzz"
+}
+
+test "up to 15" {
+	assert fizzBuzz(15) == "1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz"
+}
+
+test "just one" {
+	assert fizzBuzz(1) == "1"
+}
+
+test "nothing at all" {
+	assert fizzBuzz(0) == ""
+}

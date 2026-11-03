@@ -1,0 +1,16 @@
+test "Hello World" {
+	assert vowels("Hello World") == 3
+}
+
+test "no vowels at all" {
+	assert vowels("rhythm") == 0
+	assert vowels("") == 0
+}
+
+test "upper case counts" {
+	assert vowels("AEIOU") == 5
+}
+
+test "a whole sentence" {
+	assert vowels("The quick brown fox jumps over the lazy dog") == 11
+}

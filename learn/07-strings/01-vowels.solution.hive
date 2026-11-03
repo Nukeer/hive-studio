@@ -1,0 +1,10 @@
+// Quantos a, e, i, o, u (maiúsculos ou minúsculos) há em `text`.
+func vowels(text: Str): Int {
+	mut count := 0
+	for each c in split(text, "") {
+		if indexOf("aeiouAEIOU", c) is Result.Ok(_) {
+			count++
+		}
+	}
+	return count
+}

@@ -1,0 +1,14 @@
+test "the first two" {
+	assert fib(0) == 0
+	assert fib(1) == 1
+}
+
+test "a few more" {
+	assert fib(2) == 1
+	assert fib(7) == 13
+	assert fib(10) == 55
+}
+
+test "fib(60) arrives quickly" {
+	assert fib(60) == 1548008755920
+}

@@ -1,0 +1,15 @@
+test "the average of 1, 2 and 3 is 2" {
+	assert average(1, 2, 3) == 2.0
+}
+
+test "the fraction is kept" {
+	assert average(1, 2, 2) > 1.6666 && average(1, 2, 2) < 1.6667
+}
+
+test "negative numbers count too" {
+	assert average(-3, 0, 3) == 0.0
+}
+
+test "big numbers" {
+	assert average(1000000, 2000000, 3000000) == 2000000.0
+}

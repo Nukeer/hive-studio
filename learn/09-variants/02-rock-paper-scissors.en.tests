@@ -1,0 +1,20 @@
+test "rock beats scissors" {
+	assert winner(Hand.Rock(), Hand.Scissors()) == "first"
+	assert winner(Hand.Scissors(), Hand.Rock()) == "second"
+}
+
+test "scissors beat paper" {
+	assert winner(Hand.Scissors(), Hand.Paper()) == "first"
+	assert winner(Hand.Paper(), Hand.Scissors()) == "second"
+}
+
+test "paper beats rock" {
+	assert winner(Hand.Paper(), Hand.Rock()) == "first"
+	assert winner(Hand.Rock(), Hand.Paper()) == "second"
+}
+
+test "the same hand is a draw" {
+	assert winner(Hand.Rock(), Hand.Rock()) == "draw"
+	assert winner(Hand.Paper(), Hand.Paper()) == "draw"
+	assert winner(Hand.Scissors(), Hand.Scissors()) == "draw"
+}

@@ -1,0 +1,4 @@
+// The largest number dividing both a and b (both are 0 or more).
+func gcd(a: Int, b: Int): Int {
+	return 0
+}

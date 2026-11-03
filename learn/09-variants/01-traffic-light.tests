@@ -1,0 +1,21 @@
+test "vermelho vira verde" {
+	assert next(Light.Red()) == Light.Green()
+}
+
+test "verde vira amarelo" {
+	assert next(Light.Green()) == Light.Yellow()
+}
+
+test "amarelo vira vermelho" {
+	assert next(Light.Yellow()) == Light.Red()
+}
+
+test "três passos dão a volta" {
+	assert next(next(next(Light.Red()))) == Light.Red()
+}
+
+test "só o verde deixa passar" {
+	assert canGo(Light.Green()) == true
+	assert canGo(Light.Red()) == false
+	assert canGo(Light.Yellow()) == false
+}

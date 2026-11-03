@@ -1,0 +1,5 @@
+// The positions [i, j] (i < j) of two numbers adding up to `target`; [] if none.
+func twoSum(numbers: Int[], target: Int): Int[dyn] {
+	Int[dyn] none = []
+	return none
+}

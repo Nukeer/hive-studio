@@ -294,3 +294,49 @@ proc lensTimer(window: Address, n: Int): void {
 	hive.task.sleep(700)
 	async window(model.Cmd.Post(model.Msg.LensDue(n)))
 }
+
+// ── o curso "Aprender Hive" ──────────────────────────────────────────────
+
+// Quanto um passo pode levar para compilar e rodar — um laço que nunca termina
+// é encerrado aqui — e o check enquanto se digita.
+func learnLimit(): Int {
+	return 60000
+}
+
+func learnCheckLimit(): Int {
+	return 20000
+}
+
+// O nome com que o passo roda, para o ■ achá-lo.
+func learnTag(): Str {
+	return "learn"
+}
+
+// Um passo do curso: o programa vai para `folder/main.hive` e o compilador o
+// roda (`run`), testa (`test`) ou confere (`check`) ali, com prazo. O que ele
+// disse volta como `LearnDone`.
+proc learnRun(window: Address, compiler: Str, folder: Str, step: Str, command: Str, program: Str): void {
+	_made := hive.file.makeDir(folder)
+	_written := hive.file.write(folder + "/main.hive", program)
+	result := process.runFor(compilerPath(compiler), [command, "main.hive"], folder, learnLimit(), learnTag())
+	async window(model.Cmd.Post(model.Msg.LearnDone(step, command, result.text, result.code)))
+}
+
+// O check do código do passo quando a digitação para (sem os testes
+// escondidos): os erros voltam como `LearnChecked`, "" quando não há.
+proc learnCheck(window: Address, compiler: Str, folder: Str, step: Str, n: Int, code: Str): void {
+	_made := hive.file.makeDir(folder)
+	_written := hive.file.write(folder + "/main.hive", code)
+	result := process.runFor(compilerPath(compiler), ["check", "main.hive"], folder, learnCheckLimit(), "")
+	mut output := ""
+	if result.code > 0 {
+		output = result.text
+	}
+	async window(model.Cmd.Post(model.Msg.LearnChecked(step, n, output)))
+}
+
+// Espera a digitação parar: só o último pedido (`n`) guarda e confere.
+proc learnTimer(window: Address, n: Int): void {
+	hive.task.sleep(700)
+	async window(model.Cmd.Post(model.Msg.LearnDue(n)))
+}

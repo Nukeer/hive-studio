@@ -1,0 +1,36 @@
+// `T` is a type variable: whatever the call brings.
+func firstOr(values: T[], fallback: T): T {
+	if values bounds 0 {
+		return values[0]
+	}
+	return fallback
+}
+
+// Two of them, and a function over both.
+func pairUp(left: A, right: B, show: func(A, B): Str): Str {
+	return show(left, right)
+}
+
+func describe(name: Str, age: Int): Str {
+	return "{name} is {age}"
+}
+
+// A generic type, written out with its type where it is used.
+type Box {
+	items: T[dyn]
+	label: Str
+}
+
+proc main(): void {
+	echo firstOr([3, 4], 0)
+	echo firstOr(["bee", "wasp"], "nobody")
+	Str[dyn] none = []
+	echo firstOr(none, "nobody")
+
+	echo pairUp("Ada", 36, describe)
+
+	Box<Str> names = Box(["ada", "bea"], "bees")
+	Box<Int> sizes = Box([3, 5, 8], "frames")
+	echo "{names.label}: {names.items}"
+	echo "{sizes.label}: {sizes.items}"
+}

@@ -1,0 +1,21 @@
+test "três letras" {
+	Str[dyn] expected = ["c", "b", "a"]
+	assert reversed(["a", "b", "c"]) == expected
+}
+
+test "uma palavra" {
+	Str[dyn] expected = ["abelha"]
+	assert reversed(["abelha"]) == expected
+}
+
+test "nada" {
+	Str[dyn] none = []
+	assert len(reversed(none)) == 0
+}
+
+test "o original fica como estava" {
+	Str[dyn] words = ["primeira", "segunda"]
+	_ := reversed(words)
+	Str[dyn] same = ["primeira", "segunda"]
+	assert words == same
+}

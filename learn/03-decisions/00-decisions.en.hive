@@ -1,0 +1,31 @@
+// Every path through a func that returns a value must `return`.
+func describe(temperature: Int): Str {
+	if temperature < 0 {
+		return "freezing"
+	} else if temperature < 20 {
+		return "cool"
+	} else if temperature < 30 {
+		return "warm"
+	}
+	return "hot"
+}
+
+func isWeekend(day: Str): Bool {
+	return day == "Saturday" || day == "Sunday"
+}
+
+proc main(): void {
+	echo describe(-5)
+	echo describe(25)
+
+	count := 3
+	// A condition must be a Bool: `if count {` would not compile.
+	if count > 0 {
+		echo "{count} bees are out"
+	}
+
+	day := "Sunday"
+	if isWeekend(day) && !(count > 10) {
+		echo "{day} is a quiet day"
+	}
+}

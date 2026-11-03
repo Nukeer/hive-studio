@@ -2,6 +2,7 @@
 
 import ../lib/process
 import ../lib/native.go
+import ./support/process as support
 
 test "run devolve código e saída" {
 	ok := process.run("git", ["--version"], "")
@@ -9,4 +10,28 @@ test "run devolve código e saída" {
 	assert indexOf(ok.text, "git version") is Result.Ok(_)
 	missing := process.run("programa-que-nao-existe-hive", ["x"], "")
 	assert missing.code == -1
+}
+
+test "runFor devolve o mesmo que run quando o programa termina a tempo" {
+	ok := process.runFor("git", ["--version"], "", 20000, "")
+	assert ok.code == 0
+	assert indexOf(ok.text, "git version") is Result.Ok(_)
+	assert process.runFor("programa-que-nao-existe-hive", ["x"], "", 20000, "").code == -1
+}
+
+test "passado o prazo, o programa é encerrado e o código é -2" {
+	late := support.slow(300, "")
+	assert late.code == -2
+}
+
+test "stop encerra o programa com aquele nome, e o código é -3" {
+	assert !process.stop("ninguem-rodando")
+	running := async support.slow(20000, "parar-este")
+	mut stopped := false
+	for waited := 0; waited < 5000 && !stopped; waited = waited + 100 {
+		hive.task.sleep(100)
+		stopped = process.stop("parar-este")
+	}
+	assert stopped
+	assert running.code == -3
 }

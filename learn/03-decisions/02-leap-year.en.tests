@@ -1,0 +1,20 @@
+test "2024 is a leap year" {
+	assert isLeap(2024) == true
+}
+
+test "2023 is not" {
+	assert isLeap(2023) == false
+}
+
+test "1900 divides by 100, so it is not" {
+	assert isLeap(1900) == false
+}
+
+test "2000 divides by 400, so it is" {
+	assert isLeap(2000) == true
+}
+
+test "1996 and 2100" {
+	assert isLeap(1996) == true
+	assert isLeap(2100) == false
+}

@@ -1,0 +1,21 @@
+test "racecar" {
+	assert isPalindrome("racecar") == true
+}
+
+test "hive is not" {
+	assert isPalindrome("hive") == false
+}
+
+test "an even number of letters" {
+	assert isPalindrome("abba") == true
+	assert isPalindrome("abca") == false
+}
+
+test "empty, and a single letter" {
+	assert isPalindrome("") == true
+	assert isPalindrome("x") == true
+}
+
+test "case counts" {
+	assert isPalindrome("Abba") == false
+}

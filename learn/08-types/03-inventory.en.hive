@@ -1,0 +1,15 @@
+type Item {
+	name:     Str
+	price:    Int
+	quantity: Int
+}
+
+// The price times the quantity of every item, added up.
+func total(items: Item[]): Int {
+	return 0
+}
+
+// The name of the item worth the most in stock; "" when there are none.
+func mostValuable(items: Item[]): Str {
+	return ""
+}

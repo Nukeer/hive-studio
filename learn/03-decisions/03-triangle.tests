@@ -1,0 +1,23 @@
+test "três lados iguais" {
+	assert triangle(3, 3, 3) == "equilátero"
+}
+
+test "dois lados iguais, em qualquer posição" {
+	assert triangle(3, 3, 5) == "isósceles"
+	assert triangle(5, 3, 3) == "isósceles"
+	assert triangle(3, 5, 3) == "isósceles"
+}
+
+test "nenhum lado igual" {
+	assert triangle(3, 4, 5) == "escaleno"
+}
+
+test "achatado demais para ser um triângulo" {
+	assert triangle(1, 2, 3) == "impossível"
+	assert triangle(10, 2, 3) == "impossível"
+}
+
+test "um lado de zero ou menos" {
+	assert triangle(0, 0, 0) == "impossível"
+	assert triangle(-3, 4, 5) == "impossível"
+}

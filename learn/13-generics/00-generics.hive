@@ -1,0 +1,36 @@
+// `T` é uma variável de tipo: o que a chamada trouxer.
+func firstOr(values: T[], fallback: T): T {
+	if values bounds 0 {
+		return values[0]
+	}
+	return fallback
+}
+
+// Duas delas, e uma função sobre as duas.
+func pairUp(left: A, right: B, show: func(A, B): Str): Str {
+	return show(left, right)
+}
+
+func describe(name: Str, age: Int): Str {
+	return "{name} tem {age} anos"
+}
+
+// Um tipo genérico, escrito com o tipo dele onde é usado.
+type Box {
+	items: T[dyn]
+	label: Str
+}
+
+proc main(): void {
+	echo firstOr([3, 4], 0)
+	echo firstOr(["abelha", "vespa"], "ninguém")
+	Str[dyn] none = []
+	echo firstOr(none, "ninguém")
+
+	echo pairUp("Ada", 36, describe)
+
+	Box<Str> names = Box(["ada", "bia"], "abelhas")
+	Box<Int> sizes = Box([3, 5, 8], "quadros")
+	echo "{names.label}: {names.items}"
+	echo "{sizes.label}: {sizes.items}"
+}

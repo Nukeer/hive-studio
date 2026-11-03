@@ -1,0 +1,23 @@
+test "36 is an age" {
+	Result<Int, Str> expected = Result.Ok(36)
+	assert parseAge("36") == expected
+}
+
+test "0 and 150 are both allowed" {
+	Result<Int, Str> zero = Result.Ok(0)
+	Result<Int, Str> oldest = Result.Ok(150)
+	assert parseAge("0") == zero
+	assert parseAge("150") == oldest
+}
+
+test "words are not numbers" {
+	Result<Int, Str> expected = Result.Error("not a number")
+	assert parseAge("abc") == expected
+	assert parseAge("") == expected
+}
+
+test "nobody is 200, or -1" {
+	Result<Int, Str> expected = Result.Error("out of range")
+	assert parseAge("200") == expected
+	assert parseAge("-1") == expected
+}

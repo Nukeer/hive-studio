@@ -1,0 +1,4 @@
+// "voa abelha a" para "a abelha voa".
+func reverseWords(sentence: Str): Str {
+	return ""
+}

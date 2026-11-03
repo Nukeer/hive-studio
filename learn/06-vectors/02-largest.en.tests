@@ -1,0 +1,17 @@
+test "the biggest of three" {
+	assert largest([3, 9, 4]) == 9
+}
+
+test "all negative" {
+	assert largest([-8, -2, -5]) == -2
+}
+
+test "an empty vector" {
+	Int[dyn] none = []
+	assert largest(none) == 0
+}
+
+test "first or last" {
+	assert largest([10, 1, 2]) == 10
+	assert largest([1, 2, 10]) == 10
+}

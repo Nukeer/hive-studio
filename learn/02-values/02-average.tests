@@ -1,0 +1,15 @@
+test "a média de 1, 2 e 3 é 2" {
+	assert average(1, 2, 3) == 2.0
+}
+
+test "a fração fica" {
+	assert average(1, 2, 2) > 1.6666 && average(1, 2, 2) < 1.6667
+}
+
+test "negativos também contam" {
+	assert average(-3, 0, 3) == 0.0
+}
+
+test "números grandes" {
+	assert average(1000000, 2000000, 3000000) == 2000000.0
+}

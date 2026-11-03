@@ -1,0 +1,13 @@
+// The positions [i, j] (i < j) of two numbers adding up to `target`; [] if none.
+// One pass this time, with a map.
+func twoSum(numbers: Int[], target: Int): Int[dyn] {
+	mut hive.map.Map<Int, Int> seen = hive.map.new()
+	for j := 0; j < len(numbers); j++ {
+		if hive.map.get(seen, target - numbers[j]) is Result.Ok(i) {
+			return [i, j]
+		}
+		hive.map.set(seen, numbers[j], j)
+	}
+	Int[dyn] none = []
+	return none
+}

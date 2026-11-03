@@ -1,0 +1,34 @@
+proc main(): void {
+	// A Str[3]: exactly three, so index 0 needs no guard.
+	flowers := ["clover", "lavender", "thyme"]
+	echo flowers[0]
+	echo len(flowers)
+
+	// A vector that grows is declared `[dyn]`.
+	mut Int[dyn] visits = []
+	append(visits, 4)
+	append(visits, 9)
+	append(visits, 2)
+
+	// Its length is not known until it runs, so the index is guarded.
+	last := len(visits) - 1
+	if visits bounds last {
+		echo "last visit: {visits[last]}"
+	}
+
+	// A counting loop's condition guards its index.
+	for i := 0; i < len(visits); i++ {
+		echo "visit {i}: {visits[i]} bees"
+	}
+
+	// `for each` never indexes at all.
+	mut total := 0
+	for each n in visits {
+		total += n
+	}
+	echo "{total} bees in all"
+
+	// Both ends of a slice are included; `+` makes a new vector.
+	echo flowers[0:1]
+	echo flowers + ["sage"]
+}

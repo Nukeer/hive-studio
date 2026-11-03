@@ -1,0 +1,9 @@
+// Os minutos desde a meia-noite de "HH:MM"; Error("horário inválido") quando não é um horário.
+func minutes(time: Str): Result<Int, Str> {
+	if time is "{h}:{m}" && hive.conv.sti(h) is Result.Ok(hours) && hive.conv.sti(m) is Result.Ok(mins) {
+		if hours >= 0 && hours <= 23 && mins >= 0 && mins <= 59 {
+			return Result.Ok(hours * 60 + mins)
+		}
+	}
+	return Result.Error("horário inválido")
+}

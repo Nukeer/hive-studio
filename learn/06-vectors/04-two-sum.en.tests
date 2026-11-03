@@ -1,0 +1,27 @@
+test "2 + 7 is 9" {
+	Int[dyn] expected = [0, 1]
+	assert twoSum([2, 7, 11, 15], 9) == expected
+}
+
+test "2 + 4 is 6" {
+	Int[dyn] expected = [1, 2]
+	assert twoSum([3, 2, 4], 6) == expected
+}
+
+test "the same number twice" {
+	Int[dyn] expected = [0, 1]
+	assert twoSum([3, 3], 6) == expected
+}
+
+test "a number does not pair with itself" {
+	assert len(twoSum([3, 5], 6)) == 0
+}
+
+test "no pair adds up" {
+	assert len(twoSum([1, 2], 7)) == 0
+}
+
+test "negative numbers" {
+	Int[dyn] expected = [2, 4]
+	assert twoSum([1, 2, -3, 4, 5], 2) == expected
+}

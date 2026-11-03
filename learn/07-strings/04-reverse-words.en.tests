@@ -1,0 +1,15 @@
+test "three words" {
+	assert reverseWords("the quick bee") == "bee quick the"
+}
+
+test "one word" {
+	assert reverseWords("hello") == "hello"
+}
+
+test "a longer one" {
+	assert reverseWords("one two three four five") == "five four three two one"
+}
+
+test "an empty sentence" {
+	assert reverseWords("") == ""
+}

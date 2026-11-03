@@ -1,0 +1,11 @@
+type Expr {
+	Num { value: Int }
+	Add { left: Expr, right: Expr }
+	Mul { left: Expr, right: Expr }
+	Neg { inner: Expr }
+}
+
+// What the expression comes to.
+func eval(e: Expr): Int {
+	return 0
+}

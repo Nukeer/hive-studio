@@ -1,0 +1,15 @@
+test "a água congela a 32 °F" {
+	assert toFahrenheit(0.0) == 32.0
+}
+
+test "a água ferve a 212 °F" {
+	assert toFahrenheit(100.0) == 212.0
+}
+
+test "-40 é o mesmo nas duas escalas" {
+	assert toFahrenheit(-40.0) == -40.0
+}
+
+test "um dia quente" {
+	assert toFahrenheit(25.0) == 77.0
+}

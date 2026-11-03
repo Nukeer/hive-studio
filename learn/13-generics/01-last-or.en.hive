@@ -1,0 +1,4 @@
+// The last element of `values`, or `fallback` when there is none.
+func lastOr(values: T[], fallback: T): T {
+	return fallback
+}

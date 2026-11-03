@@ -1,0 +1,4 @@
+// Return a greeting for `name`: "Hello, Ada!" for "Ada".
+func greet(name: Str): Str {
+	return "Hello, {name}!"
+}

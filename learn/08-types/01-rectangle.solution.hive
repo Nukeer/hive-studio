@@ -1,0 +1,14 @@
+type Rect {
+	width:  Int
+	height: Int
+}
+
+// A largura vezes a altura.
+func area(r: Rect): Int {
+	return r.width * r.height
+}
+
+// true quando os dois lados são iguais.
+func isSquare(r: Rect): Bool {
+	return r.width == r.height
+}

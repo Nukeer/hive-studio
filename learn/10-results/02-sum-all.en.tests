@@ -1,0 +1,25 @@
+test "1 + 2 + 3" {
+	Result<Int, Str> expected = Result.Ok(6)
+	assert sumAll(["1", "2", "3"]) == expected
+}
+
+test "one of them is not a number" {
+	Result<Int, Str> expected = Result.Error("not a number: two")
+	assert sumAll(["1", "two", "3"]) == expected
+}
+
+test "the first bad one is named" {
+	Result<Int, Str> expected = Result.Error("not a number: x")
+	assert sumAll(["x", "y"]) == expected
+}
+
+test "nothing adds up to zero" {
+	Str[dyn] none = []
+	Result<Int, Str> expected = Result.Ok(0)
+	assert sumAll(none) == expected
+}
+
+test "negative numbers" {
+	Result<Int, Str> expected = Result.Ok(-4)
+	assert sumAll(["-10", "6"]) == expected
+}

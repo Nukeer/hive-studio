@@ -1,0 +1,7 @@
+// "hive.dev" para "ada@hive.dev"; "" quando não há @.
+func domain(email: Str): Str {
+	if email is "{user}@{host}" {
+		return host
+	}
+	return ""
+}

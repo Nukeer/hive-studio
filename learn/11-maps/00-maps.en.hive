@@ -1,0 +1,21 @@
+proc main(): void {
+	// Say what the map holds when you make it.
+	mut hive.map.Map<Str, Int> stock = hive.map.new()
+	hive.map.set(stock, "honey", 12)
+	hive.map.set(stock, "wax", 3)
+	hive.map.set(stock, "honey", 10)
+
+	// `get` answers with a Result: the key may not be there.
+	if hive.map.get(stock, "honey") is Result.Ok(jars) {
+		echo "honey: {jars}"
+	}
+	echo hive.map.has(stock, "pollen")
+
+	// Walk the keys, in the order they were first set.
+	for each item in hive.map.keys(stock) {
+		if hive.map.get(stock, item) is Result.Ok(n) {
+			echo "{item} -> {n}"
+		}
+	}
+	echo len(stock)
+}

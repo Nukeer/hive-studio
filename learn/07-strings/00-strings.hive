@@ -1,0 +1,31 @@
+proc main(): void {
+	palavra := "colmeia"
+	echo len(palavra)
+	echo len("café")
+
+	// Um índice num Str é sempre guardado.
+	if palavra bounds 0 {
+		echo palavra[0]
+	}
+	if palavra bounds 3 {
+		echo palavra[1:3]
+	}
+
+	// Cortar o texto em pedaços, e colar de volta.
+	partes := split("abelha,vespa,formiga", ",")
+	echo partes
+	echo join(partes, " & ")
+	echo len(split(palavra, ""))
+
+	// `indexOf` responde com um Result: achou, ou não.
+	if indexOf(palavra, "mei") is Result.Ok(onde) {
+		echo "achei na posição {onde}"
+	}
+	echo replaceAll("zum zum", "u", "i")
+
+	// Um padrão desmonta um texto.
+	linha := "rainha=Beatriz"
+	if linha is "{chave}={valor}" {
+		echo "{chave} é {valor}"
+	}
+}

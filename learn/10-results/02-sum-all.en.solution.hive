@@ -1,0 +1,12 @@
+// Ok(total) when every text is a number; Error("not a number: <text>") at the first that is not.
+func sumAll(texts: Str[]): Result<Int, Str> {
+	mut total := 0
+	for each text in texts {
+		if hive.conv.sti(text) is Result.Ok(n) {
+			total += n
+		} else {
+			return Result.Error("not a number: {text}")
+		}
+	}
+	return Result.Ok(total)
+}

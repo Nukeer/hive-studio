@@ -1,0 +1,19 @@
+type Expr {
+	Num { value: Int }
+	Add { left: Expr, right: Expr }
+	Mul { left: Expr, right: Expr }
+	Neg { inner: Expr }
+}
+
+// What the expression comes to.
+func eval(e: Expr): Int {
+	if e is Expr.Num(n) {
+		return n
+	} else if e is Expr.Add(a, b) {
+		return eval(a) + eval(b)
+	} else if e is Expr.Mul(a, b) {
+		return eval(a) * eval(b)
+	} else if e is Expr.Neg(inner) {
+		return -eval(inner)
+	}
+}

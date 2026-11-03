@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -408,10 +409,16 @@ func Stop(id int) error {
 	lock.Lock()
 	delete(sessions, id)
 	lock.Unlock()
-	if s.cmd.Process == nil {
+	return killTree(s.cmd)
+}
+
+// killTree encerra o processo e tudo o que ele abriu (no Windows a árvore; fora
+// dele o grupo, que `hidden(cmd, true)` criou).
+func killTree(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
 		return nil
 	}
-	pid := strconv.Itoa(s.cmd.Process.Pid)
+	pid := strconv.Itoa(cmd.Process.Pid)
 	var kill *exec.Cmd
 	if runtime.GOOS == "windows" {
 		kill = exec.Command("taskkill", "/T", "/F", "/PID", pid)
@@ -420,9 +427,132 @@ func Stop(id int) error {
 	}
 	hidden(kill, false)
 	if err := kill.Run(); err != nil {
-		return s.cmd.Process.Kill()
+		return cmd.Process.Kill()
 	}
 	return nil
+}
+
+// capped guarda o que um programa escreve até `limit` bytes: um laço que só
+// escreve não enche a memória.
+type capped struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	limit int
+	cut   bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	room := c.limit - c.buf.Len()
+	if len(p) > room {
+		c.cut = true
+		if room > 0 {
+			c.buf.Write(p[:room])
+		}
+	} else {
+		c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (c *capped) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cut {
+		return c.buf.String() + "\n…"
+	}
+	return c.buf.String()
+}
+
+// Os programas que RunFor está rodando com um nome, para StopRun achá-los.
+type running struct {
+	cmd     *exec.Cmd
+	stopped bool
+}
+
+var (
+	runsLock sync.Mutex
+	runs     = map[string]*running{}
+)
+
+// RunFor é o Run com prazo: passados `ms` milissegundos o programa, e o que ele
+// abriu, é encerrado, e a resposta abre com -2 no lugar do código (-3 quando
+// StopRun o parou antes). Com um `tag` não vazio, StopRun(tag) o acha. Da saída
+// ficam os primeiros 256 KB.
+func RunFor(name string, args []string, dir string, ms int, tag string) (string, error) {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = environment()
+	hidden(cmd, true)
+	out := &capped{limit: 256 << 10}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	// Um neto que herdou a saída não prende a espera depois do fim do programa.
+	cmd.WaitDelay = 2 * time.Second
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	run := &running{cmd: cmd}
+	if tag != "" {
+		runsLock.Lock()
+		runs[tag] = run
+		runsLock.Unlock()
+		defer func() {
+			runsLock.Lock()
+			if runs[tag] == run {
+				delete(runs, tag)
+			}
+			runsLock.Unlock()
+		}()
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(time.Duration(ms) * time.Millisecond)
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-timer.C:
+		killTree(cmd)
+		<-done
+		return "-2\n" + clean(out.String()), nil
+	}
+	runsLock.Lock()
+	stopped := run.stopped
+	runsLock.Unlock()
+	if stopped {
+		return "-3\n" + clean(out.String()), nil
+	}
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		} else {
+			return "", err
+		}
+	}
+	return strconv.Itoa(code) + "\n" + clean(out.String()), nil
+}
+
+// StopRun encerra o programa que RunFor roda com `tag`; false quando não há.
+func StopRun(tag string) bool {
+	runsLock.Lock()
+	run := runs[tag]
+	if run != nil {
+		run.stopped = true
+	}
+	runsLock.Unlock()
+	if run == nil {
+		return false
+	}
+	killTree(run.cmd)
+	return true
 }
 
 // Lines são as linhas `first`..`last` (contadas de 0) de `text`, precedidas do

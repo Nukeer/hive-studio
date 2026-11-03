@@ -1,0 +1,4 @@
+// f applied to x, and then f applied to that.
+func twice(f: func(Int): Int, x: Int): Int {
+	return x
+}

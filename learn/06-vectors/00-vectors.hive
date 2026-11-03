@@ -1,0 +1,34 @@
+proc main(): void {
+	// Um Str[3]: exatamente três, então o índice 0 não precisa de guarda.
+	flores := ["trevo", "lavanda", "tomilho"]
+	echo flores[0]
+	echo len(flores)
+
+	// Um vetor que cresce é declarado `[dyn]`.
+	mut Int[dyn] visitas = []
+	append(visitas, 4)
+	append(visitas, 9)
+	append(visitas, 2)
+
+	// O tamanho dele só se sabe rodando, então o índice é guardado.
+	ultima := len(visitas) - 1
+	if visitas bounds ultima {
+		echo "última visita: {visitas[ultima]}"
+	}
+
+	// A condição de um laço que conta guarda o índice dele.
+	for i := 0; i < len(visitas); i++ {
+		echo "visita {i}: {visitas[i]} abelhas"
+	}
+
+	// `for each` nunca usa índice.
+	mut total := 0
+	for each n in visitas {
+		total += n
+	}
+	echo "{total} abelhas ao todo"
+
+	// As duas pontas da fatia entram; `+` faz um vetor novo.
+	echo flores[0:1]
+	echo flores + ["sálvia"]
+}

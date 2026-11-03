@@ -1,0 +1,8 @@
+// 1 + 2 + … + n; 0 quando n é menor que 1.
+func sumTo(n: Int): Int {
+	mut total := 0
+	for i := 1; i <= n; i++ {
+		total += i
+	}
+	return total
+}

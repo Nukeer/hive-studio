@@ -1,0 +1,20 @@
+test "pedra ganha de tesoura" {
+	assert winner(Hand.Rock(), Hand.Scissors()) == "primeiro"
+	assert winner(Hand.Scissors(), Hand.Rock()) == "segundo"
+}
+
+test "tesoura ganha de papel" {
+	assert winner(Hand.Scissors(), Hand.Paper()) == "primeiro"
+	assert winner(Hand.Paper(), Hand.Scissors()) == "segundo"
+}
+
+test "papel ganha de pedra" {
+	assert winner(Hand.Paper(), Hand.Rock()) == "primeiro"
+	assert winner(Hand.Rock(), Hand.Paper()) == "segundo"
+}
+
+test "a mesma mão é empate" {
+	assert winner(Hand.Rock(), Hand.Rock()) == "empate"
+	assert winner(Hand.Paper(), Hand.Paper()) == "empate"
+	assert winner(Hand.Scissors(), Hand.Scissors()) == "empate"
+}

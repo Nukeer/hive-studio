@@ -46,13 +46,34 @@ func showingCommit(state: model.State): Bool {
 	return state.commit.key != "" && state.editorView == model.EditorView.CommitPage()
 }
 
-// O editor mostra um documento (e não Configurações nem um commit).
+// O editor mostra um documento (e não Configurações, um commit nem o curso).
 func showsDoc(state: model.State): Bool {
-	return !showingSettings(state) && !showingCommit(state)
+	return !showingSettings(state) && !showingCommit(state) && !showingLearn(state)
 }
 
 func showingSettings(state: model.State): Bool {
 	return state.settingsOpen && state.editorView == model.EditorView.SettingsView()
+}
+
+func showingLearn(state: model.State): Bool {
+	return state.learn.open && state.editorView == model.EditorView.LearnPage()
+}
+
+// Os erros do compilador no código do passo, na linha de cada um (a partir de
+// 0) enquanto ela continua como estava quando o erro foi achado; os erros dos
+// testes escondidos, depois do código, ficam de fora.
+func learnMarks(state: model.State): model.LensMark[dyn] {
+	mut model.LensMark[dyn] marks = []
+	lines := split(state.learn.code, "\n")
+	for each p in state.learn.problems {
+		row := p.line - 1
+		if lines bounds row {
+			if lines[row] == p.source {
+				append(marks, model.LensMark(row, "error", p.message, p.source))
+			}
+		}
+	}
+	return marks
 }
 
 // O arquivo que Check/Run/Test/Build recebem: o fixado, senão o ativo —
@@ -74,6 +95,9 @@ func layoutOf(state: model.State): Str {
 	}
 	if showingSettings(state) {
 		return "settings"
+	}
+	if showingLearn(state) {
+		return "learn"
 	}
 	if activeDoc(state) is Result.Ok(doc) {
 		if model.hasPreview(doc.path) {

@@ -1,0 +1,19 @@
+test "a área de 3 por 4" {
+	assert area(Rect(3, 4)) == 12
+}
+
+test "a área de um quadrado" {
+	assert area(Rect(5, 5)) == 25
+}
+
+test "3 por 4 não é quadrado" {
+	assert isSquare(Rect(3, 4)) == false
+}
+
+test "5 por 5 é" {
+	assert isSquare(Rect(5, 5)) == true
+}
+
+test "montado pelo nome" {
+	assert area(Rect(height: 2, width: 7)) == 14
+}

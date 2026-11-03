@@ -1,0 +1,24 @@
+// Slow on purpose, like a call to a server.
+func slowSquare(n: Int): Int {
+	hive.task.sleep(300)
+	return n * n
+}
+
+proc main(): void {
+	// All three at once: about 300 ms, not 900.
+	squares := await [slowSquare(1), slowSquare(2), slowSquare(3)]
+	echo squares
+
+	// Start two, read them later.
+	a := async slowSquare(4)
+	b := async slowSquare(5)
+	echo "4² + 5² = {a + b}"
+
+	// Stop waiting after 100 ms.
+	result := slowSquare(6) with timeout 100
+	if result is Result.Ok(n) {
+		echo n
+	} else if result is Result.Error(late) {
+		echo "gave up after {late.waited} ms"
+	}
+}

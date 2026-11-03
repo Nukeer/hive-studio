@@ -1,0 +1,20 @@
+test "12 and 18" {
+	assert gcd(12, 18) == 6
+}
+
+test "17 and 5 share nothing but 1" {
+	assert gcd(17, 5) == 1
+}
+
+test "zero and nine" {
+	assert gcd(0, 9) == 9
+	assert gcd(9, 0) == 9
+}
+
+test "100 and 75" {
+	assert gcd(100, 75) == 25
+}
+
+test "Euclid's own example" {
+	assert gcd(1071, 462) == 21
+}

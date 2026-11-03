@@ -1,0 +1,10 @@
+type Player {
+	name:  Str
+	score: Int
+}
+
+// Os nomes, maior pontuação primeiro; um empate mantém a ordem.
+func ranking(players: Player[]): Str[dyn] {
+	Str[dyn] none = []
+	return none
+}

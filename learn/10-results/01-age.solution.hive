@@ -1,0 +1,10 @@
+// Ok(idade) de "0" a "150"; Error("não é um número") ou Error("fora do intervalo") no resto.
+func parseAge(text: Str): Result<Int, Str> {
+	if hive.conv.sti(text) is Result.Ok(n) {
+		if n >= 0 && n <= 150 {
+			return Result.Ok(n)
+		}
+		return Result.Error("fora do intervalo")
+	}
+	return Result.Error("não é um número")
+}

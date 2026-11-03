@@ -1,0 +1,28 @@
+func testIsEven(n: Int): Bool {
+	return n % 2 == 0
+}
+
+func testIsShort(word: Str): Bool {
+	return len(word) < 4
+}
+
+func testIsFalse(b: Bool): Bool {
+	return b == false
+}
+
+test "números pares" {
+	assert countIf([1, 2, 3, 4], testIsEven) == 2
+}
+
+test "palavras curtas" {
+	assert countIf(["mel", "a", "abelha"], testIsShort) == 2
+}
+
+test "Bools também" {
+	assert countIf([true, false, false], testIsFalse) == 2
+}
+
+test "nada para contar" {
+	Int[dyn] none = []
+	assert countIf(none, testIsEven) == 0
+}

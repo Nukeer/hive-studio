@@ -1,0 +1,18 @@
+type Hand {
+	Rock
+	Paper
+	Scissors
+}
+
+// "first", "second" or "draw".
+func winner(a: Hand, b: Hand): Str {
+	if a == b {
+		return "draw"
+	}
+	switch a, b {
+		Hand.Rock, Hand.Scissors  { return "first" }
+		Hand.Scissors, Hand.Paper { return "first" }
+		Hand.Paper, Hand.Rock     { return "first" }
+		_, _                      { return "second" }
+	}
+}

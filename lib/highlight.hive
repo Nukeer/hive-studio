@@ -6,7 +6,7 @@
 func keywords(): Str[dyn] {
 	return [
 		"import", "proc", "func", "query", "test", "type",
-		"if", "else", "return", "is", "with",
+		"if", "else", "return", "is", "with", "switch",
 		"void", "echo", "assert", "panic",
 		"dyn", "mut", "async", "await", "for", "in",
 		"each", "bounds", "break", "continue", "as", "timeout"

@@ -1027,3 +1027,119 @@ test "imagens abrem na visualização, e as do Markdown vêm do disco" {
 	}
 	assert model.isPicture("a/B.PNG") && model.isImage("x.svg") && !model.isPicture("x.svg") && model.hasPreview("x.webp")
 }
+
+test "Aprender Hive abre na página do curso, anda pelos passos e guarda o código de cada um" {
+	folder := support.explorerFolder("learn-test")
+	root := support.learnRoot("learn-root")
+	mut start := support.fresh(folder)
+	start.learn.root = root
+	db := support.serve(start)
+
+	overview := support.ask(db, support.event("act", "action", "learn", "", 0))
+	assert overview.learnStep == ""
+	assert indexOf(overview.page, "Um curso prático") is Result.Ok(_)
+	assert indexOf(overview.page, "APRENDER HIVE") is Result.Ok(_)
+	assert indexOf(overview.page, "Tour oficial em hive-lang.run") is Result.Ok(_)
+	assert indexOf(overview.page, "Começar") is Result.Ok(_)
+	assert overview.title == ""
+
+	greeting := support.ask(db, support.event("act", "learn", "01-hello/01-greeting", "", 0))
+	assert greeting.learnStep == "01-hello/01-greeting"
+	assert indexOf(greeting.learnCode, "func greet(name: Str): Str") is Result.Ok(_)
+	assert greeting.focus == "learnEditor"
+	assert indexOf(greeting.page, "Desafio 1 de 2") is Result.Ok(_)
+	assert indexOf(greeting.page, "▶ Run tests") is Result.Ok(_)
+	assert indexOf(greeting.page, "Monte a resposta") is Result.Error(_)
+	assert indexOf(greeting.page, "Aprender Hive — Hive Studio") is Result.Ok(_)
+
+	// A dica e a solução, a pedido.
+	hinted := support.ask(db, support.event("act", "learnHint", "", "", 0))
+	assert indexOf(hinted.page, "Monte a resposta") is Result.Ok(_)
+	answered := support.ask(db, support.event("act", "learnSolution", "", "", 0))
+	assert indexOf(answered.page, "Uma solução possível") is Result.Ok(_)
+
+	// Uma edição sobre um texto que o programa já trocou não vale.
+	stale := support.ask(db, support.learnEdit(greeting.learnSerial - 1, 0, 0, "x"))
+	assert stale.learnCode == greeting.learnCode
+	edited := support.ask(db, support.learnEdit(greeting.learnSerial, 0, 0, "// meu\n"))
+	assert edited.learnCode == "// meu\n" + greeting.learnCode
+
+	// Outro passo, e de volta: o código editado continua lá.
+	badge := support.ask(db, support.event("act", "learn", "01-hello/02-badge", "", 0))
+	assert indexOf(badge.learnCode, "func badge(") is Result.Ok(_)
+	assert badge.learnSerial > greeting.learnSerial
+	assert indexOf(badge.page, "Monte a resposta") is Result.Error(_)
+	back := support.ask(db, support.event("act", "learn", "01-hello/01-greeting", "", 0))
+	assert back.learnCode == edited.learnCode
+	reset := support.ask(db, support.event("act", "learnReset", "", "", 0))
+	assert reset.learnCode == greeting.learnCode
+	assert reset.learnSerial > back.learnSerial
+
+	// Ctrl+W fecha a aba, e o curso lembra onde parou.
+	closed := support.ask(db, support.event("act", "action", "closeTab", "", 0))
+	assert indexOf(closed.page, "Desafio 1 de 2") is Result.Error(_)
+	assert indexOf(support.readOr(root + "/progress.txt"), "at 01-hello/01-greeting") is Result.Ok(_)
+	// O código voltou ao do curso: não fica rascunho, e o passo segue o curso.
+	assert hive.file.read(root + "/drafts/01-hello/01-greeting.hive") is Result.Error(_)
+	reopened := support.ask(db, support.event("act", "side", "learn", "", 0))
+	assert reopened.learnStep == "01-hello/01-greeting"
+}
+
+test "o resultado de um passo: testes que falham, que passam, erros do compilador e o compilador que falta" {
+	folder := support.explorerFolder("learn-run-test")
+	root := support.learnRoot("learn-run-root")
+	mut start := support.fresh(folder)
+	start.learn.root = root
+	start.settings.compiler = "programa-que-nao-existe-hive"
+	db := support.serve(start)
+	id := "01-hello/01-greeting"
+	_opened := support.ask(db, support.event("act", "learn", id, "", 0))
+
+	// Sem compilador, rodar diz o que fazer em vez de ficar esperando.
+	running := support.ask(db, support.event("act", "learnRun", "run", "", 0))
+	assert running.learnRunning
+	mut done := support.look(db)
+	for waited := 0; waited < 20000 && done.learnRunning; waited = waited + 50 {
+		hive.task.sleep(50)
+		done = support.look(db)
+	}
+	assert done.learnVerdict == "missing"
+	assert indexOf(done.page, "Não foi possível iniciar o compilador.") is Result.Ok(_)
+
+	failing := "  PASS  greets Ada\n  FAIL  greets the World\n        main_test.go:21: assert greet(\"World\") == \"Hello, World!\"\n          left:  \"\"\n          right: \"Hello, World!\"\n\n  2 tests: 1 passed, 1 failed\n"
+	failed := support.post(db, model.Msg.LearnDone(id, "test", failing, 1))
+	assert failed.learnVerdict == "failed"
+	assert indexOf(failed.page, "✗ 1 de 2 testes falharam") is Result.Ok(_)
+	assert indexOf(failed.page, "right: &quot;Hello, World!&quot;") is Result.Ok(_)
+	assert len(failed.learnSolved) == 0
+
+	// Um erro na linha do código fica marcado nela; um depois dele é dos testes.
+	broken := support.post(db, model.Msg.LearnDone(id, "test", "main.hive:3: in `greet`: `x` is not a name anything here declared\n", 1))
+	assert broken.learnVerdict == "broken"
+	assert broken.learnProblems == 1 && broken.learnMarks == 1
+	assert indexOf(broken.page, "Não compilou.") is Result.Ok(_)
+	tests := support.post(db, model.Msg.LearnDone(id, "test", "main.hive:9: `greet` wants 1 argument and was given 2\n", 1))
+	assert tests.learnMarks == 0
+	assert indexOf(tests.page, "Os testes não conseguem usar o seu código:") is Result.Ok(_)
+
+	// O check de quando a digitação para só vale para o texto que conferiu.
+	edited := support.ask(db, support.learnEdit(tests.learnSerial, 0, 0, "\n"))
+	ignored := support.post(db, model.Msg.LearnChecked(id, 0, "main.hive:1: velho\n"))
+	assert ignored.learnProblems == tests.learnProblems
+	checked := support.post(db, model.Msg.LearnChecked(id, 1, ""))
+	assert checked.learnProblems == 0
+
+	passed := support.post(db, model.Msg.LearnDone(id, "test", "  PASS  greets Ada\n  PASS  greets the World\n\n  2 tests: 2 passed\n", 0))
+	assert passed.learnVerdict == "passed"
+	Str[dyn] solved = [id]
+	assert passed.learnSolved == solved
+	assert indexOf(passed.page, "Todos os testes passaram (2)") is Result.Ok(_)
+	assert indexOf(support.readOr(root + "/progress.txt"), "solved " + id) is Result.Ok(_)
+
+	// Um passo que não está à vista fica concluído sem tomar o lugar do resultado.
+	lesson := support.post(db, model.Msg.LearnDone("01-hello/00-first-program", "run", "Hello, Hive!\n", 0))
+	assert lesson.learnVerdict == "passed" && len(lesson.learnSolved) == 2
+	late := support.post(db, model.Msg.LearnDone(id, "run", "", -2))
+	assert indexOf(late.page, "Passou do tempo") is Result.Ok(_)
+	assert edited.learnCode != ""
+}

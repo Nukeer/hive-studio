@@ -1,0 +1,4 @@
+// "Ada Lovelace (1815)" para "Ada", "Lovelace" e 1815.
+func badge(first: Str, last: Str, year: Int): Str {
+	return "{first} {last} ({year})"
+}

@@ -1,0 +1,23 @@
+test "1 and 2 trade places" {
+	mut a := 1
+	mut b := 2
+	swap(a, b)
+	assert a == 2
+	assert b == 1
+}
+
+test "swapping twice changes nothing" {
+	mut a := 7
+	mut b := -3
+	swap(a, b)
+	swap(a, b)
+	assert a == 7
+	assert b == -3
+}
+
+test "equal values stay equal" {
+	mut a := 5
+	mut b := 5
+	swap(a, b)
+	assert a == 5 && b == 5
+}

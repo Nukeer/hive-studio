@@ -1,0 +1,8 @@
+// "bee quick the" for "the quick bee".
+func reverseWords(sentence: Str): Str {
+	mut Str[dyn] words = []
+	for each word in split(sentence, " ") {
+		prepend(words, word)
+	}
+	return join(words, " ")
+}

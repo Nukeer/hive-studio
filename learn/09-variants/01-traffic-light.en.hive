@@ -1,0 +1,15 @@
+type Light {
+	Red
+	Yellow
+	Green
+}
+
+// Red → Green → Yellow → Red.
+func next(light: Light): Light {
+	return light
+}
+
+// Only green says go.
+func canGo(light: Light): Bool {
+	return false
+}

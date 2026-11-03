@@ -13,13 +13,14 @@ if ! command -v hivec >/dev/null 2>&1; then
 	exit 1
 fi
 
-# O que vai embutido (assets/pick.ps1) precisa refletir assets/: regenera e compara.
-before=$(git hash-object lib/assets.hive)
+# O que vai embutido precisa refletir assets/ (assets/pick.ps1) e learn/ (o
+# curso): regenera e compara.
+before=$(git hash-object lib/assets.hive lib/course.hive)
 (cd tools && hivec run embed.hive >/dev/null)
-after=$(git hash-object lib/assets.hive)
+after=$(git hash-object lib/assets.hive lib/course.hive)
 if [ "$before" != "$after" ]; then
-	echo "pre-commit: lib/assets.hive estava desatualizado e foi regenerado." >&2
-	echo "            Revise e rode: git add lib/assets.hive" >&2
+	echo "pre-commit: lib/assets.hive ou lib/course.hive estava desatualizado e foi regenerado." >&2
+	echo "            Revise e rode: git add lib/assets.hive lib/course.hive" >&2
 	exit 1
 fi
 

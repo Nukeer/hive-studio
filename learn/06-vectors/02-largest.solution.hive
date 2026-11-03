@@ -1,0 +1,13 @@
+// O maior número de `numbers`; 0 quando não há nenhum.
+func largest(numbers: Int[]): Int {
+	mut best := 0
+	if numbers bounds 0 {
+		best = numbers[0]
+	}
+	for each n in numbers {
+		if n > best {
+			best = n
+		}
+	}
+	return best
+}

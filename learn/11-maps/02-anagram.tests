@@ -1,0 +1,21 @@
+test "amor e roma" {
+	assert isAnagram("amor", "roma") == true
+}
+
+test "pedra e perda" {
+	assert isAnagram("pedra", "perda") == true
+}
+
+test "cada letra conta tantas vezes quantas aparece" {
+	assert isAnagram("ovo", "voo") == true
+	assert isAnagram("ovo", "ov") == false
+	assert isAnagram("ovo", "vvo") == false
+}
+
+test "letras diferentes" {
+	assert isAnagram("rato", "carro") == false
+}
+
+test "duas palavras vazias" {
+	assert isAnagram("", "") == true
+}

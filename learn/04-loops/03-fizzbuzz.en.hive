@@ -1,0 +1,4 @@
+// "1 2 Fizz 4 Buzz" for 5.
+func fizzBuzz(n: Int): Str {
+	return ""
+}

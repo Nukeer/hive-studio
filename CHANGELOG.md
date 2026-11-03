@@ -1,5 +1,42 @@
 # Changelog
 
+## Próxima versão
+
+### Aprender Hive
+
+* **Um curso de Hive dentro do Studio**, para quem nunca viu a linguagem:
+  **Ajuda → Aprender Hive**, o livro na barra de atividades ou a tela de
+  boas-vindas. São 15 capítulos, um recurso por vez e cada vez mais fundo —
+  o primeiro programa, valores e tipos, decisões, laços, funções, vetores,
+  textos, tipos próprios, variantes e `switch`, `Result`, mapas, funções como
+  valores, genéricos, `async`/`await` e testes. Cada capítulo abre com uma
+  **lição** (o texto ao lado de um programa para rodar e mudar) e segue com
+  **desafios** no estilo LeetCode — 42 ao todo, de "Hello" a Two Sum com um
+  mapa e uma calculadora recursiva —, conferidos por testes escondidos.
+* **▶ Run** roda a lição e **▶ Run tests** confere o desafio: cada teste com ✓
+  ou ✗ e, dos que falharam, os dois lados do `assert`. Um erro de compilação
+  aparece na linha dele enquanto se digita (com o Error Lens ligado) e depois
+  de rodar; um erro que cai nos testes diz que o nome ou o tipo pedido mudou.
+  `F5`, `F8` e os botões da barra de título valem para o passo à vista. O
+  resultado aparece na própria aba, embaixo do editor; ao abrir o curso, o
+  painel de baixo fecha para dar a altura a ela (``Ctrl+` `` o abre de novo).
+* Um laço que nunca termina não prende nada: o passo é encerrado depois de um
+  minuto, ou na hora com **■ Stop** (`native.RunFor`, que encerra a árvore de
+  processos).
+* Dica e uma solução a pedido; **Reset** volta ao código original. O código de
+  cada passo e os concluídos ficam em `%APPDATA%\HiveStudio\learn`, e a barra
+  lateral mostra o progresso de cada capítulo e o tour oficial em
+  [hive-lang.run](https://hive-lang.run).
+* O curso é escrito em `learn/` (Markdown, os exemplos, os testes e as
+  soluções; ver `learn/README.md`), embutido em `lib/course.hive` por
+  `tools/embed.hive`. `tools/learncheck.hive` roda tudo com o `hivec`: as
+  lições rodam, as soluções passam e os códigos iniciais compilam sem passar.
+
+### Hive v0.2.16
+
+* `switch` é palavra-chave desde o Hive v0.2.16 e ganha a cor e o
+  autocomplete das outras.
+
 ## v0.2.1
 
 ### Atualização automática

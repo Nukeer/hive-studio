@@ -1,0 +1,17 @@
+type Player {
+	name:  Str
+	score: Int
+}
+
+func higher(a: Player, b: Player): Bool {
+	return a.score > b.score
+}
+
+func nameOf(player: Player): Str {
+	return player.name
+}
+
+// The names, highest score first; a tie keeps its order.
+func ranking(players: Player[]): Str[dyn] {
+	return players | sort(higher) | map(nameOf)
+}

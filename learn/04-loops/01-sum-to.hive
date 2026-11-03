@@ -1,0 +1,4 @@
+// 1 + 2 + … + n; 0 quando n é menor que 1.
+func sumTo(n: Int): Int {
+	return 0
+}

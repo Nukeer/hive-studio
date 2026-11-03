@@ -1,0 +1,6 @@
+// After swap(a, b), a holds what b had and b holds what a had.
+proc swap(a: mut Int, b: mut Int): void {
+	old := a
+	a = b
+	b = old
+}

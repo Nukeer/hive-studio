@@ -1,0 +1,11 @@
+test "cumprimenta a Ada" {
+	assert greet("Ada") == "Olá, Ada!"
+}
+
+test "cumprimenta o Mundo" {
+	assert greet("Mundo") == "Olá, Mundo!"
+}
+
+test "cumprimenta um nome com espaço" {
+	assert greet("Abelha Rainha") == "Olá, Abelha Rainha!"
+}

@@ -1,0 +1,9 @@
+type Point {
+	x: Int
+	y: Int
+}
+
+// How far apart across, plus how far apart up and down.
+func distance(a: Point, b: Point): Int {
+	return 0
+}

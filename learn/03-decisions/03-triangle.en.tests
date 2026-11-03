@@ -1,0 +1,23 @@
+test "three equal sides" {
+	assert triangle(3, 3, 3) == "equilateral"
+}
+
+test "two equal sides, in any position" {
+	assert triangle(3, 3, 5) == "isosceles"
+	assert triangle(5, 3, 3) == "isosceles"
+	assert triangle(3, 5, 3) == "isosceles"
+}
+
+test "no equal sides" {
+	assert triangle(3, 4, 5) == "scalene"
+}
+
+test "too flat to be a triangle" {
+	assert triangle(1, 2, 3) == "impossible"
+	assert triangle(10, 2, 3) == "impossible"
+}
+
+test "a side of zero or less" {
+	assert triangle(0, 0, 0) == "impossible"
+	assert triangle(-3, 4, 5) == "impossible"
+}

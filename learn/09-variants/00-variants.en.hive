@@ -1,0 +1,39 @@
+type Shape {
+	Circle { radius: Float }
+	Rectangle { width: Float, height: Float }
+	Dot
+}
+
+// This chain covers every variant, so it needs no `else`.
+func area(shape: Shape): Float {
+	if shape is Shape.Circle(r) {
+		return 3.14159 * r * r
+	} else if shape is Shape.Rectangle(w, h) {
+		return w * h
+	} else if shape is Shape.Dot {
+		return 0.0
+	}
+}
+
+// A switch matches several values at once, and covers every case.
+func describe(shape: Shape, big: Bool): Str {
+	switch shape, big {
+		Shape.Circle(_), true    { return "a big circle" }
+		Shape.Circle(_), false   { return "a small circle" }
+		Shape.Rectangle(w, h), _ { return "a {w} by {h} rectangle" }
+		Shape.Dot, _             { return "a dot" }
+	}
+}
+
+proc main(): void {
+	Shape[dyn] shapes = [Shape.Circle(1.0), Shape.Rectangle(2.0, 3.0), Shape.Dot()]
+	for each shape in shapes {
+		echo "{describe(shape, area(shape) > 3.0)}: {area(shape)}"
+	}
+
+	// Patterns take vectors apart too.
+	reply := ["bee", "buzz"]
+	if reply is ["bee", sound] {
+		echo "the bee says {sound}"
+	}
+}

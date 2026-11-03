@@ -1,0 +1,15 @@
+test "três palavras" {
+	assert reverseWords("a abelha voa") == "voa abelha a"
+}
+
+test "uma palavra" {
+	assert reverseWords("olá") == "olá"
+}
+
+test "uma mais comprida" {
+	assert reverseWords("um dois três quatro cinco") == "cinco quatro três dois um"
+}
+
+test "uma frase vazia" {
+	assert reverseWords("") == ""
+}

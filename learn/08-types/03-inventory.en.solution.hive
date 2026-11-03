@@ -1,0 +1,31 @@
+type Item {
+	name:     Str
+	price:    Int
+	quantity: Int
+}
+
+func worth(item: Item): Int {
+	return item.price * item.quantity
+}
+
+// The price times the quantity of every item, added up.
+func total(items: Item[]): Int {
+	mut sum := 0
+	for each item in items {
+		sum += worth(item)
+	}
+	return sum
+}
+
+// The name of the item worth the most in stock; "" when there are none.
+func mostValuable(items: Item[]): Str {
+	mut best := ""
+	mut bestWorth := -1
+	for each item in items {
+		if worth(item) > bestWorth {
+			best = item.name
+			bestWorth = worth(item)
+		}
+	}
+	return best
+}

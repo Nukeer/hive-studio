@@ -1,0 +1,11 @@
+test "Ada Lovelace" {
+	assert badge("Ada", "Lovelace", 1815) == "Ada Lovelace (1815)"
+}
+
+test "Grace Hopper" {
+	assert badge("Grace", "Hopper", 1906) == "Grace Hopper (1906)"
+}
+
+test "a year before the common era" {
+	assert badge("Hypatia", "of Alexandria", -350) == "Hypatia of Alexandria (-350)"
+}

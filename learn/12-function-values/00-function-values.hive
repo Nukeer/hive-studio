@@ -1,0 +1,33 @@
+func isEven(n: Int): Bool {
+	return n % 2 == 0
+}
+
+func square(n: Int): Int {
+	return n * n
+}
+
+func times(n: Int, factor: Int): Int {
+	return n * factor
+}
+
+func shorter(a: Str, b: Str): Bool {
+	return len(a) < len(b)
+}
+
+proc main(): void {
+	numbers := [1, 2, 3, 4, 5, 6]
+	echo map(numbers, square)
+	echo filter(numbers, isEven)
+
+	// `_` deixa um buraco: isto é uma função de um Int.
+	echo map(numbers, times(_, 10))
+
+	// Uma função é um valor, com um tipo.
+	func(Int): Int f = square
+	echo f(9)
+
+	// `|` passa o valor à esquerda como primeiro argumento.
+	echo numbers | filter(isEven) | map(square)
+
+	echo sort(["mamangava", "abelha", "vespa"], shorter)
+}

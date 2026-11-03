@@ -1,0 +1,12 @@
+// How many times each word of `sentence` appears.
+func wordCounts(sentence: Str): hive.map.Map<Str, Int> {
+	mut hive.map.Map<Str, Int> counts = hive.map.new()
+	for each word in split(sentence, " ") {
+		mut n := 0
+		if hive.map.get(counts, word) is Result.Ok(seen) {
+			n = seen
+		}
+		hive.map.set(counts, word, n + 1)
+	}
+	return counts
+}

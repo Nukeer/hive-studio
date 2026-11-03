@@ -1,0 +1,25 @@
+proc main(): void {
+	// `Tipo nome = valor` diz o tipo; `:=` o descobre.
+	Int abelhas = 7
+	Float peso = 0.25
+	Str lugar = "a colmeia"
+	ocupadas := true
+
+	// As contas com Int continuam inteiras.
+	echo abelhas / 2       // 3: a fração vai embora
+	echo abelhas % 2       // 1: o resto
+	echo abelhas ** 2      // 49
+
+	// Um Int só vira Float quando você pede.
+	echo hive.conv.itf(abelhas) * peso
+
+	// Dividir por zero é um valor, não um travamento.
+	echo abelhas / 0
+
+	// Um nome só muda se disser `mut`.
+	mut potes := 0
+	potes = potes + 3
+	potes += 2
+	potes++
+	echo "{abelhas} abelhas em {lugar} fizeram {potes} potes. Ocupadas: {ocupadas}"
+}

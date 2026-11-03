@@ -1,0 +1,16 @@
+test "42 is positive" {
+	assert sign(42) == "positive"
+}
+
+test "-7 is negative" {
+	assert sign(-7) == "negative"
+}
+
+test "0 is zero" {
+	assert sign(0) == "zero"
+}
+
+test "1 and -1" {
+	assert sign(1) == "positive"
+	assert sign(-1) == "negative"
+}

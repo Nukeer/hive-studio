@@ -1,0 +1,23 @@
+test "1 e 2 trocam de lugar" {
+	mut a := 1
+	mut b := 2
+	swap(a, b)
+	assert a == 2
+	assert b == 1
+}
+
+test "trocar duas vezes não muda nada" {
+	mut a := 7
+	mut b := -3
+	swap(a, b)
+	swap(a, b)
+	assert a == 7
+	assert b == -3
+}
+
+test "valores iguais continuam iguais" {
+	mut a := 5
+	mut b := 5
+	swap(a, b)
+	assert a == 5 && b == 5
+}

@@ -1,9 +1,11 @@
-// Copia os arquivos de assets/ para lib/assets.hive como texto Hive, para que
-// o executável os carregue dentro dele. Rode depois de editar um deles:
+// Copia os arquivos de assets/ para lib/assets.hive e os de learn/ para
+// lib/course.hive, como texto Hive, para que o executável os carregue dentro
+// dele. Rode depois de editar um deles:
 //
 //     cd tools && hivec run embed.hive
 //
-// Hoje é só o assets/pick.ps1, o seletor de arquivo e pasta do Windows.
+// Em assets/ é só o assets/pick.ps1, o seletor de arquivo e pasta do Windows;
+// em learn/, o curso "Aprender Hive" inteiro (o learn/README.md fica de fora).
 
 type Asset {
 	source: Str
@@ -22,29 +24,89 @@ func asFunction(asset: Asset, content: Str): Str {
 	return "// " + asset.source + "\nfunc " + asset.name + "(): Str \{\n\treturn " + "`" + "\n" + join(lines, "\n") + "\n\t" + "`" + "\n}\n"
 }
 
-proc main(): void {
+// Um texto qualquer como literal `"…"`: o curso tem crases, que um literal
+// entre crases não aceita.
+func quoted(content: Str): Str {
+	mut out := replaceAll(content, "\\", "\\\\")
+	out = replaceAll(out, "\"", "\\\"")
+	out = replaceAll(out, "\{", "\\\{")
+	out = replaceAll(out, "\n", "\\n")
+	out = replaceAll(out, "\t", "\\t")
+	return "\"" + out + "\""
+}
+
+proc fail(message: Str): void {
+	echo message
+	hive.term.exit(1)
+}
+
+proc readClean(path: Str): Str {
+	read := hive.file.read(path)
+	if read is Result.Ok(content) {
+		return replaceAll(content, "\r", "")
+	} else if read is Result.Error(why) {
+		fail("não foi possível ler {path}: {why.message}")
+	}
+	return ""
+}
+
+proc write(target: Str, body: Str): void {
+	if hive.file.write(target, body) is Result.Error(why) {
+		fail("não foi possível escrever {target}: {why.message}")
+	}
+}
+
+proc embedAssets(): void {
 	assets := [Asset("assets/pick.ps1", "pickScript")]
 	target := "../lib/assets.hive"
 	mut Str[dyn] parts = ["// Gerado por tools/embed.hive a partir de assets/. Não edite à mão.\n"]
 	for each asset in assets {
-		read := hive.file.read("../" + asset.source)
-		if read is Result.Error(why) {
-			echo "não foi possível ler {asset.source}: {why.message}"
-			hive.term.exit(1)
+		clean := readClean("../" + asset.source)
+		if indexOf(clean, "`") is Result.Ok(at) {
+			fail("{asset.source} tem uma crase (caractere {at})")
 		}
-		if read is Result.Ok(content) {
-			clean := replaceAll(content, "\r", "")
-			if indexOf(clean, "`") is Result.Ok(at) {
-				echo "{asset.source} tem uma crase (caractere {at})"
-				hive.term.exit(1)
-			}
-			append(parts, asFunction(asset, clean))
-		}
+		append(parts, asFunction(asset, clean))
 	}
-	body := join(parts, "\n")
-	if hive.file.write(target, body) is Result.Error(why) {
-		echo "não foi possível escrever {target}: {why.message}"
-		hive.term.exit(1)
-	}
+	write(target, join(parts, "\n"))
 	echo "escrito {target} ({len(assets)} arquivo(s))"
+}
+
+// Os arquivos do curso, relativos a learn/: o `course.md` e o que cada pasta
+// de capítulo tem, em ordem de nome.
+proc courseFiles(root: Str): Str[dyn] {
+	mut Str[dyn] found = []
+	if hive.file.list(root) is Result.Ok(names) {
+		for each name in names {
+			if hive.file.list(root + "/" + name) is Result.Ok(inside) {
+				for each file in inside {
+					append(found, name + "/" + file)
+				}
+			} else if name != "README.md" {
+				append(found, name)
+			}
+		}
+	} else {
+		fail("não foi possível listar {root}")
+	}
+	return found
+}
+
+proc embedCourse(): void {
+	root := "../learn"
+	target := "../lib/course.hive"
+	files := courseFiles(root)
+	mut Str[dyn] rows = []
+	for each rel in files {
+		append(rows, "\t\t[" + quoted(rel) + ", " + quoted(readClean(root + "/" + rel)) + "]")
+	}
+	header := "// Gerado por tools/embed.hive a partir de learn/. Não edite à mão.\n\n" +
+		"// Os arquivos do curso \"Aprender Hive\": [caminho dentro de learn/, conteúdo].\n"
+	body := header + "func files(): Str[2][dyn] \{\n\tStr[2][dyn] all = [\n" + join(rows, ",\n") + "\n\t]\n\treturn all\n}\n"
+	write(target, body)
+	echo "escrito {target} ({len(files)} arquivo(s))"
+}
+
+proc main(): void {
+	embedAssets()
+	embedCourse()
 }

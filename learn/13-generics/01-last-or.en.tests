@@ -1,0 +1,17 @@
+test "the last Int" {
+	assert lastOr([1, 2, 3], 0) == 3
+}
+
+test "the last Str" {
+	assert lastOr(["a", "b"], "") == "b"
+}
+
+test "nothing there" {
+	Str[dyn] none = []
+	assert lastOr(none, "nothing") == "nothing"
+}
+
+test "a Float and a Bool" {
+	assert lastOr([0.5, 1.5], 0.0) == 1.5
+	assert lastOr([true, false], true) == false
+}

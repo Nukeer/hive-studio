@@ -1,0 +1,17 @@
+// Lenta de propósito: cada chamada leva 300 ms.
+func price(item: Str): Int {
+	hive.task.sleep(300)
+	if item == "mel" {
+		return 12
+	} else if item == "cera" {
+		return 5
+	} else if item == "pólen" {
+		return 3
+	}
+	return 0
+}
+
+// Os três preços somados — em bem menos de 900 ms.
+func basketTotal(a: Str, b: Str, c: Str): Int {
+	return price(a) + price(b) + price(c)
+}

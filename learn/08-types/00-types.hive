@@ -1,0 +1,33 @@
+type Bee {
+	name: Str
+	age:  Int
+	role: Str
+}
+
+func describe(bee: Bee): Str {
+	return "{bee.name}, {bee.age} dias, {bee.role}"
+}
+
+// Mudar um registro é montar um novo.
+func older(bee: Bee, days: Int): Bee {
+	return Bee(bee.name, bee.age + days, bee.role)
+}
+
+proc main(): void {
+	ada := Bee("Ada", 12, "coletora")
+	bia := Bee(role: "enfermeira", name: "Bia", age: 3)
+	echo describe(ada)
+	echo bia
+
+	// Uma cópia é um valor só dela.
+	mut copia := ada
+	copia.age = 40
+	echo "{ada.age} e {copia.age}"
+
+	echo describe(older(bia, 7))
+
+	Bee[dyn] colmeia = [ada, bia]
+	for each bee in colmeia {
+		echo bee.name
+	}
+}

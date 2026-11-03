@@ -1,0 +1,4 @@
+// true when the letters of `a`, rearranged, make `b`.
+func isAnagram(a: Str, b: Str): Bool {
+	return false
+}

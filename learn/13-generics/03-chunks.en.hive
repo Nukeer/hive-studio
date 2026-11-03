@@ -1,0 +1,5 @@
+// `values` cut into pieces of `size` (the last one may be shorter).
+func chunks(values: T[], size: Int): T[dyn][dyn] {
+	T[dyn][dyn] none = []
+	return none
+}

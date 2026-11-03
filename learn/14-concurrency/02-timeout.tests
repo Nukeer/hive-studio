@@ -1,0 +1,11 @@
+test "o mel chega a tempo" {
+	assert priceOrZero("mel") == 12
+}
+
+test "o ouro demora demais" {
+	assert priceOrZero("ouro") == 0
+}
+
+test "e ninguém espera três segundos por ele" {
+	assert priceOrZero("ouro") with timeout 1000 is Result.Ok(0)
+}

@@ -1,0 +1,4 @@
+// Todos os números de `numbers`, somados.
+func sum(numbers: Int[]): Int {
+	return 0
+}

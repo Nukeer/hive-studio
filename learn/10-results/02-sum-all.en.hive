@@ -1,0 +1,4 @@
+// Ok(total) when every text is a number; Error("not a number: <text>") at the first that is not.
+func sumAll(texts: Str[]): Result<Int, Str> {
+	return Result.Ok(0)
+}

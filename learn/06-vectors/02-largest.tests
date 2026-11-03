@@ -1,0 +1,17 @@
+test "o maior de três" {
+	assert largest([3, 9, 4]) == 9
+}
+
+test "todos negativos" {
+	assert largest([-8, -2, -5]) == -2
+}
+
+test "um vetor vazio" {
+	Int[dyn] none = []
+	assert largest(none) == 0
+}
+
+test "o primeiro ou o último" {
+	assert largest([10, 1, 2]) == 10
+	assert largest([1, 2, 10]) == 10
+}

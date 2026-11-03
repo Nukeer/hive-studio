@@ -9,6 +9,7 @@ import ../../lib/uiview
 import ../../lib/vim
 import ../../lib/agents
 import ../../lib/git
+import ../../lib/native.go
 
 proc scratch(): Str {
 	folder := "./studio-test"
@@ -94,6 +95,16 @@ type Seen {
 	lens:          model.LensMark[dyn]
 	view:          Str
 	page:          Str
+	// O curso "Aprender Hive": o passo à vista, o código do editor dele, o
+	// serial desse código, o veredito da última execução e os concluídos.
+	learnStep:     Str
+	learnCode:     Str
+	learnSerial:   Int
+	learnRunning:  Bool
+	learnVerdict:  Str
+	learnProblems: Int
+	learnMarks:    Int
+	learnSolved:   Str[dyn]
 }
 
 // O texto à vista veio do disco, e não do usuário: o editor o troca quieto.
@@ -174,8 +185,41 @@ func seenOf(win: studio.Win): Seen {
 		agentSessions: sessions,
 		lens: render.lensMarks(state),
 		view: view,
-		page: hive.ui.html(studio.view(win))
+		page: hive.ui.html(studio.view(win)),
+		learnStep: state.learn.step,
+		learnCode: state.learn.code,
+		learnSerial: state.learn.serial,
+		learnRunning: state.learn.running,
+		learnVerdict: state.learn.verdict,
+		learnProblems: len(state.learn.problems),
+		learnMarks: len(render.learnMarks(state)),
+		learnSolved: state.learn.solved
 	)
+}
+
+// Uma pasta vazia para o progresso e o código do curso.
+proc learnRoot(name: Str): Str {
+	folder := "./" + name
+	_gone := native.removeAll(folder)
+	return folder
+}
+
+// Uma edição do editor do curso, como o hive.ui a manda: a partir de `at`,
+// saem `cut` caracteres e entra `text`, sobre o texto do serial `serial`.
+func learnEdit(serial: Int, at: Int, cut: Int, text: Str): model.Event {
+	return model.Event("learnEdit", "", text, "", at + len(text), at, cut, serial)
+}
+
+// Uma mensagem como a que o trabalho em outra thread manda de volta à janela.
+proc post(db: Address, message: model.Msg): Seen {
+	return reply(db(model.Cmd.Post(message)))
+}
+
+func readOr(path: Str): Str {
+	if hive.file.read(path) is Result.Ok(text) {
+		return text
+	}
+	return ""
 }
 
 // A janela num serviço, como o programa a roda: cada mensagem passa por

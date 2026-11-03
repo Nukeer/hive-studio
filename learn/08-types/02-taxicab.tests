@@ -1,0 +1,15 @@
+test "3 na horizontal e 4 na vertical" {
+	assert distance(Point(1, 1), Point(4, 5)) == 7
+}
+
+test "no caminho contrário" {
+	assert distance(Point(4, 5), Point(1, 1)) == 7
+}
+
+test "coordenadas negativas" {
+	assert distance(Point(0, 0), Point(-2, 3)) == 5
+}
+
+test "o mesmo ponto" {
+	assert distance(Point(6, -6), Point(6, -6)) == 0
+}

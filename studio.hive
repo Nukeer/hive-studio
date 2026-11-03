@@ -37,6 +37,7 @@ import ./lib/pty.go
 import ./lib/watch.go
 import ./lib/update as updater
 import ./lib/version
+import ./lib/learn
 
 // ── explorador ───────────────────────────────────────────────────────────
 //
@@ -1864,6 +1865,249 @@ proc treeKey(state: mut model.State, key: Str): void {
 	}
 }
 
+// ── o curso "Aprender Hive" ──────────────────────────────────────────────
+
+// O progresso guardado (os passos concluídos), lido na primeira vez que a aba
+// abre; devolve o passo onde o usuário parou ("" = a página do curso).
+proc learnLoad(state: mut model.State): Str {
+	state.learn.loaded = true
+	if hive.file.read(learn.progressPath(state.learn.root)) is Result.Ok(text) {
+		saved := learn.parseProgress(text)
+		state.learn.solved = saved.solved
+		return saved.at
+	}
+	return ""
+}
+
+proc learnSaveProgress(state: mut model.State): void {
+	root := state.learn.root
+	_made := hive.file.makeDir(root)
+	_saved := hive.file.write(learn.progressPath(root), learn.progressText(learn.Progress(state.learn.step, state.learn.solved)))
+}
+
+// O código do passo à vista, guardado para a próxima vez.
+proc learnSaveDraft(state: mut model.State): void {
+	if state.learn.step == "" {
+		return
+	}
+	path := learn.draftPath(state.learn.root, state.learn.step)
+	// O código do curso não é guardado: um passo que ninguém mexeu segue o
+	// curso (e o idioma dele).
+	if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+		if step.code == state.learn.code {
+			_gone := hive.file.delete(path)
+			return
+		}
+	}
+	_made := hive.file.makeDir(workspace.parentOf(path))
+	_saved := hive.file.write(path, state.learn.code)
+}
+
+// O texto do passo à vista (ou da página do curso) e a dica, em HTML.
+proc learnPages(state: mut model.State): void {
+	state.learn.page = markdown.render(state.learn.course.intro)
+	state.learn.hintPage = ""
+	if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+		state.learn.page = markdown.render(step.body)
+		state.learn.hintPage = markdown.render(step.hint)
+	}
+}
+
+// O curso no idioma novo da interface: o texto muda, o código que o usuário
+// está escrevendo fica — a não ser que ainda seja o do curso.
+proc learnLanguage(state: mut model.State, language: Str): void {
+	mut untouched := false
+	if learn.find(state.learn.course, state.learn.step) is Result.Ok(before) {
+		untouched = before.code == state.learn.code
+	}
+	state.learn.course = learn.load(language)
+	learnPages(state)
+	if untouched {
+		if learn.find(state.learn.course, state.learn.step) is Result.Ok(after) {
+			state.learn.code = after.code
+			state.learn.serial = state.learn.serial + 1
+		}
+	}
+}
+
+proc learnClear(state: mut model.State): void {
+	learn.Outcome[dyn] none = []
+	model.Diagnostic[dyn] clean = []
+	state.learn.ran = ""
+	state.learn.verdict = ""
+	state.learn.output = ""
+	state.learn.outcomes = none
+	state.learn.problems = clean
+}
+
+// Vai a um passo ("" = a página do curso), com o código que o usuário deixou
+// nele ou, na primeira vez, o do curso.
+proc learnGo(state: mut model.State, id: Str): void {
+	learnSaveDraft(state)
+	mut step := ""
+	mut code := ""
+	if learn.find(state.learn.course, id) is Result.Ok(found) {
+		step = found.id
+		code = found.code
+		if hive.file.read(learn.draftPath(state.learn.root, found.id)) is Result.Ok(saved) {
+			code = replaceAll(saved, "\r", "")
+		}
+	}
+	state.learn.step = step
+	state.learn.code = code
+	state.learn.serial = state.learn.serial + 1
+	learnPages(state)
+	state.learn.hint = false
+	state.learn.solution = false
+	learnClear(state)
+	learnSaveProgress(state)
+	if step != "" {
+		withFocus(state, "learnEditor")
+	}
+}
+
+// Abre a aba (no passo onde o usuário parou) e a mostra. O resultado de um
+// passo aparece na própria aba, então o painel de baixo fecha e dá a altura
+// a ela (Ctrl+` o abre de novo).
+proc learnOpen(state: mut model.State): void {
+	if !state.learn.open {
+		mut at := state.learn.step
+		if !state.learn.loaded {
+			at = learnLoad(state)
+		}
+		state.learn.open = true
+		state.panelOpen = false
+		learnGo(state, at)
+	}
+	state.editorView = model.EditorView.LearnPage()
+}
+
+// Os erros do compilador num programa do passo (`main.hive`), cada um com o
+// texto que a linha dele tinha no código — os de depois do código são dos
+// testes escondidos, e ficam sem texto.
+func learnProblems(output: Str, code: Str): model.Diagnostic[dyn] {
+	lines := split(code, "\n")
+	mut model.Diagnostic[dyn] found = []
+	for each d in analysis.parseDiagnostics(output) {
+		if workspace.baseName(d.file) == "main.hive" {
+			row := d.line - 1
+			mut source := ""
+			if lines bounds row {
+				source = lines[row]
+			}
+			append(found, model.Diagnostic(d.file, d.line, d.message, source))
+		}
+	}
+	return found
+}
+
+// Check, Run e Test na página do curso valem para o passo à vista.
+func learnAction(action: Str): Result<model.Msg, Bool> {
+	if action == "check" {
+		return Result.Ok(model.Msg.LearnRun("check"))
+	} else if action == "run" || action == "test" {
+		return Result.Ok(model.Msg.LearnRun("run"))
+	}
+	return Result.Error(false)
+}
+
+proc updateLearn(state: mut model.State, message: model.Msg, from: Address): Bool {
+	if message is model.Msg.LearnOpen {
+		learnOpen(state)
+		state.sideOpen = true
+		state.side = model.SideView.LearnSide()
+	} else if message is model.Msg.LearnClose {
+		learnSaveDraft(state)
+		state.learn.open = false
+		state.editorView = model.EditorView.DocView()
+	} else if message is model.Msg.LearnShow(id) {
+		learnOpen(state)
+		if id != state.learn.step {
+			learnGo(state, id)
+		}
+	} else if message is model.Msg.LearnEdit(text) {
+		state.learn.code = text
+		state.learn.due = state.learn.due + 1
+		n := state.learn.due
+		async toolchain.learnTimer(from, n)
+	} else if message is model.Msg.LearnDue(n) {
+		if n == state.learn.due {
+			learnSaveDraft(state)
+			if state.settings.errorLens && state.learn.step != "" {
+				compiler := state.settings.compiler
+				folder := learn.checkFolder(state.learn.root)
+				step := state.learn.step
+				code := state.learn.code
+				async toolchain.learnCheck(from, compiler, folder, step, n, code)
+			}
+		}
+	} else if message is model.Msg.LearnChecked(id, n, output) {
+		if id == state.learn.step && n == state.learn.due && !state.learn.running {
+			state.learn.problems = learnProblems(output, state.learn.code)
+		}
+	} else if message is model.Msg.LearnRun(command) {
+		if state.learn.running {
+			return true
+		}
+		if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+			learnSaveDraft(state)
+			learnClear(state)
+			state.learn.running = true
+			challenge := learn.isChallenge(step)
+			mut run := learn.command(state.learn.code, challenge)
+			if command == "check" {
+				run = "check"
+			}
+			compiler := state.settings.compiler
+			folder := learn.runFolder(state.learn.root)
+			program := learn.program(step, state.learn.code)
+			async toolchain.learnRun(from, compiler, folder, step.id, run, program)
+		}
+	} else if message is model.Msg.LearnStop {
+		_stopped := process.stop(toolchain.learnTag())
+	} else if message is model.Msg.LearnDone(id, command, output, code) {
+		state.learn.running = false
+		mut problems := learnProblems(output, "")
+		if id == state.learn.step {
+			problems = learnProblems(output, state.learn.code)
+		}
+		if code == 0 {
+			model.Diagnostic[dyn] none = []
+			problems = none
+		}
+		found := learn.outcomes(output)
+		mut verdict := learn.verdict(code, len(problems), found)
+		if command == "check" && verdict == "passed" {
+			verdict = "checked"
+		}
+		if verdict == "passed" {
+			state.learn.solved = learn.withSolved(state.learn.solved, id)
+			learnSaveProgress(state)
+		}
+		if id == state.learn.step {
+			state.learn.ran = id
+			state.learn.verdict = verdict
+			state.learn.output = output
+			state.learn.outcomes = found
+			state.learn.problems = problems
+		}
+	} else if message is model.Msg.LearnReset {
+		if learn.find(state.learn.course, state.learn.step) is Result.Ok(step) {
+			state.learn.code = step.code
+			state.learn.serial = state.learn.serial + 1
+			learnClear(state)
+			learnSaveDraft(state)
+		}
+	} else if message is model.Msg.LearnHint {
+		state.learn.hint = !state.learn.hint
+	} else if message is model.Msg.LearnSolution {
+		state.learn.solution = !state.learn.solution
+	} else {
+		return false
+	}
+	return true
+}
+
 // ── a dobra ──────────────────────────────────────────────────────────────
 
 // Painel, terminal, git e navegação: separados da dobra principal para cada
@@ -2141,6 +2385,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 		prefs.language = code
 		applySettings(state, prefs)
 		state.words = i18n.words(code)
+		learnLanguage(state, code)
 		state.status = i18n.tr(state.words, "idioma") + ": " + code
 	} else if message is model.Msg.ShowAbout {
 		state.about = true
@@ -2149,6 +2394,7 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 	} else if message is model.Msg.OpenDocs {
 		async dialogs.openUrl("https://hive-lang.run")
 	} else if message is model.Msg.Quit {
+		learnSaveDraft(state)
 		if state.term.session != 0 {
 			_stopped := native.stop(state.term.session)
 		}
@@ -2181,7 +2427,8 @@ proc updateTools(state: mut model.State, message: model.Msg, from: Address): Boo
 }
 
 proc update(state: mut model.State, message: model.Msg, from: Address): void {
-	if updateTools(state, message, from) || updateVim(state, message, from) || updateAgents(state, message, from) || updateSelf(state, message, from) {
+	if updateTools(state, message, from) || updateVim(state, message, from) || updateAgents(state, message, from) || updateSelf(state, message, from) ||
+		updateLearn(state, message, from) {
 		return
 	}
 	mut prefs := state.settings
@@ -2438,6 +2685,10 @@ proc update(state: mut model.State, message: model.Msg, from: Address): void {
 			if side is model.SideView.TodoSide {
 				scanTodos(state, from)
 			}
+			// O curso na barra lateral abre a aba dele.
+			if side is model.SideView.LearnSide {
+				learnOpen(state)
+			}
 			// Abrir o explorador (Ctrl+Shift+E, o ícone) dá o teclado a ele.
 			if side is model.SideView.ExplorerSide {
 				withFocus(state, "explorer")
@@ -2580,7 +2831,19 @@ func promptFor(arg: Str): model.Prompt {
 }
 
 proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Msg, Bool> {
-	if action == "newFile" {
+	if render.showingLearn(state) {
+		if learnAction(action) is Result.Ok(learning) {
+			return Result.Ok(learning)
+		} else if action == "build" || action == "analyze" {
+			return Result.Error(false)
+		} else if action == "save" {
+			// Ctrl+S guarda o código do passo (e o confere) na hora.
+			return Result.Ok(model.Msg.LearnDue(state.learn.due))
+		}
+	}
+	if action == "learn" {
+		return Result.Ok(model.Msg.LearnOpen())
+	} else if action == "newFile" {
 		return Result.Ok(model.Msg.StartPrompt(model.Prompt.NewFilePrompt()))
 	} else if action == "newFolder" {
 		return Result.Ok(model.Msg.StartPrompt(model.Prompt.NewFolderPrompt()))
@@ -2596,6 +2859,9 @@ proc actionMsg(state: mut model.State, action: Str, caret: Int): Result<model.Ms
 		}
 		if render.showingSettings(state) {
 			return Result.Ok(model.Msg.CloseSettings())
+		}
+		if render.showingLearn(state) {
+			return Result.Ok(model.Msg.LearnClose())
 		}
 		return Result.Ok(model.Msg.CloseDoc(state.active))
 	} else if action == "nextTab" {
@@ -2767,9 +3033,33 @@ proc clickMsg(state: mut model.State, event: model.Event): Result<model.Msg, Boo
 	} else if a == "close" {
 		return Result.Ok(model.Msg.CloseDoc(numberOr(arg, -1)))
 	} else if a == "invoke" {
+		if render.showingLearn(state) {
+			return learnAction(arg)
+		}
 		return Result.Ok(model.Msg.Invoke(arg))
+	} else if a == "learn" {
+		if arg == "" {
+			return Result.Ok(model.Msg.LearnOpen())
+		}
+		return Result.Ok(model.Msg.LearnShow(arg))
+	} else if a == "learnHome" {
+		return Result.Ok(model.Msg.LearnShow(""))
+	} else if a == "learnClose" {
+		return Result.Ok(model.Msg.LearnClose())
+	} else if a == "learnRun" {
+		return Result.Ok(model.Msg.LearnRun(arg))
+	} else if a == "learnStop" {
+		return Result.Ok(model.Msg.LearnStop())
+	} else if a == "learnReset" {
+		return Result.Ok(model.Msg.LearnReset())
+	} else if a == "learnHint" {
+		return Result.Ok(model.Msg.LearnHint())
+	} else if a == "learnSolution" {
+		return Result.Ok(model.Msg.LearnSolution())
 	} else if a == "side" {
-		if arg == "outline" {
+		if arg == "learn" {
+			return Result.Ok(model.Msg.ShowSide(model.SideView.LearnSide()))
+		} else if arg == "outline" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.OutlineSide()))
 		} else if arg == "todo" {
 			return Result.Ok(model.Msg.ShowSide(model.SideView.TodoSide()))
@@ -2988,6 +3278,12 @@ proc toMsg(state: mut model.State, event: model.Event): Result<model.Msg, Bool> 
 		return Result.Ok(model.Msg.EditAt(native.splice(text, event.at, event.cut, event.arg), event.caret))
 	} else if event.kind == "edit" {
 		return Result.Ok(model.Msg.EditAt(event.text, event.caret))
+	} else if event.kind == "learnEdit" {
+		// O editor do curso: a diferença vale sobre o texto que o programa tem.
+		if event.seen != state.learn.serial {
+			return Result.Error(false)
+		}
+		return Result.Ok(model.Msg.LearnEdit(native.splice(state.learn.code, event.at, event.cut, event.arg)))
 	} else if event.kind == "popup" {
 		return Result.Ok(model.Msg.PopupKey(event.text))
 	} else if event.kind == "key" {

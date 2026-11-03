@@ -1,0 +1,4 @@
+// true quando `text` se lê igual de trás para frente.
+func isPalindrome(text: Str): Bool {
+	return false
+}

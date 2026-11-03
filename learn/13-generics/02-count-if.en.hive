@@ -1,0 +1,4 @@
+// How many elements `keep` says true to.
+func countIf(values: T[], keep: func(T): Bool): Int {
+	return 0
+}

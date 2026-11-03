@@ -1,0 +1,13 @@
+// true quando `text` se lê igual de trás para frente.
+func isPalindrome(text: Str): Bool {
+	letters := split(text, "")
+	for i := 0; i < len(letters) / 2; i++ {
+		j := len(letters) - 1 - i
+		if letters bounds i && letters bounds j {
+			if letters[i] != letters[j] {
+				return false
+			}
+		}
+	}
+	return true
+}

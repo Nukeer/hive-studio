@@ -1,0 +1,8 @@
+// Every number in `numbers`, added up.
+func sum(numbers: Int[]): Int {
+	mut total := 0
+	for each n in numbers {
+		total += n
+	}
+	return total
+}

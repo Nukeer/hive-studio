@@ -1,0 +1,4 @@
+// Celsius entra, Fahrenheit sai: F = C × 9 / 5 + 32.
+func toFahrenheit(celsius: Float): Float {
+	return celsius * 9.0 / 5.0 + 32.0
+}

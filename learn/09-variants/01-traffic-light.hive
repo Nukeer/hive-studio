@@ -1,0 +1,15 @@
+type Light {
+	Red
+	Yellow
+	Green
+}
+
+// Vermelho → verde → amarelo → vermelho.
+func next(light: Light): Light {
+	return light
+}
+
+// Só o verde deixa passar.
+func canGo(light: Light): Bool {
+	return false
+}

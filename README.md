@@ -18,7 +18,8 @@ Uma janela nativa (Windows e Linux), desenhada só com os widgets do
 [`hive.ui`](https://hive-lang.run): sem navegador, sem página própria e sem
 JavaScript. Toda a lógica roda no programa Hive.
 
-Precisa do `hivec` v0.2.13 ou mais novo.
+Precisa do `hivec` v0.2.13 ou mais novo (o curso **Aprender Hive** usa
+`switch`, do v0.2.16).
 
 ```
 hivec run studio.hive [pasta]      # abre a pasta (padrão: a atual)
@@ -28,6 +29,20 @@ hivec test test/suite.hive         # testes, com cobertura
 
 ## O que tem
 
+- **Aprender Hive** (**Ajuda → Aprender Hive**, o livro na barra de atividades
+  ou a tela de boas-vindas): um curso de 15 capítulos para quem nunca viu Hive,
+  um recurso da linguagem por vez — do primeiro `echo` a `switch`, `Result`,
+  mapas, genéricos e `await`. Cada capítulo abre com uma **lição** (o texto ao
+  lado de um programa para rodar e mudar) e segue com **desafios** no estilo
+  LeetCode, cada um um pouco mais fundo: uma função para escrever, conferida
+  por testes escondidos (▶ Run tests mostra quais passaram e, dos que não, os
+  dois lados do `assert`), com dica e uma solução a pedido. Os erros de
+  compilação aparecem na linha enquanto se digita; um laço que nunca termina
+  é encerrado (ou parado com ■ Stop). O progresso e o código de cada passo
+  ficam guardados; a barra lateral mostra o curso e o que já foi feito, e
+  aponta para o tour oficial em [hive-lang.run](https://hive-lang.run). O
+  texto do curso é em inglês, como a documentação da linguagem. Veja
+  [`learn/README.md`](learn/README.md) para escrever um passo.
 - **Barra de menus** estilo VS Code: **Arquivo** (novo, abrir arquivo/pasta com
   o seletor nativo do Windows, salvar, configurações, fechar, sair), **Editar**
   (desfazer, refazer, recortar, copiar, colar, selecionar tudo, sugestões, ir
@@ -217,8 +232,9 @@ se existir, vence o compilador configurado.
   `lib/watch.go` (o vigia do disco, pela
   [fsnotify](https://github.com/fsnotify/fsnotify)); o `hivec` baixa as
   dependências com `go mod tidy` na primeira compilação.
-- O seletor de arquivo e pasta do Windows (`assets/pick.ps1`) vai embutido no
-  executável por `tools/embed.hive`, que gera `lib/assets.hive`:
+- O seletor de arquivo e pasta do Windows (`assets/pick.ps1`) e o curso
+  (`learn/`) vão embutidos no executável por `tools/embed.hive`, que gera
+  `lib/assets.hive` e `lib/course.hive`:
 
   ```
   cd tools && hivec run embed.hive
@@ -254,6 +270,10 @@ se existir, vence o compilador configurado.
 | `lib/watch.go` | vigia as pastas abertas e avisa das mudanças no disco (Go) |
 | `lib/agents.hive` | os agentes (Claude Code, Codex, OpenCode) e seus comandos |
 | `lib/vim.hive` | modo Vim: teclas → movimentos, operadores, macros e linha de comando |
+| `lib/learn.hive` | o curso Aprender Hive: capítulos e passos, o programa que um passo roda, os testes que passaram |
+| `learn/` | o texto, os exemplos, os testes escondidos e as soluções do curso ([como escrever](learn/README.md)) |
+| `lib/course.hive` | `learn/` embutido por `tools/embed.hive` (gerado) |
+| `tools/learncheck.hive` | roda o curso inteiro com o `hivec`: lições rodam, soluções passam, códigos iniciais não |
 
 ## Testes
 

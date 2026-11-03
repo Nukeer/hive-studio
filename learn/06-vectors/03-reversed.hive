@@ -1,0 +1,5 @@
+// As mesmas palavras, a última primeiro.
+func reversed(words: Str[]): Str[dyn] {
+	Str[dyn] none = []
+	return none
+}

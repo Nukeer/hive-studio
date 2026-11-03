@@ -1,0 +1,4 @@
+// Devolva uma saudação para `name`: "Olá, Ada!" para "Ada".
+func greet(name: Str): Str {
+	return "Olá, {name}!"
+}

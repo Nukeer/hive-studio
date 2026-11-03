@@ -1,0 +1,4 @@
+// The mean of a, b and c, fraction included: average(1, 2, 2) is 1.666…
+func average(a: Int, b: Int, c: Int): Float {
+	return hive.conv.itf(a + b + c) / 3.0
+}

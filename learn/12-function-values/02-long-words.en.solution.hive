@@ -1,0 +1,8 @@
+func atLeast(word: Str, min: Int): Bool {
+	return len(word) >= min
+}
+
+// The words with at least `min` characters, in order.
+func longWords(words: Str[], min: Int): Str[dyn] {
+	return filter(words, atLeast(_, min))
+}

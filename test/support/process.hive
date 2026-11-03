@@ -1,0 +1,24 @@
+// Apoio aos testes de test/process.test.hive.
+
+import ../../lib/process
+import ../../lib/host
+
+// Um programa que leva uns segundos para terminar, em qualquer sistema.
+func slowCommand(): Str {
+	if host.isWindows() {
+		return "ping"
+	}
+	return "sleep"
+}
+
+func slowArguments(): Str[dyn] {
+	if host.isWindows() {
+		return ["-n", "6", "127.0.0.1"]
+	}
+	return ["5"]
+}
+
+// O programa lento, com o nome `tag`, para o `stop` achá-lo.
+proc slow(limit: Int, tag: Str): process.Output {
+	return process.runFor(slowCommand(), slowArguments(), "", limit, tag)
+}

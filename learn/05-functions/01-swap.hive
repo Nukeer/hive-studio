@@ -1,0 +1,3 @@
+// Depois de swap(a, b), a tem o que b tinha e b tem o que a tinha.
+proc swap(a: mut Int, b: mut Int): void {
+}

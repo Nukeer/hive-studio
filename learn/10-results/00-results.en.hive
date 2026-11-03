@@ -1,0 +1,31 @@
+// A function that can fail says so in its type.
+func divide(a: Int, b: Int): Result<Int, Str> {
+	if b == 0 {
+		return Result.Error("cannot divide {a} by zero")
+	}
+	return Result.Ok(a / b)
+}
+
+proc main(): void {
+	if divide(10, 2) is Result.Ok(n) {
+		echo "10 / 2 = {n}"
+	}
+
+	// Ok and Error together cover every case.
+	result := divide(1, 0)
+	if result is Result.Ok(n) {
+		echo n
+	} else if result is Result.Error(why) {
+		echo "failed: {why}"
+	}
+
+	// The library reports failure the same way.
+	for each text in ["42", "forty-two"] {
+		parsed := hive.conv.sti(text)
+		if parsed is Result.Ok(number) {
+			echo "{text} plus one is {number + 1}"
+		} else if parsed is Result.Error(problem) {
+			echo "{text}: {problem.message}"
+		}
+	}
+}

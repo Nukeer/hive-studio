@@ -1,0 +1,5 @@
+// As palavras com pelo menos `min` caracteres, em ordem.
+func longWords(words: Str[], min: Int): Str[dyn] {
+	Str[dyn] none = []
+	return none
+}

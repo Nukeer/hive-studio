@@ -1,0 +1,17 @@
+// 300 ms for most items; 3 seconds for gold.
+func price(item: Str): Int {
+	if item == "gold" {
+		hive.task.sleep(3000)
+		return 1000
+	}
+	hive.task.sleep(300)
+	if item == "honey" {
+		return 12
+	}
+	return 1
+}
+
+// The price if it arrives within 500 ms, and 0 otherwise.
+func priceOrZero(item: Str): Int {
+	return price(item)
+}

@@ -1,0 +1,14 @@
+// Um comentário vai até o fim da linha.
+
+// Todo programa começa aqui.
+proc main(): void {
+	echo "Olá, Hive!"
+
+	// `:=` dá um nome a um valor; o Hive descobre o tipo dele.
+	bicho := "abelha"
+	asas := 4
+
+	// `{...}` dentro de um texto encaixa um valor nele.
+	echo "Uma {bicho} tem {asas} asas."
+	echo "Duas delas têm {asas * 2}."
+}

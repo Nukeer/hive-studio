@@ -1,0 +1,25 @@
+func celsius(fahrenheit: Float): Float {
+	return (fahrenheit - 32.0) * 5.0 / 9.0
+}
+
+func isEven(n: Int): Bool {
+	return n % 2 == 0
+}
+
+test "water freezes at 0 °C" {
+	assert celsius(32.0) == 0.0
+}
+
+test "water boils at 100 °C" {
+	assert celsius(212.0) == 100.0
+}
+
+test "even numbers" {
+	assert isEven(4)
+	assert isEven(0)
+}
+
+// This one is wrong on purpose: run the tests, then fix it.
+test "odd numbers" {
+	assert isEven(7) == true
+}

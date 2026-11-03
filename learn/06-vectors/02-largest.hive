@@ -1,0 +1,4 @@
+// O maior número de `numbers`; 0 quando não há nenhum.
+func largest(numbers: Int[]): Int {
+	return 0
+}

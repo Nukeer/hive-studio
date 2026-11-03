@@ -1,0 +1,8 @@
+// The same words, last first.
+func reversed(words: Str[]): Str[dyn] {
+	mut Str[dyn] out = []
+	for each word in words {
+		prepend(out, word)
+	}
+	return out
+}

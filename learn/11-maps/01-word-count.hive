@@ -1,0 +1,5 @@
+// Quantas vezes cada palavra de `sentence` aparece.
+func wordCounts(sentence: Str): hive.map.Map<Str, Int> {
+	mut hive.map.Map<Str, Int> counts = hive.map.new()
+	return counts
+}

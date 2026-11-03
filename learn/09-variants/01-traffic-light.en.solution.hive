@@ -1,0 +1,21 @@
+type Light {
+	Red
+	Yellow
+	Green
+}
+
+// Red → Green → Yellow → Red.
+func next(light: Light): Light {
+	if light is Light.Red {
+		return Light.Green()
+	} else if light is Light.Green {
+		return Light.Yellow()
+	} else if light is Light.Yellow {
+		return Light.Red()
+	}
+}
+
+// Only green says go.
+func canGo(light: Light): Bool {
+	return light == Light.Green()
+}

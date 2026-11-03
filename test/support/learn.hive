@@ -1,0 +1,43 @@
+// Apoio aos testes de test/learn.test.hive.
+
+import ../../lib/learn
+
+// Um curso pequeno: dois capítulos, o segundo sem `chapter.md`, uma lição e
+// um desafio com dica, testes e solução.
+func files(): Str[2][dyn] {
+	Str[2][dyn] all = [
+		["course.md", "# Curso\n\nIntro.\n"],
+		["01-a/chapter.md", "# Primeiro\n\nO começo.\n"],
+		["01-a/00-lesson.md", "# Lição\n\nTexto.\n"],
+		["01-a/00-lesson.hive", "proc main(): void \{\n}\n"],
+		["01-a/01-task.md", "# Tarefa\r\n\r\nFaça.\r\n\r\n## Hint\r\n\r\nAssim.\r\n"],
+		["01-a/01-task.hive", "func f(): Int \{\n\treturn 0\n}\n"],
+		["01-a/01-task.tests", "test \"f\" \{\n\tassert f() == 1\n}\n"],
+		["01-a/01-task.solution.hive", "func f(): Int \{\n\treturn 1\n}\n"],
+		["02-b/00-only.md", "# Só\n"],
+		["02-b/00-only.hive", "x"]
+	]
+	return all
+}
+
+func ids(steps: learn.Step[]): Str[dyn] {
+	return map(steps, idOf)
+}
+
+func idOf(step: learn.Step): Str {
+	return step.id
+}
+
+func challenges(c: learn.Course): Int {
+	return len(filter(learn.steps(c), learn.isChallenge))
+}
+
+// O que `hive test` escreve com um teste que passa e outro que não.
+func testOutput(): Str {
+	return "  PASS  greets Ada\n  FAIL  greets the World\n        main_test.go:21: assert greet(\"World\") == \"Hello, World!\"\n          left:  \"\"\n          right: \"Hello, World!\"\n\n  2 tests: 1 passed, 1 failed\n  coverage: 100.0% of statements (2/2)\n"
+}
+
+func outcome(passed: Bool): learn.Outcome {
+	Str[dyn] none = []
+	return learn.Outcome("t", passed, none)
+}

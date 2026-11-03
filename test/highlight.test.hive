@@ -83,3 +83,8 @@ test "o texto sai igual, só com marcação em volta" {
 	plain := replaceAll(replaceAll(html, "<span class=\"tk\">", ""), "</span>", "")
 	assert replaceAll(replaceAll(plain, "<span class=\"tt\">", ""), "&lt;", "<") == source
 }
+
+test "switch é palavra-chave (Hive v0.2.16)" {
+	html := highlight.highlight("switch shape, fill \{")
+	assert indexOf(html, "<span class=\"tk\">switch</span>") is Result.Ok(_)
+}

@@ -1,0 +1,4 @@
+// Ok(idade) de "0" a "150"; Error("não é um número") ou Error("fora do intervalo") no resto.
+func parseAge(text: Str): Result<Int, Str> {
+	return Result.Error("ainda não escrita")
+}

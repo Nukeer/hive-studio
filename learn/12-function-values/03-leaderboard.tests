@@ -1,0 +1,14 @@
+test "a maior primeiro" {
+	Str[dyn] expected = ["bia", "cy", "ada"]
+	assert ranking([Player("ada", 30), Player("bia", 50), Player("cy", 40)]) == expected
+}
+
+test "um empate mantém a ordem" {
+	Str[dyn] expected = ["dé", "ada", "bia"]
+	assert ranking([Player("ada", 10), Player("bia", 10), Player("dé", 99)]) == expected
+}
+
+test "ninguém jogando" {
+	Player[dyn] none = []
+	assert len(ranking(none)) == 0
+}

@@ -1,0 +1,23 @@
+func testAddThree(n: Int): Int {
+	return n + 3
+}
+
+func testDouble(n: Int): Int {
+	return n * 2
+}
+
+func testScale(n: Int, factor: Int): Int {
+	return n * factor
+}
+
+test "somar três, duas vezes" {
+	assert twice(testAddThree, 1) == 7
+}
+
+test "dobrar, duas vezes" {
+	assert twice(testDouble, 5) == 20
+}
+
+test "uma função com um buraco" {
+	assert twice(testScale(_, 3), 2) == 18
+}

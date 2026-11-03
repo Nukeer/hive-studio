@@ -1,0 +1,33 @@
+type Bee {
+	name: Str
+	age:  Int
+	role: Str
+}
+
+func describe(bee: Bee): Str {
+	return "{bee.name}, {bee.age} days old, {bee.role}"
+}
+
+// Changing a record means building a new one.
+func older(bee: Bee, days: Int): Bee {
+	return Bee(bee.name, bee.age + days, bee.role)
+}
+
+proc main(): void {
+	ada := Bee("Ada", 12, "forager")
+	bea := Bee(role: "nurse", name: "Bea", age: 3)
+	echo describe(ada)
+	echo bea
+
+	// A copy is a value of its own.
+	mut copy := ada
+	copy.age = 40
+	echo "{ada.age} and {copy.age}"
+
+	echo describe(older(bea, 7))
+
+	Bee[dyn] colony = [ada, bea]
+	for each bee in colony {
+		echo bee.name
+	}
+}

@@ -1,0 +1,11 @@
+test "greets Ada" {
+	assert greet("Ada") == "Hello, Ada!"
+}
+
+test "greets the World" {
+	assert greet("World") == "Hello, World!"
+}
+
+test "greets a name with a space in it" {
+	assert greet("Queen Bee") == "Hello, Queen Bee!"
+}

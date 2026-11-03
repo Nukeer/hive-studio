@@ -1,0 +1,12 @@
+// true quando só 1 e o próprio n dividem n (e n é maior que 1).
+func isPrime(n: Int): Bool {
+	if n < 2 {
+		return false
+	}
+	for d := 2; d * d <= n; d++ {
+		if n % d == 0 {
+			return false
+		}
+	}
+	return true
+}

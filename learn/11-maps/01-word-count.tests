@@ -1,0 +1,28 @@
+test "a e abelha aparecem duas vezes" {
+	counts := wordCounts("a abelha viu a outra abelha")
+	Result<Int, Bool> two = Result.Ok(2)
+	assert hive.map.get(counts, "a") == two
+	assert hive.map.get(counts, "abelha") == two
+}
+
+test "viu aparece uma vez" {
+	counts := wordCounts("a abelha viu a outra abelha")
+	Result<Int, Bool> one = Result.Ok(1)
+	assert hive.map.get(counts, "viu") == one
+}
+
+test "uma palavra que não está lá" {
+	counts := wordCounts("a abelha viu a outra abelha")
+	assert hive.map.has(counts, "vespa") == false
+}
+
+test "quatro palavras diferentes" {
+	assert len(wordCounts("a abelha viu a outra abelha")) == 4
+}
+
+test "a mesma palavra várias vezes" {
+	counts := wordCounts("zum zum zum zum zum")
+	Result<Int, Bool> five = Result.Ok(5)
+	assert hive.map.get(counts, "zum") == five
+	assert len(counts) == 1
+}

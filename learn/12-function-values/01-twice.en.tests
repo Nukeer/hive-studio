@@ -1,0 +1,23 @@
+func testAddThree(n: Int): Int {
+	return n + 3
+}
+
+func testDouble(n: Int): Int {
+	return n * 2
+}
+
+func testScale(n: Int, factor: Int): Int {
+	return n * factor
+}
+
+test "adding three, twice" {
+	assert twice(testAddThree, 1) == 7
+}
+
+test "doubling, twice" {
+	assert twice(testDouble, 5) == 20
+}
+
+test "a function with a hole in it" {
+	assert twice(testScale(_, 3), 2) == 18
+}

@@ -1,0 +1,16 @@
+test "1 + 2 + 3" {
+	assert sumTo(3) == 6
+}
+
+test "up to 10" {
+	assert sumTo(10) == 55
+}
+
+test "up to 100" {
+	assert sumTo(100) == 5050
+}
+
+test "nothing to add" {
+	assert sumTo(0) == 0
+	assert sumTo(-5) == 0
+}

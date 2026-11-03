@@ -1,0 +1,9 @@
+type Point {
+	x: Int
+	y: Int
+}
+
+// O afastamento na horizontal, mais o afastamento na vertical.
+func distance(a: Point, b: Point): Int {
+	return 0
+}

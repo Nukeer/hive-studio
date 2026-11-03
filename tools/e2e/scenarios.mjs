@@ -313,6 +313,33 @@ export const scenarios = [
         await page.waitFor(`${term}.value.split("AGENTE-OK").length > 2`, 10000));
     },
   },
+  {
+    // O curso: o desafio abre com o código inicial, o que se digita chega ao
+    // programa, o erro de compilação aparece na linha e os testes escondidos
+    // rodam de verdade, com o hivec.
+    name: "aprender",
+    files: { "a.hive": small },
+    async run(page, { check }) {
+      const shown = (text) => `document.getElementById("root").innerText.indexOf(${JSON.stringify(text)}) >= 0`;
+      await page.post({ kind: "act", act: "action", arg: "learn" });
+      check("Ajuda → Aprender Hive abre a página do curso, com o tour oficial",
+        await page.waitFor(`${shown("Um curso prático")} && ${shown("hive-lang.run")}`));
+      await page.post({ kind: "act", act: "learn", arg: "01-hello/01-greeting" });
+      check("o desafio abre com o código inicial no editor", await page.waitFor(`${value}.indexOf("func greet(name: Str): Str") >= 0`));
+      // `return ""` vira `return "Olá, {nome}!"`: `nome` não existe.
+      await page.eval(`(function(){var t=${editor};t.focus();var at=t.value.indexOf('return ""')+7;t.setSelectionRange(at,at+2);})()`);
+      await page.insertText('"Olá, {nome}!"');
+      check("o que se digita chega ao programa", await page.waitFor(`${value}.indexOf('{nome}') >= 0`));
+      check("o erro de compilação aparece na linha enquanto se digita",
+        await page.waitFor(`[].slice.call(${runs}.querySelectorAll(".h-note")).some(function(s){return (s.getAttribute("data-note")||"").indexOf("nome")>=0})`, 30000));
+      await page.eval(`(function(){var t=${editor};t.focus();var at=t.value.indexOf('{nome}')+1;t.setSelectionRange(at,at+4);})()`);
+      await page.insertText("name");
+      await page.waitFor(`${value}.indexOf('{name}') >= 0`);
+      await page.post({ kind: "act", act: "learnRun", arg: "run" });
+      check("▶ Run tests passa com a solução", await page.waitFor(shown("Todos os testes passaram (3)"), 120000));
+      check("e o desafio fica concluído na barra lateral", await page.waitFor(shown("1/3"), 3000));
+    },
+  },
 ];
 
 async function waitDisk(page, ok, ms = 8000) {

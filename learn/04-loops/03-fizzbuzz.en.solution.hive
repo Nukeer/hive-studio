@@ -1,0 +1,19 @@
+// "1 2 Fizz 4 Buzz" for 5.
+func fizzBuzz(n: Int): Str {
+	mut line := ""
+	for i := 1; i <= n; i++ {
+		mut word := "{i}"
+		if i % 15 == 0 {
+			word = "FizzBuzz"
+		} else if i % 3 == 0 {
+			word = "Fizz"
+		} else if i % 5 == 0 {
+			word = "Buzz"
+		}
+		if i > 1 {
+			line = line + " "
+		}
+		line = line + word
+	}
+	return line
+}

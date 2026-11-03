@@ -1,0 +1,28 @@
+test "meia-noite" {
+	Result<Int, Str> expected = Result.Ok(0)
+	assert minutes("00:00") == expected
+}
+
+test "meio-dia e meia" {
+	Result<Int, Str> expected = Result.Ok(750)
+	assert minutes("12:30") == expected
+}
+
+test "o último minuto do dia" {
+	Result<Int, Str> expected = Result.Ok(1439)
+	assert minutes("23:59") == expected
+}
+
+test "horas e minutos fora do intervalo" {
+	Result<Int, Str> bad = Result.Error("horário inválido")
+	assert minutes("24:00") == bad
+	assert minutes("10:60") == bad
+	assert minutes("-1:30") == bad
+}
+
+test "nem é um horário" {
+	Result<Int, Str> bad = Result.Error("horário inválido")
+	assert minutes("meio-dia") == bad
+	assert minutes("ab:cd") == bad
+	assert minutes("") == bad
+}
